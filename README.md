@@ -95,6 +95,14 @@ IP the page loads without MIDI. Close the Java tool or a DAW using the MIDI port
 
 `npm run build` makes a static build in `web/dist` that can be served from anywhere.
 
+## Publishing
+
+Publishing a release on GitHub builds the app, runs the tests and publishes it to GitHub Pages, at
+https://rogerkl.github.io/Axs7/ (`.github/workflows/pages.yml`). It can also be run by hand from the Actions tab.
+Set up once in the repository settings: Pages, Source = GitHub Actions; and Environments, `github-pages`, a Tag
+rule for the release tags (like `v*`) under Deployment branches and tags, as only the default branch may deploy
+there at first and a release runs on its tag.
+
 ## Structure
 
 - `engine/`: the voice engine in Rust (sample playback with forward and alternating loops, filter, envelopes).
