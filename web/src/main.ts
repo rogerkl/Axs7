@@ -167,7 +167,8 @@ async function main(): Promise<void> {
   const receive = panelButton('RECEIVE', () => actions.receive(), { led: true });
   const send = panelButton('SEND', () => actions.send(), { led: true });
   const slotTitles = () => {
-    receive.button.title = `Receive the sample in slot ${settings.slot + 1} from the sampler (again to cancel)`;
+    receive.button.title = `Receive the sample in slot ${settings.slot + 1} from the sampler (again to cancel). `
+      + 'The sampler sends from its START point, set START to 0 on it to get all of the sample';
     send.button.title = `Send the selected sample to slot ${settings.slot + 1} on the sampler, it replaces what is there`;
   };
   slotTitles();

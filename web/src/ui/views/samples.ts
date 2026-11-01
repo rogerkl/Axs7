@@ -82,7 +82,8 @@ export function samplesView(app: App): View {
         send.title = `Send this sample to slot ${n} on the sampler, it replaces what is there`;
       }
       receive.textContent = `RECEIVE FROM SLOT ${n}`;
-      receive.title = `Receive the sample in slot ${n} on the sampler into memory`;
+      receive.title = `Receive the sample in slot ${n} on the sampler into memory. The sampler sends from its `
+        + 'START point, set START to 0 on it to get all of the sample';
     };
     texts();
     detailOff.push(slot.dispose, app.onSlot(texts));

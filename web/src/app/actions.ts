@@ -8,7 +8,7 @@ import { plainRecipe } from '../model/recipe';
 import type { Sample } from '../model/types';
 import { receiveDump, transmitDump } from '../midi/transfer';
 import { readWav, encodeWav } from '../protocol/wav';
-import { nearestBandwidth, samplerBandwidth } from '../protocol/akai';
+import { hex, nearestBandwidth, samplerBandwidth } from '../protocol/akai';
 import { download } from '../ui/dom';
 import type { App } from './app';
 
@@ -125,6 +125,11 @@ export class Actions {
       this.acksUntil = r.timing.lastAckAt;
       midi.logLine(`Received ${r.length} bytes from slot ${slot + 1} in ${r.timing.seconds.toFixed(1)} s: `
         + `${r.blocks ?? 0} of ${r.expectedBlocks ?? '?'} blocks, ${r.checksumErrors ?? 0} checksum errors`);
+      if (r.header && r.headerBytes) {
+        const h = r.header;
+        midi.logLine(`Header: ${h.totalWords} words, loop ${h.loopStart}-${h.loopEnd} `
+          + `${h.alternating ? 'alternating' : 'forward'}, period ${h.period} ns (${hex(r.headerBytes)})`);
+      }
       for (const p of r.problems) {
         midi.logLine(p, 'warn');
       }

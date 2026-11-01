@@ -68,6 +68,9 @@ Samples are loaded or received into memory and played from the on-screen keyboar
   sampler has is set with SLOTS in the MIDI view: 6 on a standard X7000, more with a memory expansion (tested
   receiving and sending slot 7 on an X7000 with 16). Samples are
   resampled to the nearest of the sampler's rates and limited to its 32752 samples when sent.
+  The sampler sends a sample from its START point to its END: what is before START isn't sent, even a loop point
+  there (with START after the loop point, the sample plays fine on the sampler, but only START to END comes over).
+  Set START to 0 on the sampler to receive all of a sample. The MIDI view logs each received dump's header.
 - **Banks**: the whole memory saved and loaded as a zip file: `bank.json` with the programs and each sample's
   settings and edits, each sample as a WAV file with its loop (as it sounds), and the original of an edited sample
   in `originals/`, so editing goes on from it after loading.
