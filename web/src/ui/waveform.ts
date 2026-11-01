@@ -10,6 +10,8 @@ export class Waveform {
   private canvas: HTMLCanvasElement;
   private sample: Sample | null = null;
   private dragging: 'start' | 'end' | null = null;
+  /** samples of crossfade to show, 0 for none */
+  private crossfade = 0;
   onLoop: (start: number, end: number) => void = () => {};
 
   constructor() {
@@ -27,6 +29,14 @@ export class Waveform {
   setSample(sample: Sample | null): void {
     this.sample = sample;
     this.draw();
+  }
+
+  /** Shows a crossfade loop: the end of the loop that fades, and what before the start it fades into */
+  setCrossfade(length: number): void {
+    if (length !== this.crossfade) {
+      this.crossfade = length;
+      this.draw();
+    }
   }
 
   private x(index: number): number {
@@ -93,6 +103,20 @@ export class Waveform {
     if (s.loopMode !== 'off') {
       ctx.fillStyle = color('--wave-loop');
       ctx.fillRect(x(s.loopStart), 0, x(s.loopEnd) - x(s.loopStart), height);
+    }
+    const fade = s.loopMode === 'forward' ? Math.min(this.crossfade, s.loopStart, s.loopEnd - s.loopStart) : 0;
+    if (fade > 0) {
+      const xfade = color('--wave-xfade');
+      // the end of the loop fades out, rising towards what it fades into
+      const end = ctx.createLinearGradient(x(s.loopEnd - fade), 0, x(s.loopEnd), 0);
+      end.addColorStop(0, 'transparent');
+      end.addColorStop(1, xfade);
+      ctx.fillStyle = end;
+      ctx.fillRect(x(s.loopEnd - fade), 0, Math.max(1, x(s.loopEnd) - x(s.loopEnd - fade)), height);
+      ctx.fillStyle = xfade;
+      ctx.globalAlpha = 0.5;
+      ctx.fillRect(x(s.loopStart - fade), 0, Math.max(1, x(s.loopStart) - x(s.loopStart - fade)), height);
+      ctx.globalAlpha = 1;
     }
     ctx.fillStyle = color('--wave');
     for (let px = 0; px < w; px++) {

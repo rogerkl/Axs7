@@ -37,6 +37,7 @@
   --wave-grid: #2c3d24;
   --wave-loop: rgba(58, 146, 220, 0.28);
   --wave-marker: var(--blue-hi);
+  --wave-xfade: rgba(240, 168, 67, 0.45);
   color-scheme: dark;
 }
 

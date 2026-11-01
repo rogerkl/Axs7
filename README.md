@@ -19,6 +19,10 @@ programs, and played from the on-screen keyboard, the computer keyboard or a MID
   the same pitch, UNDO RESAMPLE brings back the previous version. RATE ON LOAD converts files to the nearest
   sampler rate when they are loaded (SAMPLER, the default), or keeps their own rate (KEEP). A WAV file at a sampler rate (whole Hz in the file, like 39555) gets
   the exact rate.
+- **Crossfade loop**: fades the end of a forward loop into what comes before the loop start, so the jump back to
+  the start doesn't click (the Java tool's X-fade). LENGTH in ms, SHAPE linear (for a steady sound) or equal power
+  (keeps the level when the two sides differ, like noise). The two regions are shown on the waveform, and UNDO
+  CROSSFADE brings back the sample as it was.
 - **Programs**: keygroups, each a sample over a key range with root key, tune and level; a resonant lowpass with
   its own envelope, an amp envelope, velocity sensitivity, 6-32 voices. Parameters are 0-99 like on the sampler,
   and note names follow the sampler: C3 = MIDI 60.
@@ -54,7 +58,9 @@ IP the page loads without MIDI. Close the Java tool or a DAW using the MIDI port
 ## Structure
 
 - `engine/`: the voice engine in Rust (sample playback with forward and alternating loops, filter, envelopes).
-  Compiled to a wasm module without imports or wasm-bindgen, and run in an AudioWorklet.
+  Compiled to a wasm module without imports or wasm-bindgen, and run in an AudioWorklet. Sample editing in Rust
+  (`dsp.rs`, the crossfade loop) runs in a second instance of the same module on the main thread
+  (`web/src/audio/dsp.ts`).
 - `web/src/protocol`: the X7000 sample dump protocol and WAV files.
 - `web/src/midi`: Web MIDI ports and the transfers. A browser only delivers a sysex message when it is complete,
   and only sends complete ones, so a received dump arrives in one piece while ACKs are sent blind at a fixed pace,
@@ -67,8 +73,8 @@ IP the page loads without MIDI. Close the Java tool or a DAW using the MIDI port
 
 ## Tests
 
-    cargo test              # the engine
-    cd web && npm test      # protocol, model, banks and transfers
+    cargo test              # the engine and sample editing
+    cd web && npm test      # builds the engine, then protocol, model, banks, transfers and the Rust DSP from TypeScript
 
 The protocol tests use a dump received from a real X7000 and check sent dumps byte for byte against the Java
 version's encoder. The transfer tests run against a simulated sampler that delivers sysex like Chrome does.

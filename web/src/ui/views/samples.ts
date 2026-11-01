@@ -3,6 +3,7 @@
 import type { App, View } from '../../app/app';
 import { newKeygroup } from '../../model/mapping';
 import { BANDWIDTHS, MAX_SAMPLES, nearestBandwidth, samplerBandwidth } from '../../protocol/akai';
+import { maxCrossfade } from '../../audio/dsp';
 import type { LoopMode, Sample } from '../../model/types';
 import { h, pickFiles } from '../dom';
 import { ParamCell, choiceCell } from '../param';
@@ -41,6 +42,8 @@ export function samplesView(app: App): View {
   let cells: ParamCell[] = [];
   /** listeners of the detail that is shown, removed when it is rebuilt */
   let detailOff: (() => void)[] = [];
+  /** run when the shown sample's values change */
+  let detailRefresh: (() => void)[] = [];
 
   /** The sampler slot with what to do with it: receive from it, and send the selected sample to it */
   function samplerGroup(withSend: boolean): HTMLElement {
@@ -97,10 +100,62 @@ export function samplesView(app: App): View {
     }, 'wide');
     cell.el.title = 'One of the sampler\'s rates, a semitone apart. Lower rates hold longer samples.';
     describe();
-    const undo = actions.lastResample?.id === s.id
-      ? h('button', { class: 'soft', onClick: () => actions.undoResample() }, 'UNDO RESAMPLE') : null;
     return h('div', { class: 'sampler-group', role: 'group', 'aria-label': 'Resample' },
-      h('span', { class: 'group-title' }, 'RESAMPLE'), cell.el, button, undo, result);
+      h('span', { class: 'group-title' }, 'RESAMPLE'), cell.el, button, result);
+  }
+
+  /**
+   * Crossfade loop: the end of a forward loop fades into what comes before the loop start, so the jump back to the
+   * start doesn't click. Shown on the waveform while the sample is shown.
+   */
+  function crossfadeGroup(s: Sample): HTMLElement {
+    const { settings } = app;
+    const sample = () => store.samples.get(s.id) ?? s;
+    const room = () => maxCrossfade(sample().data.length, sample().loopStart, sample().loopEnd);
+    const ms = (samples: number) => Math.round((samples / s.rate) * 1000);
+    const length = () => Math.min(room(), Math.max(1, Math.round((settings.xfadeMs / 1000) * s.rate)));
+    const note = h('span', { class: 'info' });
+    const apply = h('button', { class: 'soft', onClick: () => actions.crossfade(sample(), length(), settings.xfadeShape) },
+      'APPLY');
+    const lengthCell = new ParamCell({
+      key: 'samples.xfadeLength', label: 'LENGTH', min: 1, coarse: 10,
+      get max() {
+        return Math.max(1, ms(room()));
+      },
+      get: () => Math.min(settings.xfadeMs, Math.max(1, ms(room()))),
+      set: (v) => {
+        settings.xfadeMs = v;
+        app.saveSettings();
+        update();
+      },
+      format: (v) => `${v}MS`,
+      parse: (text) => Number(text.replace(/ms$/i, '')) || null,
+      detail: () => `${length()} SAMPLES`,
+    }, 'wide');
+    const shapeCell = choiceCell('samples.xfadeShape', 'SHAPE', ['linear', 'equal'] as const, ['LIN', 'EQP'],
+      () => settings.xfadeShape, (v) => {
+        settings.xfadeShape = v;
+        app.saveSettings();
+      });
+    shapeCell.el.title = 'LIN for a steady sound, alike on both sides of the seam. EQP (equal power) keeps the level '
+      + 'when the two sides differ, like noise.';
+    const update = () => {
+      const s2 = sample();
+      const ok = s2.loopMode === 'forward' && room() > 0;
+      apply.disabled = !ok;
+      note.textContent = s2.loopMode !== 'forward' ? 'NEEDS A FORWARD LOOP'
+        : room() === 0 ? 'MOVE THE LOOP START LATER, THE FADE USES WHAT COMES BEFORE IT'
+          : `THE LAST ${ms(length())}MS OF THE LOOP FADE INTO THE ${ms(length())}MS BEFORE ITS START`;
+      wave.setCrossfade(ok ? length() : 0);
+    };
+    update();
+    detailRefresh.push(() => {
+      lengthCell.refresh(); // the room changes with the loop
+      shapeCell.refresh();
+      update();
+    });
+    return h('div', { class: 'sampler-group', role: 'group', 'aria-label': 'Crossfade loop' },
+      h('span', { class: 'group-title' }, 'CROSSFADE'), lengthCell.el, shapeCell.el, apply, note);
   }
 
   wave.onLoop = (loopStart, loopEnd) => {
@@ -138,6 +193,8 @@ export function samplesView(app: App): View {
   function buildDetail(): void {
     detailOff.forEach((f) => f());
     detailOff = [];
+    detailRefresh = [];
+    wave.setCrossfade(0);
     const s = store.selectedSample;
     wave.setSample(s);
     if (!s) {
@@ -168,6 +225,8 @@ export function samplesView(app: App): View {
         detail: (v) => `${(v / s.rate).toFixed(3)}S`,
       }, 'wide'),
     ];
+    const crossfade = crossfadeGroup(s);
+    const lastEdit = actions.lastEdit?.id === s.id ? actions.lastEdit : null;
     const audition = h('button', { class: 'soft', title: 'Hold to play the sample at its own pitch' }, 'PLAY');
     audition.addEventListener('pointerdown', () => actions.auditionStart(sample()));
     for (const type of ['pointerup', 'pointerleave', 'pointercancel']) {
@@ -192,12 +251,14 @@ export function samplesView(app: App): View {
             store.addKeygroup(newKeygroup(id));
             app.lcd.flash(`ADDED TO ${store.program.name}`);
           } }, 'ADD TO PROGRAM'),
+        lastEdit ? h('button', { class: 'soft', onClick: () => actions.undoEdit() }, `UNDO ${lastEdit.what}`) : null,
         h('button', { class: 'soft', onClick: () => actions.saveWav(sample()) }, 'SAVE WAV'),
         h('button', { class: 'soft danger', onClick: () => {
           if (confirm(`Delete ${sample().name}?`)) {
             store.removeSample(id);
           }
         } }, 'DELETE')),
+      crossfade,
       resampleGroup(s),
       samplerGroup(true));
   }
@@ -205,6 +266,9 @@ export function samplesView(app: App): View {
   function refresh(id?: string): void {
     for (const c of cells) {
       c.refresh();
+    }
+    for (const f of detailRefresh) {
+      f();
     }
     wave.draw();
     const s = id && store.samples.get(id);

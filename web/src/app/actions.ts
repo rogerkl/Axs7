@@ -1,6 +1,8 @@
 // What the panel buttons do: load files, transfers with the sampler, banks.
 
 import { decodeAudioFile, resampleInBrowser } from '../audio/decode';
+import { getDsp } from '../audio/dsp';
+import type { FadeShape } from '../audio/dsp';
 import { bankToZip, zipToBank } from '../model/bank';
 import { dumpFromSample, resampleSample, sampleFromDump, sampleFromWav, wavLoops } from '../model/convert';
 import type { SampleData } from '../model/convert';
@@ -23,8 +25,8 @@ export class Actions {
   /** when the ACKs scheduled by the last receive have gone out */
   private acksUntil = 0;
   private audition = newProgram('AUDITION');
-  /** the sample as it was before the last resample, for undo */
-  lastResample: { id: string; before: SampleData } | null = null;
+  /** the sample as it was before the last edit (resample or crossfade), for undo */
+  lastEdit: { id: string; what: 'RESAMPLE' | 'CROSSFADE'; before: SampleData } | null = null;
   onBusy: () => void = () => {};
 
   constructor(private app: App) {}
@@ -82,7 +84,7 @@ export class Actions {
     try {
       const before = { data: sample.data, rate: sample.rate, loopStart: sample.loopStart, loopEnd: sample.loopEnd };
       const after = await resampleSample(sample, toRate, resampleInBrowser);
-      this.lastResample = { id: sample.id, before };
+      this.lastEdit = { id: sample.id, what: 'RESAMPLE', before };
       store.replaceData(sample.id, after);
       lcd.release();
       lcd.flash(`RESAMPLED TO ${(toRate / 1000).toFixed(1)}KHZ`);
@@ -93,12 +95,42 @@ export class Actions {
     }
   }
 
-  undoResample(): void {
-    const undo = this.lastResample;
+  /**
+   * Crossfades a forward loop's end into what comes before its start, so the loop has no click (the Java tool's
+   * X-fade). Done in Rust, see engine/src/dsp.rs.
+   *
+   * @param length in samples
+   */
+  async crossfade(sample: Sample, length: number, shape: FadeShape): Promise<void> {
+    const { store, lcd } = this.app;
+    if (sample.loopMode !== 'forward') {
+      lcd.flash('NEEDS A FORWARD LOOP');
+      return;
+    }
+    try {
+      const dsp = await getDsp();
+      const r = dsp.crossfadeLoop(sample.data, sample.loopStart, sample.loopEnd, length, shape);
+      if (r.length === 0) {
+        lcd.flash('NO ROOM FOR A CROSSFADE');
+        return;
+      }
+      const { data, rate, loopStart, loopEnd } = sample;
+      this.lastEdit = { id: sample.id, what: 'CROSSFADE', before: { data, rate, loopStart, loopEnd } };
+      store.replaceData(sample.id, { data: r.data, rate, loopStart, loopEnd });
+      lcd.flash(`CROSSFADED ${Math.round((r.length / rate) * 1000)}MS`);
+    } catch (e) {
+      this.app.midi.logLine(`Could not crossfade ${sample.name}: ${errorText(e)}`, 'error');
+      lcd.flash('CROSSFADE FAILED');
+    }
+  }
+
+  /** Undoes the last resample or crossfade */
+  undoEdit(): void {
+    const undo = this.lastEdit;
     if (undo && this.app.store.samples.has(undo.id)) {
-      this.lastResample = null;
+      this.lastEdit = null;
       this.app.store.replaceData(undo.id, undo.before);
-      this.app.lcd.flash('RESAMPLE UNDONE');
+      this.app.lcd.flash(`${undo.what} UNDONE`);
     }
   }
 

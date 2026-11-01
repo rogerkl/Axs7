@@ -4,7 +4,10 @@
 //! Memory protocol: the web side allocates a sample buffer with `alloc_f32`, fills it and hands it over with
 //! `engine_set_sample`, which takes ownership. Program parameters are written to `engine_params` and applied with
 //! `engine_set_program`. `engine_process` returns a pointer to the rendered mono block.
+//!
+//! The `dsp_` functions edit a buffer from `alloc_f32` in place, for the web side's main thread.
 
+pub mod dsp;
 pub mod engine;
 pub mod envelope;
 pub mod filter;
@@ -131,6 +134,21 @@ pub unsafe extern "C" fn engine_set_polyphony(engine: *mut Engine, voices: u32) 
 #[no_mangle]
 pub unsafe extern "C" fn engine_active_voices(engine: *mut Engine) -> u32 {
     (*engine).active_voices() as u32
+}
+
+/// Crossfades a forward loop's end into what comes before its start, see `dsp::crossfade_loop`
+///
+/// @param shape 0 linear, 1 equal power
+/// @returns the length used
+///
+/// # Safety
+/// `data` and `len` from `alloc_f32`
+#[no_mangle]
+pub unsafe extern "C" fn dsp_crossfade_loop(data: *mut f32, len: usize, loop_start: u32, loop_end: u32, length: u32,
+    shape: u32) -> u32 {
+    let data = core::slice::from_raw_parts_mut(data, len);
+    dsp::crossfade_loop(data, loop_start as usize, loop_end as usize, length as usize, dsp::FadeShape::from_u32(shape))
+        as u32
 }
 
 /// @returns the rendered block, valid until the next call
