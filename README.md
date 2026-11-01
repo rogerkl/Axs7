@@ -12,8 +12,12 @@ programs, and played from the on-screen keyboard, the computer keyboard or a MID
 - **Memory**: samples from WAV files (the loop in a WAV `smpl` chunk is kept) or other audio files, or received
   from a slot on the sampler. Not limited like the sampler's memory, and kept in the browser between visits
   (samples in IndexedDB, programs in localStorage).
+- **Waveform**: the loop, playback heads of the voices playing the sample (from PLAY, the keyboards or MIDI), what
+  the sampler drops after the loop end (dimmed), and the sampler's length limit (SAMPLER LIMIT) when the sample is
+  longer than it.
 - **Sampler rates**: the sampler plays samples at 41 rates a semitone apart (39555.4 Hz down to 3924.38 Hz).
-  Samples at other rates are marked (`44.1K!`), and so are samples longer than the sampler takes (32752 samples).
+  Samples at other rates are marked (`44.1K!`), and so are samples the sampler can't take whole: it takes 32752
+  samples, and ends a looped sample at its loop end, so a long sample fits if its loop end is before the limit.
   RESAMPLE converts a sample to one of the sampler's rates, like the resample function on a sampler: to make it
   compatible, or to a lower rate so a longer sample fits. The loop moves along and keygroups keep playing it at
   the same pitch, UNDO RESAMPLE brings back the previous version. RATE ON LOAD converts files to the nearest

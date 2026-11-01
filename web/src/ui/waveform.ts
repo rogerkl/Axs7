@@ -1,4 +1,5 @@
-// A sample's waveform with its loop. The loop start and end markers can be dragged.
+// A sample's waveform with its loop, what the sampler keeps of it, and playback heads. The loop start and end
+// markers can be dragged. The heads are drawn on a layer of their own, so they can move without redrawing the wave.
 
 import { h } from './dom';
 import type { Sample } from '../model/types';
@@ -8,7 +9,12 @@ const GRAB = 8;
 export class Waveform {
   readonly el: HTMLElement;
   private canvas: HTMLCanvasElement;
+  private overlay: HTMLCanvasElement;
   private sample: Sample | null = null;
+  /** where the sampler's maximum length ends, in this sample's samples, null if it fits whole */
+  private limit: number | null = null;
+  private heads: number[] = [];
+  private headsFrame = 0;
   private dragging: 'start' | 'end' | null = null;
   /** samples of crossfade to show, 0 for none */
   private crossfade = 0;
@@ -16,7 +22,8 @@ export class Waveform {
 
   constructor() {
     this.canvas = h('canvas', { class: 'wave', 'aria-label': 'Waveform, drag the loop markers' });
-    this.el = h('div', { class: 'wave-wrap' }, this.canvas);
+    this.overlay = h('canvas', { class: 'wave-heads', 'aria-hidden': 'true' });
+    this.el = h('div', { class: 'wave-wrap' }, this.canvas, this.overlay);
     new ResizeObserver(() => this.draw()).observe(this.canvas);
     this.canvas.addEventListener('pointerdown', this.onPointerDown);
     this.canvas.addEventListener('pointermove', (e) => {
@@ -29,6 +36,51 @@ export class Waveform {
   setSample(sample: Sample | null): void {
     this.sample = sample;
     this.draw();
+  }
+
+  /** Shows where the sampler's maximum length ends, null if the sample fits whole */
+  setLimit(limit: number | null): void {
+    if (limit !== this.limit) {
+      this.limit = limit;
+      this.draw();
+    }
+  }
+
+  /** Playback heads at these positions in the sample */
+  setHeads(positions: number[]): void {
+    this.heads = positions;
+    if (!this.headsFrame) {
+      this.headsFrame = requestAnimationFrame(() => {
+        this.headsFrame = 0;
+        this.drawHeads();
+      });
+    }
+  }
+
+  private drawHeads(): void {
+    const c = this.overlay;
+    if (!c.isConnected) {
+      return;
+    }
+    const ctx = c.getContext('2d')!;
+    ctx.clearRect(0, 0, c.width, c.height);
+    const s = this.sample;
+    if (!s || !s.data.length) {
+      return;
+    }
+    const dpr = window.devicePixelRatio || 1;
+    ctx.fillStyle = getComputedStyle(c).getPropertyValue('--wave-head').trim();
+    ctx.shadowColor = ctx.fillStyle;
+    ctx.shadowBlur = 6 * dpr;
+    for (const p of this.heads) {
+      const x = Math.round((p / s.data.length) * c.width);
+      ctx.fillRect(x - dpr, 0, 2 * dpr, c.height);
+      ctx.beginPath(); // a small pointer at the top
+      ctx.moveTo(x - 5 * dpr, 0);
+      ctx.lineTo(x + 5 * dpr, 0);
+      ctx.lineTo(x, 6 * dpr);
+      ctx.fill();
+    }
   }
 
   /** Shows a crossfade loop: the end of the loop that fades, and what before the start it fades into */
@@ -84,11 +136,17 @@ export class Waveform {
 
   draw(): void {
     const c = this.canvas;
+    if (!c.isConnected) {
+      return; // no styles to draw with yet, the resize observer draws it once it is on the page
+    }
     const dpr = window.devicePixelRatio || 1;
     const w = Math.max(1, Math.round(c.clientWidth * dpr));
     const height = Math.max(1, Math.round(c.clientHeight * dpr));
     c.width = w;
     c.height = height;
+    this.overlay.width = w;
+    this.overlay.height = height;
+    this.drawHeads();
     const ctx = c.getContext('2d')!;
     const css = getComputedStyle(c);
     const color = (name: string) => css.getPropertyValue(name).trim();
@@ -135,9 +193,25 @@ export class Waveform {
       }
     }
     if (s.loopMode !== 'off') {
+      // the sampler ends a looped sample at the loop end
+      ctx.fillStyle = color('--wave-dropped');
+      ctx.fillRect(x(s.loopEnd), 0, w - x(s.loopEnd), height);
       ctx.fillStyle = color('--wave-marker');
       ctx.fillRect(x(s.loopStart), 0, 2 * dpr, height);
       ctx.fillRect(Math.max(0, x(s.loopEnd) - 2 * dpr), 0, 2 * dpr, height);
+    }
+    if (this.limit !== null && this.limit < n) {
+      const lx = x(this.limit);
+      ctx.fillStyle = color('--wave-over');
+      ctx.fillRect(lx, 0, w - lx, height);
+      ctx.fillStyle = color('--wave-limit');
+      for (let y = 0; y < height; y += 8 * dpr) {
+        ctx.fillRect(lx, y, 2 * dpr, 4 * dpr); // dashed
+      }
+      ctx.font = `${9 * dpr}px "Helvetica Neue", Arial, sans-serif`;
+      const label = 'SAMPLER LIMIT';
+      const tw = ctx.measureText(label).width;
+      ctx.fillText(label, lx + tw + 6 * dpr < w ? lx + 4 * dpr : lx - tw - 4 * dpr, height - 5 * dpr);
     }
   }
 }

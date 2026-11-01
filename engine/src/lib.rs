@@ -136,6 +136,15 @@ pub unsafe extern "C" fn engine_active_voices(engine: *mut Engine) -> u32 {
     (*engine).active_voices() as u32
 }
 
+/// Where the playing voices are, for playback heads: the count, then sample id and position of each
+///
+/// # Safety
+/// see `engine_params`
+#[no_mangle]
+pub unsafe extern "C" fn engine_positions(engine: *mut Engine) -> *const u32 {
+    (*engine).positions().as_ptr()
+}
+
 /// Crossfades a forward loop's end into what comes before its start, see `dsp::crossfade_loop`
 ///
 /// @param shape 0 linear, 1 equal power

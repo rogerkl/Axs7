@@ -69,6 +69,27 @@ export async function resampleSample(sample: Sample, toRate: number, resample: R
   return { data, rate: toRate, loopStart: Math.min(Math.round(sample.loopStart * ratio), loopEnd), loopEnd };
 }
 
+export interface SamplerFit {
+  /** the rate the sample goes to the sampler at: its own if it is one of the sampler's, else the nearest */
+  sendRate: number;
+  /** where the sampler's maximum length ends, in the sample's own samples */
+  limit: number;
+  /** how much of the sample the sampler keeps: to the loop end of a looped sample, all of a one shot */
+  used: number;
+  fits: boolean;
+  /** the longest sample the sampler takes at the send rate */
+  maxSeconds: number;
+}
+
+/** Whether a sample fits on the sampler. The sampler ends a looped sample at its loop end. */
+export function samplerFit(sample: Sample, sendRate = (samplerBandwidth(sample.rate)
+  ?? nearestBandwidth(sample.rate)).rate): SamplerFit {
+  // the tolerance keeps 32752 * r / r from flooring to 32751
+  const limit = Math.floor((MAX_SAMPLES * sample.rate) / sendRate + 1e-6);
+  const used = sample.loopMode === 'off' ? sample.data.length : sample.loopEnd;
+  return { sendRate, limit, used, fits: used <= limit, maxSeconds: MAX_SAMPLES / sendRate };
+}
+
 export interface SendOptions {
   /** 0-5 */
   slot: number;

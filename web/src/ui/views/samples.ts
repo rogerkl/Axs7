@@ -4,6 +4,7 @@ import type { App, View } from '../../app/app';
 import { newKeygroup } from '../../model/mapping';
 import { BANDWIDTHS, MAX_SAMPLES, nearestBandwidth, samplerBandwidth } from '../../protocol/akai';
 import { maxCrossfade } from '../../audio/dsp';
+import { samplerFit } from '../../model/convert';
 import type { LoopMode, Sample } from '../../model/types';
 import { h, pickFiles } from '../dom';
 import { ParamCell, choiceCell } from '../param';
@@ -19,9 +20,15 @@ function duration(s: Sample): string {
 
 const khz = (rate: number) => `${(rate / 1000).toFixed(1)}K`;
 
-/** The rate a sample goes to the sampler at: its own if it is one of the sampler's, else the nearest */
-function sendRate(s: Sample): number {
-  return (samplerBandwidth(s.rate) ?? nearestBandwidth(s.rate)).rate;
+/** What the sampler keeps of a sample, for a badge: null if it fits whole */
+function fitText(s: Sample): { text: string; warn: boolean } | null {
+  const fit = samplerFit(s);
+  const seconds = `${fit.maxSeconds.toFixed(2)}S`;
+  if (fit.fits) {
+    return fit.limit < s.data.length ? { text: 'FITS: THE SAMPLER ENDS IT AT THE LOOP END', warn: false } : null;
+  }
+  return s.loopMode === 'off' ? { text: `TOO LONG: THE SAMPLER KEEPS ${seconds}, IT IS CUT THERE`, warn: true }
+    : { text: `LOOP END PAST THE SAMPLER'S ${seconds}: MOVE IT, OR RESAMPLE LOWER`, warn: true };
 }
 
 export function samplesView(app: App): View {
@@ -79,11 +86,14 @@ export function samplesView(app: App): View {
       const bw = BANDWIDTHS[to];
       const n = Math.round((s.data.length * bw.rate) / s.rate);
       const same = Math.abs(bw.rate - s.rate) < 0.01;
+      const fit = samplerFit(store.samples.get(s.id) ?? s, bw.rate);
       button.disabled = same;
       result.textContent = same ? 'THE SAMPLE IS AT THIS RATE' : `${n} SAMPLES, `
-        + (n > MAX_SAMPLES ? `THE SAMPLER KEEPS ${(MAX_SAMPLES / bw.rate).toFixed(2)}S` : 'FITS ON THE SAMPLER');
-      result.classList.toggle('warn', !same && n > MAX_SAMPLES);
+        + (!fit.fits ? `THE SAMPLER KEEPS ${fit.maxSeconds.toFixed(2)}S`
+          : fit.limit < s.data.length ? 'FITS TO THE LOOP END' : 'FITS ON THE SAMPLER');
+      result.classList.toggle('warn', !same && !fit.fits);
     };
+    detailRefresh.push(describe);
     const cell = new ParamCell({
       key: 'samples.resampleTo', label: 'TO', min: 0, max: last, coarse: 12, // the rates are a semitone apart
       get: () => last - to,
@@ -175,7 +185,8 @@ export function samplesView(app: App): View {
     samplerBandwidth(s.rate)
       ? h('span', { class: 'c-small' }, khz(s.rate))
       : h('span', { class: 'c-small off-rate', title: 'Not one of the sampler\'s rates' }, `${khz(s.rate)}!`),
-    h('span', { class: 'c-small' }, duration(s)),
+    samplerFit(s).fits ? h('span', { class: 'c-small' }, duration(s))
+      : h('span', { class: 'c-small off-rate', title: 'Too long for the sampler' }, `${duration(s)}!`),
     h('span', { class: 'c-small' }, LOOP_NAMES[LOOP_MODES.indexOf(s.loopMode)]));
   }
 
@@ -195,6 +206,8 @@ export function samplesView(app: App): View {
     detailOff = [];
     detailRefresh = [];
     wave.setCrossfade(0);
+    wave.setLimit(null);
+    wave.setHeads([]);
     const s = store.selectedSample;
     wave.setSample(s);
     if (!s) {
@@ -233,15 +246,24 @@ export function samplesView(app: App): View {
       audition.addEventListener(type, () => actions.auditionStop());
     }
     const bw = samplerBandwidth(s.rate);
-    const whenSent = Math.round((s.data.length * sendRate(s)) / s.rate);
+    const fitBadge = h('span', { class: 'badge' });
+    const showFit = () => {
+      const fit = fitText(sample());
+      fitBadge.hidden = !fit;
+      fitBadge.textContent = fit?.text ?? '';
+      fitBadge.classList.toggle('warn', !!fit?.warn);
+    };
+    showFit();
+    detailRefresh.push(showFit);
+    const { limit } = samplerFit(s);
+    wave.setLimit(limit < s.data.length ? limit : null);
     detail.replaceChildren(
       h('div', { class: 'row' }, name,
         h('span', { class: 'info' }, `${s.rate.toFixed(s.rate % 1 ? 2 : 0)} HZ · ${s.data.length} SAMPLES · `
           + duration(s)),
         bw ? h('span', { class: 'badge' }, `SAMPLER RATE, ${bw.name.toUpperCase()} BANDWIDTH`)
           : h('span', { class: 'badge warn' }, 'NOT A SAMPLER RATE: RESAMPLE, OR IT IS WHEN SENT'),
-        whenSent > MAX_SAMPLES ? h('span', { class: 'badge warn' },
-          `TOO LONG: THE SAMPLER KEEPS ${(MAX_SAMPLES / sendRate(s)).toFixed(2)}S`) : null),
+        fitBadge),
       wave.el,
       h('div', { class: 'params' }, ...cells.map((c) => c.el)),
       h('div', { class: 'row' },
@@ -295,6 +317,7 @@ export function samplesView(app: App): View {
       buildDetail();
     }),
     store.on('sample', refresh),
+    app.engine.onPositions((bySample) => wave.setHeads(bySample.get(store.selectedSampleId ?? '') ?? [])),
   ];
   detail.dataset.sample = store.selectedSampleId ?? '';
   return {

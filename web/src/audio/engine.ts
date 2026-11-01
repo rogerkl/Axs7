@@ -15,6 +15,8 @@ export class AudioEngine {
   private starting: Promise<void> | null = null;
   private queue: EngineMessage[] = [];
   private ids = new Map<string, number>();
+  private keys = new Map<number, string>();
+  private positionListeners = new Set<(bySample: Map<string, number[]>) => void>();
   /** the data each sample was loaded with, to see when it changes */
   private loaded = new Map<string, Float32Array>();
   private nextId = 1;
@@ -67,10 +69,14 @@ export class AudioEngine {
     node.port.onmessage = (e: MessageEvent<WorkletMessage>) => {
       if (e.data.type === 'voices') {
         this.onVoices(e.data.voices);
+      } else if (e.data.type === 'positions') {
+        this.positions(e.data.positions);
       } else if (e.data.type === 'error') {
         this.onError(e.data.message);
       }
     };
+    // an exception in the audio thread stops the processor, without this it would go silent without a word
+    node.onprocessorerror = () => this.onError('The audio engine stopped with an error, reload the page');
     node.connect(ctx.destination);
     node.port.postMessage({ type: 'init', wasm } satisfies EngineMessage, [wasm]);
     this.node = node;
@@ -82,6 +88,30 @@ export class AudioEngine {
     if (ctx.state === 'suspended') {
       await ctx.resume();
     }
+  }
+
+  private positions(pairs: number[]): void {
+    const bySample = new Map<string, number[]>();
+    for (let i = 0; i < pairs.length; i += 2) {
+      const key = this.keys.get(pairs[i]);
+      if (key) {
+        bySample.set(key, [...(bySample.get(key) ?? []), pairs[i + 1]]);
+      }
+    }
+    for (const listener of this.positionListeners) {
+      listener(bySample);
+    }
+  }
+
+  /**
+   * Where the playing voices are in their samples, for playback heads: called about 60 times a second while
+   * something plays, and once with nothing when it stops.
+   *
+   * @returns a function that stops listening
+   */
+  onPositions(listener: (bySample: Map<string, number[]>) => void): () => void {
+    this.positionListeners.add(listener);
+    return () => this.positionListeners.delete(listener);
   }
 
   /** Messages before the engine runs wait, except the samples and programs, which are synced when it starts */
@@ -98,6 +128,7 @@ export class AudioEngine {
     if (id === undefined) {
       id = this.nextId++;
       this.ids.set(key, id);
+      this.keys.set(id, key);
     }
     return id;
   }

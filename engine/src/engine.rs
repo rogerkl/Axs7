@@ -31,6 +31,8 @@ pub struct Engine {
     lfo_phase: f32,
     volume: f32,
     notes_started: u64,
+    /// count, then sample id and position of each playing voice
+    positions: Vec<u32>,
 }
 
 impl Engine {
@@ -48,6 +50,7 @@ impl Engine {
             lfo_phase: 0.0,
             volume: 1.0,
             notes_started: 0,
+            positions: Vec::with_capacity(1 + 2 * MAX_VOICES),
         }
     }
 
@@ -142,6 +145,20 @@ impl Engine {
 
     pub fn active_voices(&self) -> usize {
         self.voices.iter().filter(|v| v.active).count()
+    }
+
+    /// Where the playing voices are: the count, then the sample id and the sample read of each
+    pub fn positions(&mut self) -> &[u32] {
+        self.positions.clear();
+        self.positions.push(0);
+        for v in self.voices.iter().filter(|v| v.active) {
+            if let Some(index) = v.position() {
+                self.positions.push(v.sample);
+                self.positions.push(index as u32);
+            }
+        }
+        self.positions[0] = (self.positions.len() as u32 - 1) / 2;
+        &self.positions
     }
 
     /// Renders the next `frames` samples (mono)
@@ -261,6 +278,29 @@ mod tests {
         let out = render(&mut engine, 1.0);
         assert!(out.iter().all(|x| x.is_finite()));
         assert!(out[out.len() - 2400..].iter().any(|x| x.abs() > 0.3));
+    }
+
+    #[test]
+    fn positions_of_playing_voices_follow_the_loop() {
+        let mut engine = engine_with_sine(4000);
+        assert_eq!(engine.positions(), &[0]);
+        let mut n = note(60, 1.0, LoopMode::Forward, 4000);
+        n.loop_start = 1000;
+        n.loop_end = 2000;
+        engine.note_on(n);
+        render(&mut engine, 0.01);
+        let first = engine.positions().to_vec();
+        assert_eq!(first[..2], [1, 1], "one voice, sample 1");
+        // 39555.4 Hz sample at 48 kHz output: about 0.82 samples per output sample
+        assert!((first[2] as f32 - 0.01 * 39555.4).abs() < 130.0, "{first:?}");
+        for _ in 0..20 {
+            render(&mut engine, 0.05);
+            let p = engine.positions()[2];
+            assert!((1000..2000).contains(&(p as usize)) || p < 1000, "inside the loop once it gets there: {p}");
+        }
+        assert!((1000..2000).contains(&(engine.positions()[2] as usize)));
+        engine.all_notes_off(true);
+        assert_eq!(engine.positions(), &[0]);
     }
 
     #[test]

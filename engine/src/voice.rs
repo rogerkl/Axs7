@@ -133,6 +133,11 @@ impl Voice {
         self.amp.level()
     }
 
+    /// The sample the voice is reading, folded into the loop, for showing a playback head
+    pub fn position(&self) -> Option<usize> {
+        self.index(self.pos.floor() as i64)
+    }
+
     fn period(&self) -> usize {
         match self.loop_mode {
             LoopMode::Off => 0,

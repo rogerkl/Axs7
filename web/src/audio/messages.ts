@@ -19,6 +19,8 @@ export type EngineMessage =
 export type WorkletMessage =
   | { type: 'ready' }
   | { type: 'voices'; voices: number }
+  /** sample id and position pairs of the playing voices */
+  | { type: 'positions'; positions: number[] }
   | { type: 'error'; message: string };
 
 export const PROCESSOR_NAME = 'axs7-engine';

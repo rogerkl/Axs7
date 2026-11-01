@@ -20,6 +20,8 @@ interface EngineExports {
   engine_set_volume(engine: number, volume: number): void;
   engine_set_polyphony(engine: number, voices: number): void;
   engine_active_voices(engine: number): number;
+  /** missing in an engine.wasm built before playback heads */
+  engine_positions?(engine: number): number;
   engine_process(engine: number, frames: number): number;
 }
 
@@ -28,6 +30,9 @@ class EngineProcessor extends AudioWorkletProcessor {
   private engine = 0;
   private pending: EngineMessage[] = [];
   private voices = 0;
+  private blocks = 0;
+  /** voices in the last positions sent, so the heads are cleared when the last one stops */
+  private positioned = 0;
 
   constructor() {
     super();
@@ -116,6 +121,13 @@ class EngineProcessor extends AudioWorkletProcessor {
     if (voices !== this.voices) {
       this.voices = voices;
       this.post({ type: 'voices', voices });
+    }
+    // playback heads, about 60 times a second while something plays
+    if (ex.engine_positions && ++this.blocks % 6 === 0 && (voices > 0 || this.positioned > 0)) {
+      const ptr = ex.engine_positions(this.engine);
+      const count = new Uint32Array(ex.memory.buffer, ptr, 1)[0];
+      this.post({ type: 'positions', positions: Array.from(new Uint32Array(ex.memory.buffer, ptr + 4, 2 * count)) });
+      this.positioned = count;
     }
     return true;
   }

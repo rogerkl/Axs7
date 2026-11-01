@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { BW16, MAX_SAMPLES, decodeHeader, encodeSamples, parseDump, samplerBandwidth } from '../src/protocol/akai';
 import { encodeWav, readWav } from '../src/protocol/wav';
 import { bankToZip, zipToBank } from '../src/model/bank';
-import { dumpFromSample, resampleSample, sampleFromDump, sampleFromWav } from '../src/model/convert';
+import { dumpFromSample, resampleSample, sampleFromDump, sampleFromWav, samplerFit } from '../src/model/convert';
 import { newKeygroup, newProgram, voicesFor } from '../src/model/mapping';
 import { noteName, parseNote } from '../src/model/notes';
 import { cutoffHz, engineParams, envTime } from '../src/model/params';
@@ -172,6 +172,19 @@ describe('sampler rates and resampling', () => {
     expect(sampleFromWav(wav(39555), 'A').rate).toBe(39555.4);
     expect(sampleFromWav(wav(22200), 'A').rate).toBe(22199.53);
     expect(sampleFromWav(wav(44100), 'A').rate).toBe(44100);
+  });
+
+  test('a sample fits the sampler if what it keeps does: to the loop end, or all of a one shot', () => {
+    const long = sample({ rate: BW16.rate, data: new Float32Array(40000), loopStart: 1000, loopEnd: 30000 });
+    expect(samplerFit(long)).toMatchObject({ sendRate: BW16.rate, limit: MAX_SAMPLES, used: 30000, fits: true });
+    expect(samplerFit({ ...long, loopEnd: 35000 })).toMatchObject({ used: 35000, fits: false });
+    expect(samplerFit({ ...long, loopMode: 'off' })).toMatchObject({ used: 40000, fits: false });
+    // 44.1 kHz goes at 39555.4 Hz: the limit in the sample's own samples is further on
+    const cd = sample({ rate: 44100, data: new Float32Array(40000), loopMode: 'off' });
+    expect(samplerFit(cd)).toMatchObject({ limit: Math.floor((MAX_SAMPLES * 44100) / BW16.rate), fits: false });
+    expect(samplerFit(cd).maxSeconds).toBeCloseTo(0.828, 3);
+    // at a lower rate it fits
+    expect(samplerFit(cd, 22199.53)).toMatchObject({ fits: true });
   });
 
   test('resampling moves the loop to the same time', async () => {
