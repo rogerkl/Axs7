@@ -14,7 +14,11 @@ export const BITS = 12;
 export const ACK = Uint8Array.of(0xf0, 0x7e, 0x7f, 0xf7);
 /** 31250 baud, 10 bits per byte (start, 8 data, stop) */
 export const MIDI_BYTES_PER_SECOND = 3125;
-/** A standard X7000/S700 has 6 sample slots, more with a memory expansion */
+/**
+ * A standard X7000/S700 has 6 sample slots, more with a memory expansion. On an X7000 with 16 slots, slot numbers
+ * above 6 address those slots, receiving and sending (verified with slot 7). Akai's note that a sample number above
+ * 5 replaces the sample being edited is for a standard unit.
+ */
 export const STANDARD_SLOTS = 6;
 /** Two digits on the display. The slot number in the protocol is 7 bits. */
 export const MAX_SLOTS = 99;
@@ -95,7 +99,7 @@ export function rateForPeriod(period: number): number {
   return bw ? bw.rate : 1e9 / period;
 }
 
-/** @param slot 0-5 */
+/** @param slot from 0 */
 export function requestMessage(slot: number): Uint8Array {
   return Uint8Array.of(0xf0, 0x7e, 0x00, slot & 0x7f, 0x00, 0xf7);
 }

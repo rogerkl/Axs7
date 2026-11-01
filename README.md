@@ -33,7 +33,8 @@ programs, and played from the on-screen keyboard, the computer keyboard or a MID
 - **Transfers**: receive a sample slot from the sampler, send the selected sample to one. The slot is chosen in
   the app, with SLOT ▲▼ next to RECEIVE and SEND (also in the SAMPLES and MIDI views), nothing needs to be set on
   the sampler: the slot number goes in the dump request and in the header of a sent dump. How many slots the
-  sampler has is set with SLOTS in the MIDI view: 6 on a standard X7000, more with a memory expansion. Samples are
+  sampler has is set with SLOTS in the MIDI view: 6 on a standard X7000, more with a memory expansion (tested
+  receiving and sending slot 7 on an X7000 with 16). Samples are
   resampled to the nearest of the sampler's rates and limited to its 32752 samples when sent.
 - **Banks**: the whole memory saved and loaded as a zip file: `bank.json` with the programs, and each sample as a
   WAV file with its loop.
