@@ -3,10 +3,8 @@
 A sampler in the browser with multi-sample programs, that sends and receives samples to and from an Akai
 X7000/S700 over Web MIDI. Its look is loosely based on the X7000's front panel.
 
-It follows the Java tool [Axs7Sds](../Axs7Sds), which can only transfer single samples. A sample dump has only the
-audio and the loop, so the rest lives here, kept close to how the X7000 has it (its manual): each sample has its
-sound (OUT and LFO), and programs map samples to key ranges. Samples are loaded or received into memory and played
-from the on-screen keyboard, the computer keyboard or a MIDI keyboard (the X7000's own works).
+It is a rewrite and enhancement of the Java program [Axs7Sds](https://github.com/rogerkl/Axs7Sds). 
+Samples are loaded or received into memory and played from the on-screen keyboard, the computer keyboard or a MIDI keyboard (the X7000's own works).
 
 ## What it does
 
