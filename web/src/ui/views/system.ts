@@ -1,15 +1,16 @@
 // MIDI: ports, keyboard channel and transfer settings, with the transfer log. BANK: memory, save and load.
 
 import type { App, View } from '../../app/app';
-import { SLOTS } from '../../protocol/akai';
 import { h, pickFiles } from '../dom';
 import { ParamCell, choiceCell } from '../param';
+import { slotCell } from '../slot';
 
 export function midiView(app: App): View {
   const { midi, settings, player } = app;
   const ports = h('div', { class: 'row' });
   const logEl = h('pre', { class: 'log', 'aria-label': 'MIDI log' });
   const save = () => app.saveSettings();
+  const slot = slotCell(app, 'midi.slot');
   const cells = [
     new ParamCell({ key: 'midi.channel', label: 'KEYB CHAN', min: 0, max: 16, coarse: 4, get: () => settings.channel,
       set: (v) => {
@@ -17,11 +18,7 @@ export function midiView(app: App): View {
         player.channel = v;
         save();
       }, format: (v) => (v === 0 ? 'OMNI' : String(v)), parse: (t) => (/^omni$/i.test(t) ? 0 : Number(t)) }),
-    new ParamCell({ key: 'midi.slot', label: 'SLOT', min: 1, max: SLOTS, coarse: 1, get: () => settings.slot + 1,
-      set: (v) => {
-        settings.slot = v - 1;
-        save();
-      }, detail: () => 'ON THE SAMPLER' }),
+    slot.cell,
     choiceCell('midi.normalize', 'NORMALIZE', ['off', 'on'] as const, ['OFF', 'ON'],
       () => (settings.normalize ? 'on' : 'off'), (v) => {
         settings.normalize = v === 'on';
@@ -82,6 +79,7 @@ export function midiView(app: App): View {
       logEl),
     dispose: () => {
       midi.onChange = previous;
+      slot.dispose();
     },
   };
 }

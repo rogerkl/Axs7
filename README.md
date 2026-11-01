@@ -14,8 +14,10 @@ programs, and played from the on-screen keyboard, the computer keyboard or a MID
 - **Programs**: keygroups, each a sample over a key range with root key, tune and level; a resonant lowpass with
   its own envelope, an amp envelope, velocity sensitivity, 6-32 voices. Parameters are 0-99 like on the sampler,
   and note names follow the sampler: C3 = MIDI 60.
-- **Transfers**: receive a sample slot from the sampler, send the selected sample to one. Samples are resampled to
-  the nearest of the sampler's rates and limited to its 32752 samples when sent.
+- **Transfers**: receive a sample slot from the sampler, send the selected sample to one. The slot (1-6) is chosen
+  in the app, with SLOT ▲▼ next to RECEIVE and SEND (also in the SAMPLES and MIDI views), nothing needs to be set
+  on the sampler: the slot number goes in the dump request and in the header of a sent dump. Samples are resampled
+  to the nearest of the sampler's rates and limited to its 32752 samples when sent.
 - **Banks**: the whole memory saved and loaded as a zip file: `bank.json` with the programs, and each sample as a
   WAV file with its loop.
 

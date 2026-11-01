@@ -96,7 +96,7 @@ export class ParamCell {
   }
 
   private onPointerDown = (e: PointerEvent): void => {
-    if (e.button !== 0 || (e.target as Element).closest('input')) {
+    if (e.button !== 0 || (e.target as Element).closest('input, button')) {
       return;
     }
     dataEntry.select(this);

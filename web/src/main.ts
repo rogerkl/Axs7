@@ -9,11 +9,13 @@ import { Player } from './audio/player';
 import { noteName } from './model/notes';
 import { Persistence } from './model/persist';
 import { Store } from './model/store';
+import { SLOTS } from './protocol/akai';
 import { Fader, Knob, Wheel, panelButton } from './ui/controls';
 import { h, pickFiles, typing } from './ui/dom';
 import { Keyboard } from './ui/keyboard';
 import { Lcd } from './ui/lcd';
 import { dataEntry } from './ui/param';
+import { slotStepper } from './ui/slot';
 import { keygroupsView } from './ui/views/keygroups';
 import { samplesView } from './ui/views/samples';
 import { ampView, filterView } from './ui/views/sound';
@@ -46,10 +48,22 @@ async function main(): Promise<void> {
   let view: View | null = null;
   let voices = 0;
   const sectionButtons = new Map<ViewName, ReturnType<typeof panelButton>>();
+  const slotListeners = new Set<() => void>();
 
   const app: App = {
     store, engine, player, lcd, settings, midi, actions: null as unknown as Actions,
     saveSettings: () => saveSettings(settings),
+    setSlot(slot) {
+      settings.slot = Math.max(0, Math.min(SLOTS - 1, slot));
+      saveSettings(settings);
+      for (const listener of slotListeners) {
+        listener();
+      }
+    },
+    onSlot(listener) {
+      slotListeners.add(listener);
+      return () => slotListeners.delete(listener);
+    },
     showView(name) {
       view?.dispose();
       const section = SECTIONS.find(([n]) => n === name) ?? SECTIONS[0];
@@ -135,10 +149,14 @@ async function main(): Promise<void> {
     panelButton('PANIC', () => player.allNotesOff(true), { title: 'Stop all sound' }),
   ];
 
-  const receive = panelButton('RECEIVE', () => actions.receive(),
-    { led: true, title: 'Receive the sample in the selected slot from the sampler (again to cancel)' });
-  const send = panelButton('SEND', () => actions.send(),
-    { led: true, title: 'Send the selected sample to the selected slot on the sampler' });
+  const receive = panelButton('RECEIVE', () => actions.receive(), { led: true });
+  const send = panelButton('SEND', () => actions.send(), { led: true });
+  const slotTitles = () => {
+    receive.button.title = `Receive the sample in slot ${settings.slot + 1} from the sampler (again to cancel)`;
+    send.button.title = `Send the selected sample to slot ${settings.slot + 1} on the sampler, it replaces what is there`;
+  };
+  slotTitles();
+  app.onSlot(slotTitles);
   actions.onBusy = () => {
     receive.setLed(actions.busy === 'receive', true);
     send.setLed(actions.busy === 'send', true);
@@ -175,7 +193,8 @@ async function main(): Promise<void> {
       h('div', { class: 'block dark wheels' }, pitch.el, mod.el, volume.el),
       h('div', { class: 'block dark display' }, lcd.el, knob.el),
       h('div', { class: 'block buttons6' }, ...smallButtons.map((b) => b.el)),
-      h('div', { class: 'block dark main' }, h('div', { class: 'buttons4' }, ...transferButtons.map((b) => b.el)), strip)));
+      h('div', { class: 'block dark main' }, slotStepper(app),
+        h('div', { class: 'buttons4' }, ...transferButtons.map((b) => b.el)), strip)));
 
   // ---- keyboard
   const keyboard = new Keyboard({

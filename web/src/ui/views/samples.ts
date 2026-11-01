@@ -5,6 +5,7 @@ import { newKeygroup } from '../../model/mapping';
 import type { LoopMode, Sample } from '../../model/types';
 import { h, pickFiles } from '../dom';
 import { ParamCell, choiceCell } from '../param';
+import { slotCell } from '../slot';
 import { Waveform } from '../waveform';
 
 const LOOP_MODES = ['off', 'forward', 'alternating'] as const satisfies readonly LoopMode[];
@@ -20,6 +21,28 @@ export function samplesView(app: App): View {
   const detail = h('div', { class: 'detail' });
   const wave = new Waveform();
   let cells: ParamCell[] = [];
+  /** listeners of the detail that is shown, removed when it is rebuilt */
+  let detailOff: (() => void)[] = [];
+
+  /** The sampler slot with what to do with it: receive from it, and send the selected sample to it */
+  function samplerGroup(withSend: boolean): HTMLElement {
+    const slot = slotCell(app, 'samples.slot', 'compact');
+    const send = withSend ? h('button', { class: 'soft', onClick: () => actions.send() }) : null;
+    const receive = h('button', { class: 'soft', onClick: () => actions.receive() });
+    const texts = () => {
+      const n = app.settings.slot + 1;
+      if (send) {
+        send.textContent = `SEND TO SLOT ${n}`;
+        send.title = `Send this sample to slot ${n} on the sampler, it replaces what is there`;
+      }
+      receive.textContent = `RECEIVE FROM SLOT ${n}`;
+      receive.title = `Receive the sample in slot ${n} on the sampler into memory`;
+    };
+    texts();
+    detailOff.push(slot.dispose, app.onSlot(texts));
+    return h('div', { class: 'sampler-group', role: 'group', 'aria-label': 'Sampler' },
+      h('span', { class: 'group-title' }, 'SAMPLER'), slot.cell.el, send, receive);
+  }
 
   wave.onLoop = (loopStart, loopEnd) => {
     const s = store.selectedSample;
@@ -52,6 +75,8 @@ export function samplesView(app: App): View {
   }
 
   function buildDetail(): void {
+    detailOff.forEach((f) => f());
+    detailOff = [];
     const s = store.selectedSample;
     wave.setSample(s);
     if (!s) {
@@ -61,8 +86,8 @@ export function samplesView(app: App): View {
           + 'sampler. Memory is only limited by the browser.'),
         h('div', { class: 'row' },
           h('button', { class: 'soft', onClick: async () => actions.loadFiles(await pickFiles('.wav,audio/*', true)) },
-            'LOAD WAV'),
-          h('button', { class: 'soft', onClick: () => actions.receive() }, 'RECEIVE FROM SAMPLER'))));
+            'LOAD WAV')),
+        samplerGroup(false)));
       return;
     }
     const id = s.id;
@@ -103,14 +128,13 @@ export function samplesView(app: App): View {
             store.addKeygroup(newKeygroup(id));
             app.lcd.flash(`ADDED TO ${store.program.name}`);
           } }, 'ADD TO PROGRAM'),
-        h('button', { class: 'soft', onClick: () => actions.send(),
-          title: `Send to sample slot ${app.settings.slot + 1} on the sampler` }, 'SEND TO SAMPLER'),
         h('button', { class: 'soft', onClick: () => actions.saveWav(sample()) }, 'SAVE WAV'),
         h('button', { class: 'soft danger', onClick: () => {
           if (confirm(`Delete ${sample().name}?`)) {
             store.removeSample(id);
           }
-        } }, 'DELETE')));
+        } }, 'DELETE')),
+      samplerGroup(true));
   }
 
   function refresh(id?: string): void {
@@ -146,6 +170,6 @@ export function samplesView(app: App): View {
   detail.dataset.sample = store.selectedSampleId ?? '';
   return {
     el: h('div', { class: 'view view-samples' }, list, detail),
-    dispose: () => off.forEach((f) => f()),
+    dispose: () => [...off, ...detailOff].forEach((f) => f()),
   };
 }
