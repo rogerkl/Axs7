@@ -1,7 +1,7 @@
 // Between samples in memory and the sampler's dumps and wav files.
 
 import {
-  MAX_SAMPLES, buildDump, encodeSamples, isOneShot, matchesBandwidth, nearestBandwidth, peak,
+  MAX_SAMPLES, buildDump, encodeSamples, isOneShot, matchesBandwidth, nearestBandwidth, peak, samplerBandwidth,
 } from '../protocol/akai';
 import type { Dump, FillerOptions, ParsedDump } from '../protocol/akai';
 import type { Wav, WavLoop } from '../protocol/wav';
@@ -28,7 +28,10 @@ export function sampleFromDump(r: ParsedDump, name: string): Sample {
   };
 }
 
-/** A wav file as a sample, with the first loop of its smpl chunk, or as one shot without one */
+/**
+ * A wav file as a sample, with the first loop of its smpl chunk, or as one shot without one. A wav file only has
+ * whole Hz, so a rate that is one of the sampler's (like 39555 for 39555.4) gets the sampler's exact rate.
+ */
 export function sampleFromWav(wav: Wav, name: string): Sample {
   const n = wav.data.length;
   const loop = wav.loops?.[0];
@@ -36,7 +39,7 @@ export function sampleFromWav(wav: Wav, name: string): Sample {
   return {
     id: newId(),
     name,
-    rate: wav.sampleRate,
+    rate: samplerBandwidth(wav.sampleRate)?.rate ?? wav.sampleRate,
     data: wav.data,
     loopStart: loop ? Math.min(loop.start, loopEnd) : 0,
     loopEnd,
@@ -50,6 +53,21 @@ export function wavLoops(sample: Sample): WavLoop[] {
 }
 
 export type Resampler = (data: Float32Array, fromRate: number, toRate: number) => Promise<Float32Array>;
+
+export interface SampleData {
+  data: Float32Array;
+  rate: number;
+  loopStart: number;
+  loopEnd: number;
+}
+
+/** A sample at another rate, with its loop moved to the same place in time */
+export async function resampleSample(sample: Sample, toRate: number, resample: Resampler): Promise<SampleData> {
+  const data = await resample(sample.data, sample.rate, toRate);
+  const ratio = toRate / sample.rate;
+  const loopEnd = Math.min(Math.round(sample.loopEnd * ratio), data.length);
+  return { data, rate: toRate, loopStart: Math.min(Math.round(sample.loopStart * ratio), loopEnd), loopEnd };
+}
 
 export interface SendOptions {
   /** 0-5 */

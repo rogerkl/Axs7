@@ -69,6 +69,12 @@ export function matchesBandwidth(bw: Bandwidth, rate: number): boolean {
   return Math.abs(cents(rate, bw.rate)) < 1;
 }
 
+/** @returns the sampler's bandwidth for the rate if it is one of the sampler's rates, null if not */
+export function samplerBandwidth(rate: number): Bandwidth | null {
+  const bw = nearestBandwidth(rate);
+  return matchesBandwidth(bw, rate) ? bw : null;
+}
+
 /** @returns the sampling period in ns, the exact table period if the rate is one of the sampler's */
 export function periodFor(rate: number): number {
   const bw = nearestBandwidth(rate);

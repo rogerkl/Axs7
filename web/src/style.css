@@ -580,6 +580,30 @@ button:focus-visible,
   text-align: right;
 }
 
+/* a rate that isn't one of the sampler's */
+.off-rate {
+  color: var(--warn);
+}
+
+.list-row.selected .off-rate {
+  color: #8a3a00;
+}
+
+.badge {
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  padding: 2px 6px;
+  border: 1px solid #3d5a2d;
+  border-radius: 2px;
+  color: var(--lcd);
+}
+
+.badge.warn,
+.info.warn {
+  color: var(--warn);
+  border-color: #6b4a16;
+}
+
 .list-empty {
   padding: 18px 10px;
   text-align: center;
@@ -715,6 +739,12 @@ button.soft {
 
 button.soft:hover {
   border-color: var(--blue);
+}
+
+button.soft:disabled {
+  opacity: 0.4;
+  cursor: default;
+  border-color: #4a4a4e;
 }
 
 button.soft.small {

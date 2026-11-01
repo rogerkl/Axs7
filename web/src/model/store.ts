@@ -77,6 +77,16 @@ export class Store {
     }
   }
 
+  /** Replaces a sample's audio, as when resampling it. Keygroups keep playing it. */
+  replaceData(id: string, data: { data: Float32Array; rate: number; loopStart: number; loopEnd: number }): void {
+    const sample = this.samples.get(id);
+    if (sample) {
+      Object.assign(sample, data);
+      this.emit('sample', id);
+      this.emit('samples');
+    }
+  }
+
   /** Removes a sample, keygroups that played it are left without a sample */
   removeSample(id: string): void {
     const ids = [...this.samples.keys()];

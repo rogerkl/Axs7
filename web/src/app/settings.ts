@@ -12,6 +12,8 @@ export interface Settings {
   /** how many sample slots the sampler has: 6 on a standard X7000, more with a memory expansion */
   slotCount: number;
   normalize: boolean;
+  /** keep a loaded file's rate, or resample it to the nearest of the sampler's rates */
+  loadRate: 'keep' | 'sampler';
   ackIntervalMs: number;
   lookaheadMs: number;
   fillerPerBlock: number;
@@ -23,7 +25,7 @@ export interface Settings {
 const KEY = 'axs7.settings';
 
 const DEFAULTS: Settings = {
-  midiIn: null, midiOut: null, channel: 0, slot: 0, slotCount: 6, normalize: true, ackIntervalMs: 50, lookaheadMs: 1500,
+  midiIn: null, midiOut: null, channel: 0, slot: 0, slotCount: 6, normalize: true, loadRate: 'keep', ackIntervalMs: 50, lookaheadMs: 1500,
   fillerPerBlock: 0, volume: 0.8, polyphony: 16, view: 'samples',
 };
 

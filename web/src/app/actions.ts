@@ -2,11 +2,13 @@
 
 import { decodeAudioFile, resampleInBrowser } from '../audio/decode';
 import { bankToZip, zipToBank } from '../model/bank';
-import { dumpFromSample, sampleFromDump, sampleFromWav, wavLoops } from '../model/convert';
+import { dumpFromSample, resampleSample, sampleFromDump, sampleFromWav, wavLoops } from '../model/convert';
+import type { SampleData } from '../model/convert';
 import { newId, newProgram } from '../model/mapping';
 import type { Sample } from '../model/types';
 import { receiveDump, transmitDump } from '../midi/transfer';
 import { readWav, encodeWav } from '../protocol/wav';
+import { nearestBandwidth, samplerBandwidth } from '../protocol/akai';
 import { download } from '../ui/dom';
 import type { App } from './app';
 
@@ -21,6 +23,8 @@ export class Actions {
   /** when the ACKs scheduled by the last receive have gone out */
   private acksUntil = 0;
   private audition = newProgram('AUDITION');
+  /** the sample as it was before the last resample, for undo */
+  lastResample: { id: string; before: SampleData } | null = null;
   onBusy: () => void = () => {};
 
   constructor(private app: App) {}
@@ -38,11 +42,18 @@ export class Actions {
       try {
         const buffer = await file.arrayBuffer();
         const wav = readWav(buffer);
+        const toSampler = this.app.settings.loadRate === 'sampler';
         let sample: Sample;
         if (wav) {
           sample = sampleFromWav(wav, name);
+          if (toSampler && !samplerBandwidth(sample.rate)) {
+            const to = nearestBandwidth(sample.rate);
+            Object.assign(sample, await resampleSample(sample, to.rate, resampleInBrowser));
+            this.app.midi.logLine(`${name}: resampled from ${wav.sampleRate} to ${to.rate} Hz (${to.name}) on load`);
+          }
         } else {
-          const { rate, data } = await decodeAudioFile(buffer);
+          // the browser's decoder resamples anyway, straight to the sampler's highest rate if asked to
+          const { rate, data } = await decodeAudioFile(buffer, toSampler ? nearestBandwidth(44100).rate : 44100);
           sample = { id: newId(), name, rate, data, loopStart: 0, loopEnd: data.length, loopMode: 'off' };
         }
         store.addSample(sample);
@@ -54,6 +65,40 @@ export class Actions {
     }
     if (loaded > 0) {
       lcd.flash(loaded === 1 ? `LOADED ${store.selectedSample?.name}` : `LOADED ${loaded} SAMPLES`);
+    }
+  }
+
+  /**
+   * Resamples a sample to another rate in place, like the resample function on a sampler: to make it one of the
+   * sampler's rates, or to save space on the sampler with a lower one. Keygroups keep playing it at the same pitch.
+   */
+  async resample(sample: Sample, toRate: number): Promise<void> {
+    const { store, lcd } = this.app;
+    if (Math.abs(sample.rate - toRate) < 0.01) {
+      lcd.flash('ALREADY AT THAT RATE');
+      return;
+    }
+    lcd.hold(`RESAMPLING ${sample.name}`);
+    try {
+      const before = { data: sample.data, rate: sample.rate, loopStart: sample.loopStart, loopEnd: sample.loopEnd };
+      const after = await resampleSample(sample, toRate, resampleInBrowser);
+      this.lastResample = { id: sample.id, before };
+      store.replaceData(sample.id, after);
+      lcd.release();
+      lcd.flash(`RESAMPLED TO ${(toRate / 1000).toFixed(1)}KHZ`);
+    } catch (e) {
+      lcd.release();
+      this.app.midi.logLine(`Could not resample ${sample.name}: ${errorText(e)}`, 'error');
+      lcd.flash('RESAMPLE FAILED');
+    }
+  }
+
+  undoResample(): void {
+    const undo = this.lastResample;
+    if (undo && this.app.store.samples.has(undo.id)) {
+      this.lastResample = null;
+      this.app.store.replaceData(undo.id, undo.before);
+      this.app.lcd.flash('RESAMPLE UNDONE');
     }
   }
 

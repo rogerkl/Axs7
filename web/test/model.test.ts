@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'vitest';
-import { BW16, MAX_SAMPLES, decodeHeader, encodeSamples, parseDump } from '../src/protocol/akai';
+import { BW16, MAX_SAMPLES, decodeHeader, encodeSamples, parseDump, samplerBandwidth } from '../src/protocol/akai';
 import { encodeWav, readWav } from '../src/protocol/wav';
 import { bankToZip, zipToBank } from '../src/model/bank';
-import { dumpFromSample, sampleFromDump, sampleFromWav } from '../src/model/convert';
+import { dumpFromSample, resampleSample, sampleFromDump, sampleFromWav } from '../src/model/convert';
 import { newKeygroup, newProgram, voicesFor } from '../src/model/mapping';
 import { noteName, parseNote } from '../src/model/notes';
 import { cutoffHz, engineParams, envTime } from '../src/model/params';
@@ -156,6 +156,40 @@ describe('convert', () => {
     const s = sampleFromWav(wav, 'X');
     expect(s).toMatchObject({ rate: 22050, loopStart: 10, loopEnd: 5000, loopMode: 'alternating' });
     expect(sampleFromWav({ ...wav, loops: null }, 'X').loopMode).toBe('off');
+  });
+});
+
+describe('sampler rates and resampling', () => {
+  test('which rates are the sampler\'s', () => {
+    expect(samplerBandwidth(39555)?.rate).toBe(39555.4);
+    expect(samplerBandwidth(22200)?.name).toBe('8.9khz');
+    expect(samplerBandwidth(44100)).toBeNull();
+    expect(samplerBandwidth(22050)).toBeNull();
+  });
+
+  test('a wav at a sampler rate gets the exact rate, whole Hz in the file', () => {
+    const wav = (rate: number) => readWav(encodeWav(new Float32Array(10), rate, []).buffer as ArrayBuffer)!;
+    expect(sampleFromWav(wav(39555), 'A').rate).toBe(39555.4);
+    expect(sampleFromWav(wav(22200), 'A').rate).toBe(22199.53);
+    expect(sampleFromWav(wav(44100), 'A').rate).toBe(44100);
+  });
+
+  test('resampling moves the loop to the same time', async () => {
+    const s = sample({ rate: 44100, data: new Float32Array(44100), loopStart: 4410, loopEnd: 44100 });
+    const halve = async (data: Float32Array) => new Float32Array(data.length / 2);
+    expect(await resampleSample(s, 22050, halve)).toMatchObject({ rate: 22050, loopStart: 2205, loopEnd: 22050 });
+  });
+
+  test('replacing a sample\'s audio keeps its keygroups, and tells the engine and the views', () => {
+    const store = new Store();
+    store.addSample(sample());
+    const events: string[] = [];
+    store.on('sample', (id) => events.push(`sample ${id}`));
+    store.on('samples', () => events.push('samples'));
+    store.replaceData('s1', { data: new Float32Array(10), rate: 22199.53, loopStart: 1, loopEnd: 9 });
+    expect(events).toEqual(['sample s1', 'samples']);
+    expect(store.samples.get('s1')).toMatchObject({ rate: 22199.53, loopStart: 1, loopEnd: 9, name: 'SINE' });
+    expect(store.program.keygroups[0].sampleId).toBe('s1');
   });
 });
 

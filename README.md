@@ -12,6 +12,13 @@ programs, and played from the on-screen keyboard, the computer keyboard or a MID
 - **Memory**: samples from WAV files (the loop in a WAV `smpl` chunk is kept) or other audio files, or received
   from a slot on the sampler. Not limited like the sampler's memory, and kept in the browser between visits
   (samples in IndexedDB, programs in localStorage).
+- **Sampler rates**: the sampler plays samples at 41 rates a semitone apart (39555.4 Hz down to 3924.38 Hz).
+  Samples at other rates are marked (`44.1K!`), and so are samples longer than the sampler takes (32752 samples).
+  RESAMPLE converts a sample to one of the sampler's rates, like the resample function on a sampler: to make it
+  compatible, or to a lower rate so a longer sample fits. The loop moves along and keygroups keep playing it at
+  the same pitch, UNDO RESAMPLE brings back the previous version. RATE ON LOAD = SAMPLER converts files to the
+  nearest sampler rate when they are loaded. A WAV file at a sampler rate (whole Hz in the file, like 39555) gets
+  the exact rate.
 - **Programs**: keygroups, each a sample over a key range with root key, tune and level; a resonant lowpass with
   its own envelope, an amp envelope, velocity sensitivity, 6-32 voices. Parameters are 0-99 like on the sampler,
   and note names follow the sampler: C3 = MIDI 60.
