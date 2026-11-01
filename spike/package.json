@@ -1,0 +1,10 @@
+{
+  "name": "axs7sds-webmidi-spike",
+  "private": true,
+  "type": "module",
+  "description": "Tests whether Akai X7000/S700 sample dumps work over Web MIDI",
+  "scripts": {
+    "test": "node --test test/",
+    "start": "./serve.sh"
+  }
+}

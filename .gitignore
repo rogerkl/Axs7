@@ -1,0 +1,5 @@
+/target
+node_modules/
+dist/
+# built by the engine build, see web/build-engine.sh
+/web/public/engine.wasm

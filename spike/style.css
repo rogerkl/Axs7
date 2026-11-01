@@ -1,0 +1,264 @@
+:root {
+  --bg: #f6f6f4;
+  --panel: #ffffff;
+  --text: #1d1f21;
+  --muted: #6b6f75;
+  --border: #d9dadc;
+  --accent: #2f6fd6;
+  --accent-soft: rgba(47, 111, 214, 0.14);
+  --wave: #2b2f36;
+  --dim: rgba(128, 128, 128, 0.18);
+  --ok: #1d7f45;
+  --warn: #a35a00;
+  --bad: #c0362c;
+  --warn-bg: #fff4e0;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171a;
+    --panel: #1d2024;
+    --text: #e4e6e9;
+    --muted: #9399a1;
+    --border: #33373d;
+    --accent: #6ea2ff;
+    --accent-soft: rgba(110, 162, 255, 0.18);
+    --wave: #d5d9df;
+    --dim: rgba(0, 0, 0, 0.35);
+    --ok: #4cc27f;
+    --warn: #f0a843;
+    --bad: #ff6b5e;
+    --warn-bg: #3a2c14;
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+header,
+main {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+header {
+  padding-top: 20px;
+}
+
+h1 {
+  font-size: 20px;
+  margin: 0 0 4px;
+}
+
+h2 {
+  font-size: 15px;
+  margin: 0 0 10px;
+}
+
+.sub,
+.muted,
+.hint {
+  color: var(--muted);
+}
+
+.hint {
+  font-size: 12.5px;
+  margin: 6px 0;
+}
+
+section {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin: 14px 0;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 8px 0;
+}
+
+.row.spread {
+  justify-content: space-between;
+  margin: 0;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+fieldset {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 0;
+  padding: 8px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+fieldset label {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+}
+
+.fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  align-items: center;
+  margin: 10px 0 0;
+}
+
+.label {
+  color: var(--muted);
+}
+
+input[type="number"] {
+  width: 90px;
+}
+
+input,
+select,
+button,
+.button {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px 8px;
+}
+
+select {
+  max-width: 100%;
+}
+
+button,
+.button {
+  cursor: pointer;
+  background: var(--panel);
+}
+
+button:hover:not(:disabled),
+.button:hover {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+#transmit,
+#receive,
+#roundTrip,
+#connect {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.check {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+canvas {
+  display: block;
+  width: 100%;
+  height: 140px;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+progress {
+  width: 220px;
+  max-width: 100%;
+}
+
+.note {
+  margin: 4px 0 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--warn-bg);
+}
+
+.warn {
+  color: var(--warn);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+td {
+  padding: 3px 8px 3px 0;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+
+td:first-child {
+  color: var(--muted);
+  white-space: nowrap;
+  width: 1%;
+}
+
+td.mono,
+pre {
+  font: 12px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.ok {
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.bad {
+  color: var(--bad);
+  font-weight: 600;
+}
+
+pre {
+  margin: 8px 0 0;
+  max-height: 340px;
+  overflow: auto;
+  white-space: pre-wrap;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+}
+
+pre .warn {
+  color: var(--warn);
+}
+
+pre .error {
+  color: var(--bad);
+}

@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>X7000 Web MIDI Test</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="js/main.js"></script>
+</head>
+<body>
+<header>
+  <h1>X7000 Web MIDI test</h1>
+  <p class="sub">Does the Akai X7000/S700 sample dump work over Web MIDI? Receive uses blind ACKs scheduled with
+    timestamps. Transmit sends the whole dump as one message, without waiting for ACKs.</p>
+</header>
+
+<main>
+  <section>
+    <h2>1. MIDI</h2>
+    <p id="support" class="note warn" hidden></p>
+    <div class="row">
+      <button id="connect">Connect MIDI</button>
+      <span id="midiStatus" class="muted">Not connected</span>
+    </div>
+    <div class="row">
+      <label>Input <select id="input" disabled></select></label>
+      <label>Output <select id="output" disabled></select></label>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. Sample</h2>
+    <div class="row">
+      <button id="sine">Test sine</button>
+      <label class="button">Load audio file…<input type="file" id="file" accept=".wav,audio/*" hidden></label>
+      <span id="sampleName" class="muted">No sample</span>
+    </div>
+    <canvas id="wave" aria-label="Waveform"></canvas>
+    <div class="fields">
+      <div><span class="label">Rate</span> <output id="rate">–</output></div>
+      <div><span class="label">Samples</span> <output id="numSamples">–</output></div>
+      <label>Loop start <input type="number" id="loopStart" min="0" step="1"></label>
+      <label>Loop end <input type="number" id="loopEnd" min="0" step="1"></label>
+      <label>Loop <select id="loopMode">
+        <option value="forward">Forward</option>
+        <option value="alternating">Alternating</option>
+      </select></label>
+      <label class="check"><input type="checkbox" id="normalize" checked> Normalize when sending</label>
+    </div>
+    <p class="hint">The sampler ends the sample at the loop end. A loop shorter than 5 samples plays as one shot.</p>
+    <div class="row">
+      <button id="play" disabled>Play</button>
+      <button id="stop" disabled>Stop</button>
+      <button id="downloadWav" disabled>Download WAV</button>
+      <button id="downloadSyx" disabled title="The raw received message, for analysis">Download raw .syx</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>3. Transfer</h2>
+    <p class="note">Transmit overwrites the sample in the chosen slot. If the sampler hangs after a transmit,
+      switch it off and on.</p>
+    <div class="row">
+      <label>Sample slot <select id="slot">
+        <option value="0">1</option><option value="1">2</option><option value="2">3</option>
+        <option value="3">4</option><option value="4">5</option><option value="5">6</option>
+      </select></label>
+    </div>
+    <div class="columns">
+      <fieldset>
+        <legend>Transmit</legend>
+        <label>Filler bytes after header <input type="number" id="fillerHeader" value="0" min="0" max="20000"></label>
+        <label>Filler bytes between blocks <input type="number" id="fillerBlock" value="0" min="0" max="2000"></label>
+        <label>Filler byte <select id="fillerByte">
+          <option value="248">F8 timing clock</option>
+          <option value="254">FE active sensing</option>
+        </select></label>
+        <p class="hint" id="transmitInfo">–</p>
+        <button id="transmit" disabled>Transmit</button>
+      </fieldset>
+      <fieldset>
+        <legend>Receive</legend>
+        <label>ACK interval (ms) <input type="number" id="ackInterval" value="50" min="20" max="500"></label>
+        <label>ACK lookahead (ms) <input type="number" id="lookahead" value="1500" min="200" max="10000"></label>
+        <p class="hint">The dump arrives in one piece when the sampler is done, about 27 s for a full sample.
+          Keep this tab visible.</p>
+        <button id="receive" disabled>Receive</button>
+      </fieldset>
+    </div>
+    <div class="row">
+      <button id="roundTrip" disabled title="Transmit the sample, receive it back from the same slot and compare">
+        Round trip test</button>
+      <button id="cancel" disabled>Cancel</button>
+    </div>
+    <div class="row">
+      <progress id="progress" max="1" value="0"></progress>
+      <span id="status" class="muted">Idle</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Result</h2>
+    <table id="result"><tbody><tr><td class="muted">Nothing yet</td></tr></tbody></table>
+  </section>
+
+  <section>
+    <div class="row spread">
+      <h2>Log</h2>
+      <span>
+        <button id="copyLog">Copy log</button>
+        <button id="clearLog">Clear</button>
+      </span>
+    </div>
+    <pre id="log"></pre>
+  </section>
+</main>
+</body>
+</html>
