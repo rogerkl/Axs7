@@ -4,7 +4,9 @@ import { decodeAudioFile, resampleInBrowser } from '../audio/decode';
 import { getDsp } from '../audio/dsp';
 import type { FadeShape } from '../audio/dsp';
 import { bankToZip, zipToBank } from '../model/bank';
-import { dumpFromSample, resampleSample, sampleFromDump, sampleFromWav, wavLoops } from '../model/convert';
+import {
+  dumpFromSample, resampleSample, sampleData, sampleFromDump, sampleFromWav, trimSample, wavLoops,
+} from '../model/convert';
 import type { SampleData } from '../model/convert';
 import { newId, newProgram } from '../model/mapping';
 import type { Sample } from '../model/types';
@@ -26,7 +28,7 @@ export class Actions {
   private acksUntil = 0;
   private audition = newProgram('AUDITION');
   /** the sample as it was before the last edit (resample or crossfade), for undo */
-  lastEdit: { id: string; what: 'RESAMPLE' | 'CROSSFADE'; before: SampleData } | null = null;
+  lastEdit: { id: string; what: 'RESAMPLE' | 'CROSSFADE' | 'TRIM'; before: SampleData } | null = null;
   onBusy: () => void = () => {};
 
   constructor(private app: App) {}
@@ -56,7 +58,8 @@ export class Actions {
         } else {
           // the browser's decoder resamples anyway, straight to the sampler's highest rate if asked to
           const { rate, data } = await decodeAudioFile(buffer, toSampler ? nearestBandwidth(44100).rate : 44100);
-          sample = { id: newId(), name, rate, data, loopStart: 0, loopEnd: data.length, loopMode: 'off' };
+          sample = { id: newId(), name, rate, data, start: 0, end: data.length, loopStart: 0, loopEnd: data.length,
+            loopMode: 'off' };
         }
         store.addSample(sample);
         loaded++;
@@ -82,7 +85,7 @@ export class Actions {
     }
     lcd.hold(`RESAMPLING ${sample.name}`);
     try {
-      const before = { data: sample.data, rate: sample.rate, loopStart: sample.loopStart, loopEnd: sample.loopEnd };
+      const before = sampleData(sample);
       const after = await resampleSample(sample, toRate, resampleInBrowser);
       this.lastEdit = { id: sample.id, what: 'RESAMPLE', before };
       store.replaceData(sample.id, after);
@@ -114,17 +117,28 @@ export class Actions {
         lcd.flash('NO ROOM FOR A CROSSFADE');
         return;
       }
-      const { data, rate, loopStart, loopEnd } = sample;
-      this.lastEdit = { id: sample.id, what: 'CROSSFADE', before: { data, rate, loopStart, loopEnd } };
-      store.replaceData(sample.id, { data: r.data, rate, loopStart, loopEnd });
-      lcd.flash(`CROSSFADED ${Math.round((r.length / rate) * 1000)}MS`);
+      const before = sampleData(sample);
+      this.lastEdit = { id: sample.id, what: 'CROSSFADE', before };
+      store.replaceData(sample.id, { ...before, data: r.data });
+      lcd.flash(`CROSSFADED ${Math.round((r.length / sample.rate) * 1000)}MS`);
     } catch (e) {
       this.app.midi.logLine(`Could not crossfade ${sample.name}: ${errorText(e)}`, 'error');
       lcd.flash('CROSSFADE FAILED');
     }
   }
 
-  /** Undoes the last resample or crossfade */
+  /** Keeps only the part between START and END, to save memory. UNDO brings the rest back. */
+  trim(sample: Sample): void {
+    if (sample.start === 0 && sample.end === sample.data.length) {
+      this.app.lcd.flash('NOTHING TO TRIM');
+      return;
+    }
+    this.lastEdit = { id: sample.id, what: 'TRIM', before: sampleData(sample) };
+    this.app.store.replaceData(sample.id, trimSample(sample));
+    this.app.lcd.flash(`TRIMMED TO ${(sample.data.length / sample.rate).toFixed(2)}S`);
+  }
+
+  /** Undoes the last resample, crossfade or trim */
   undoEdit(): void {
     const undo = this.lastEdit;
     if (undo && this.app.store.samples.has(undo.id)) {

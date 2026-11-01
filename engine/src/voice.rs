@@ -30,6 +30,10 @@ pub struct NoteOn {
     pub sample: u32,
     /// pitch ratio, 2 plays an octave up
     pub ratio: f64,
+    /// where playing starts
+    pub start: usize,
+    /// where a sample without loop ends, after its last sample
+    pub end: usize,
     pub loop_start: usize,
     /// after the last sample in the loop
     pub loop_end: usize,
@@ -108,10 +112,10 @@ impl Voice {
         self.program = note.program;
         self.sample = note.sample;
         self.started = started;
-        self.pos = 0.0;
         self.step = step;
-        self.len = len;
-        self.loop_end = note.loop_end.min(len);
+        self.len = note.end.min(len);
+        self.pos = note.start.min(self.len.saturating_sub(1)) as f64;
+        self.loop_end = note.loop_end.min(self.len);
         self.loop_start = note.loop_start.min(self.loop_end);
         // a loop needs two samples to go back and forth between
         self.loop_mode = if self.loop_end >= self.loop_start + 2 { note.loop_mode } else { LoopMode::Off };
@@ -217,7 +221,8 @@ mod tests {
     fn voice(len: usize, loop_start: usize, loop_end: usize, loop_mode: LoopMode) -> Voice {
         let mut v = Voice::default();
         let note = NoteOn {
-            key: 60, velocity: 1.0, program: 0, sample: 0, ratio: 1.0, loop_start, loop_end, loop_mode, gain: 1.0,
+            key: 60, velocity: 1.0, program: 0, sample: 0, ratio: 1.0, start: 0, end: len, loop_start, loop_end,
+            loop_mode, gain: 1.0,
         };
         v.start(&note, len, 1.0, 0);
         v
@@ -245,6 +250,18 @@ mod tests {
     fn without_loop_the_sample_ends() {
         let v = voice(5, 0, 5, LoopMode::Off);
         assert_eq!(indices(&v, -1, 7), vec![Some(0), Some(0), Some(1), Some(2), Some(3), Some(4), None, None]);
+    }
+
+    #[test]
+    fn plays_from_the_start_point_and_ends_at_the_end_point() {
+        let mut v = Voice::default();
+        let note = NoteOn {
+            key: 60, velocity: 1.0, program: 0, sample: 0, ratio: 1.0, start: 3, end: 7, loop_start: 0, loop_end: 0,
+            loop_mode: LoopMode::Off, gain: 1.0,
+        };
+        v.start(&note, 10, 1.0, 0);
+        assert_eq!(v.position(), Some(3));
+        assert_eq!(indices(&v, 5, 9), vec![Some(5), Some(6), None, None]);
     }
 
     #[test]

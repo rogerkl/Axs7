@@ -12,7 +12,7 @@ interface EngineExports {
   engine_set_sample(engine: number, id: number, data: number, len: number, rate: number): void;
   engine_remove_sample(engine: number, id: number): void;
   engine_note_on(engine: number, key: number, velocity: number, program: number, sample: number, ratio: number,
-    loopStart: number, loopEnd: number, loopMode: number, gain: number): void;
+    start: number, end: number, loopStart: number, loopEnd: number, loopMode: number, gain: number): void;
   engine_note_off(engine: number, key: number): void;
   engine_all_notes_off(engine: number, hard: number): void;
   engine_set_bend(engine: number, semitones: number): void;
@@ -82,8 +82,8 @@ class EngineProcessor extends AudioWorkletProcessor {
         ex.engine_set_program(e, m.id);
         break;
       case 'noteOn':
-        ex.engine_note_on(e, m.key, m.velocity, m.program, m.sample, m.ratio, m.loopStart, m.loopEnd, m.loopMode,
-          m.gain);
+        ex.engine_note_on(e, m.key, m.velocity, m.program, m.sample, m.ratio, m.start, m.end, m.loopStart, m.loopEnd,
+          m.loopMode, m.gain);
         break;
       case 'noteOff':
         ex.engine_note_off(e, m.key);

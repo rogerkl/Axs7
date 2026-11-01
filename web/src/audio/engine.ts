@@ -177,7 +177,8 @@ export class AudioEngine {
     for (const v of voices) {
       this.post({
         type: 'noteOn', key, velocity, program: this.id(program.id), sample: this.id(v.sample.id), ratio: v.ratio,
-        loopStart: v.sample.loopStart, loopEnd: v.sample.loopEnd, loopMode: LOOP_MODE_CODE[v.sample.loopMode],
+        start: v.sample.start, end: v.sample.end, loopStart: v.sample.loopStart, loopEnd: v.sample.loopEnd,
+        loopMode: LOOP_MODE_CODE[v.sample.loopMode],
         gain: v.gain,
       });
     }

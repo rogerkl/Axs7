@@ -2,18 +2,22 @@ import { describe, expect, test } from 'vitest';
 import { BW16, MAX_SAMPLES, decodeHeader, encodeSamples, parseDump, samplerBandwidth } from '../src/protocol/akai';
 import { encodeWav, readWav } from '../src/protocol/wav';
 import { bankToZip, zipToBank } from '../src/model/bank';
-import { dumpFromSample, resampleSample, sampleFromDump, sampleFromWav, samplerFit } from '../src/model/convert';
+import {
+  dumpFromSample, resampleSample, sampleFromDump, sampleFromWav, samplerFit, trimSample,
+} from '../src/model/convert';
 import { newKeygroup, newProgram, voicesFor } from '../src/model/mapping';
 import { noteName, parseNote } from '../src/model/notes';
 import { cutoffHz, engineParams, envTime } from '../src/model/params';
+import { isPortion, movePoint, normalizeSample } from '../src/model/points';
 import { Store } from '../src/model/store';
 import type { Sample } from '../src/model/types';
 import { fixture, testSine } from './helpers';
 
-const sample = (overrides: Partial<Sample> = {}): Sample => ({
-  id: 's1', name: 'SINE', rate: BW16.rate, data: Float32Array.from(testSine()), loopStart: 0, loopEnd: 5900,
-  loopMode: 'forward', ...overrides,
-});
+const sample = (overrides: Partial<Sample> = {}): Sample => {
+  const data = overrides.data ?? Float32Array.from(testSine());
+  return { id: 's1', name: 'SINE', rate: BW16.rate, data, start: 0, end: data.length, loopStart: 0, loopEnd: 5900,
+    loopMode: 'forward', ...overrides };
+};
 
 describe('notes', () => {
   test('C3 is MIDI 60 as on the sampler', () => {
@@ -199,10 +203,62 @@ describe('sampler rates and resampling', () => {
     const events: string[] = [];
     store.on('sample', (id) => events.push(`sample ${id}`));
     store.on('samples', () => events.push('samples'));
-    store.replaceData('s1', { data: new Float32Array(10), rate: 22199.53, loopStart: 1, loopEnd: 9 });
+    store.replaceData('s1', { data: new Float32Array(10), rate: 22199.53, start: 0, end: 10, loopStart: 1, loopEnd: 9 });
     expect(events).toEqual(['sample s1', 'samples']);
     expect(store.samples.get('s1')).toMatchObject({ rate: 22199.53, loopStart: 1, loopEnd: 9, name: 'SINE' });
     expect(store.program.keygroups[0].sampleId).toBe('s1');
+  });
+});
+
+describe('start and end points', () => {
+  const s = () => sample({ data: new Float32Array(1000), start: 100, end: 900, loopStart: 300, loopEnd: 700 });
+
+  test('loop points stop at START and END', () => {
+    expect(movePoint(s(), 'loopStart', 50)).toMatchObject({ loopStart: 100 });
+    expect(movePoint(s(), 'loopEnd', 950)).toMatchObject({ loopEnd: 900 });
+    expect(movePoint(s(), 'loopStart', 800)).toMatchObject({ loopStart: 698, loopEnd: 700 });
+  });
+
+  test('START and END push the loop along', () => {
+    expect(movePoint(s(), 'start', 400)).toEqual({ start: 400, end: 900, loopStart: 400, loopEnd: 700 });
+    expect(movePoint(s(), 'start', 800)).toEqual({ start: 800, end: 900, loopStart: 800, loopEnd: 802 });
+    expect(movePoint(s(), 'end', 200)).toEqual({ start: 100, end: 200, loopStart: 198, loopEnd: 200 });
+    expect(movePoint(s(), 'end', 5000)).toMatchObject({ end: 1000 });
+    expect(movePoint(s(), 'start', -5)).toMatchObject({ start: 0 });
+  });
+
+  test('samples from before the points get them', () => {
+    const old = { ...s(), start: undefined, end: undefined } as unknown as Sample;
+    expect(normalizeSample(old)).toMatchObject({ start: 0, end: 1000, loopStart: 300, loopEnd: 700 });
+    expect(isPortion(s())).toBe(true);
+    expect(isPortion(old)).toBe(false);
+  });
+
+  test('trim keeps the part between START and END, with the loop in the same place', () => {
+    const data = Float32Array.from({ length: 1000 }, (_, i) => i);
+    const t = trimSample(sample({ data, start: 100, end: 900, loopStart: 300, loopEnd: 700 }));
+    expect(t).toMatchObject({ start: 0, end: 800, loopStart: 200, loopEnd: 600 });
+    expect(t.data.length).toBe(800);
+    expect(t.data[0]).toBe(100);
+    expect(t.data[t.loopStart]).toBe(300);
+  });
+
+  test('only the part from START to END is sent, the loop counted from START', async () => {
+    const data = Float32Array.from(testSine(BW16.rate, 6000));
+    const { dump, notes } = await dumpFromSample(sample({ data, start: 1000, end: 5000, loopStart: 2000,
+      loopEnd: 4500 }), { slot: 0, normalize: false }, () => Promise.reject(new Error('no resampling')));
+    expect(decodeHeader(dump.bytes)).toMatchObject({ totalWords: 4000 + 200, loopStart: 1000, loopEnd: 3500 });
+    expect(parseDump(dump.bytes).codes!.subarray(0, 4000)).toEqual(encodeSamples(data.subarray(1000, 5000)));
+    expect(notes[0]).toMatch(/START to END/);
+  });
+
+  test('the fit counts from START, resampling moves all points', async () => {
+    const long = sample({ data: new Float32Array(60000), start: 20000, end: 60000, loopStart: 30000,
+      loopEnd: 50000 });
+    expect(samplerFit(long)).toMatchObject({ used: 30000, fits: true });
+    expect(samplerFit({ ...long, start: 0 })).toMatchObject({ used: 50000, fits: false });
+    const half = await resampleSample(long, BW16.rate / 2, async (d) => new Float32Array(d.length / 2));
+    expect(half).toMatchObject({ start: 10000, end: 30000, loopStart: 15000, loopEnd: 25000 });
   });
 });
 
@@ -242,12 +298,14 @@ describe('bank', () => {
     const program = newProgram('BASS ROOT');
     program.cutoff = 64;
     program.keygroups.push(newKeygroup('s1', { low: 36, high: 59, root: 48, cents: 5 }));
-    const samples = [sample(), sample({ id: 's2', name: 'ONE/SHOT?', loopMode: 'off', rate: 22199.53 })];
+    const samples = [sample(), sample({ id: 's2', name: 'ONE/SHOT?', loopMode: 'off', rate: 22199.53, start: 40,
+      end: 5950 })];
     const bank = zipToBank(bankToZip({ samples, programs: [program, newProgram('P2')], programIndex: 1 }));
     expect(bank.programIndex).toBe(1);
     expect(bank.programs[0]).toEqual(program);
-    expect(bank.samples.map((s) => [s.id, s.name, s.rate, s.loopMode, s.loopStart, s.loopEnd])).toEqual([
-      ['s1', 'SINE', BW16.rate, 'forward', 0, 5900], ['s2', 'ONE/SHOT?', 22199.53, 'off', 0, 5900]]);
+    expect(bank.samples.map((s) => [s.id, s.name, s.rate, s.loopMode, s.start, s.end, s.loopStart, s.loopEnd]))
+      .toEqual([['s1', 'SINE', BW16.rate, 'forward', 0, 6000, 0, 5900],
+        ['s2', 'ONE/SHOT?', 22199.53, 'off', 40, 5950, 0, 5900]]);
     expect(bank.samples[0].data.length).toBe(6000);
   });
 

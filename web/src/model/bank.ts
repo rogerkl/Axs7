@@ -22,6 +22,9 @@ interface SampleEntry {
   file: string;
   /** exact, the wav file only has whole Hz */
   rate: number;
+  /** missing in banks from before start and end points */
+  start?: number;
+  end?: number;
   loopStart: number;
   loopEnd: number;
   loopMode: LoopMode;
@@ -45,8 +48,8 @@ export function bankToZip(bank: Bank): Uint8Array {
   const samples = bank.samples.map((s, i): SampleEntry => {
     const file = fileName(i, s.name);
     files[file] = encodeWav(s.data, s.rate, wavLoops(s));
-    return { id: s.id, name: s.name, file, rate: s.rate, loopStart: s.loopStart, loopEnd: s.loopEnd,
-      loopMode: s.loopMode };
+    return { id: s.id, name: s.name, file, rate: s.rate, start: s.start, end: s.end, loopStart: s.loopStart,
+      loopEnd: s.loopEnd, loopMode: s.loopMode };
   });
   const json: BankJson = { format: BANK_FORMAT, version: BANK_VERSION, programIndex: bank.programIndex, samples,
     programs: bank.programs };
@@ -76,9 +79,11 @@ export function zipToBank(zip: Uint8Array): Bank {
       throw new Error(`Sample ${entry.name}: ${entry.file} is missing or not a wav file`);
     }
     const n = wav.data.length;
-    const loopEnd = Math.min(entry.loopEnd, n);
+    const end = Math.min(entry.end ?? n, n);
+    const loopEnd = Math.min(entry.loopEnd, end);
     return { id: entry.id, name: entry.name, rate: entry.rate || wav.sampleRate, data: wav.data,
-      loopStart: Math.min(entry.loopStart, loopEnd), loopEnd, loopMode: entry.loopMode };
+      start: Math.min(entry.start ?? 0, end), end, loopStart: Math.min(entry.loopStart, loopEnd), loopEnd,
+      loopMode: entry.loopMode };
   });
   // defaults for anything a program from an older version doesn't have
   const programs = json.programs.map((p): Program => {

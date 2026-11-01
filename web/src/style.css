@@ -42,6 +42,9 @@
   --wave-over: rgba(255, 90, 74, 0.16);
   --wave-limit: #ff6b5e;
   --wave-head: #ffffff;
+  --wave-unused: rgba(0, 0, 0, 0.62);
+  --wave-point: #e8e6df;
+  --wave-dim: #4f6e3f;
   color-scheme: dark;
 }
 
@@ -764,6 +767,39 @@ button.soft.danger {
 .wave-wrap {
   min-width: 0;
   position: relative;
+}
+
+.wave-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.wave-tools-gap {
+  width: 8px;
+}
+
+.wave-view {
+  margin-left: auto;
+  font: 11px ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color: var(--panel-muted);
+}
+
+.wave-stage {
+  position: relative;
+}
+
+.wave-overview {
+  display: block;
+  width: 100%;
+  height: 22px;
+  margin-top: 4px;
+  background: #0f150c;
+  border-radius: 2px;
+  cursor: pointer;
+  touch-action: none;
 }
 
 .wave-heads {

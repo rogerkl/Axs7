@@ -196,7 +196,10 @@ mod tests {
     }
 
     fn note(key: u32, ratio: f64, loop_mode: LoopMode, len: usize) -> NoteOn {
-        NoteOn { key, velocity: 1.0, program: 0, sample: 1, ratio, loop_start: 0, loop_end: len, loop_mode, gain: 1.0 }
+        NoteOn {
+            key, velocity: 1.0, program: 0, sample: 1, ratio, start: 0, end: len, loop_start: 0, loop_end: len, loop_mode,
+            gain: 1.0,
+        }
     }
 
     fn render(engine: &mut Engine, seconds: f32) -> Vec<f32> {

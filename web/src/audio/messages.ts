@@ -7,7 +7,7 @@ export type EngineMessage =
   | { type: 'program'; id: number; params: Float32Array }
   | {
     type: 'noteOn'; key: number; velocity: number; program: number; sample: number; ratio: number;
-    loopStart: number; loopEnd: number; loopMode: number; gain: number;
+    start: number; end: number; loopStart: number; loopEnd: number; loopMode: number; gain: number;
   }
   | { type: 'noteOff'; key: number }
   | { type: 'allNotesOff'; hard: boolean }

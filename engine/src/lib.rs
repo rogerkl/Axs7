@@ -73,13 +73,15 @@ pub unsafe extern "C" fn engine_remove_sample(engine: *mut Engine, id: u32) {
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn engine_note_on(engine: *mut Engine, key: u32, velocity: f32, program: u32, sample: u32,
-    ratio: f64, loop_start: u32, loop_end: u32, loop_mode: u32, gain: f32) {
+    ratio: f64, start: u32, end: u32, loop_start: u32, loop_end: u32, loop_mode: u32, gain: f32) {
     (*engine).note_on(NoteOn {
         key,
         velocity,
         program,
         sample,
         ratio,
+        start: start as usize,
+        end: end as usize,
         loop_start: loop_start as usize,
         loop_end: loop_end as usize,
         loop_mode: LoopMode::from_u32(loop_mode),

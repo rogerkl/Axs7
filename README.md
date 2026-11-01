@@ -12,9 +12,15 @@ programs, and played from the on-screen keyboard, the computer keyboard or a MID
 - **Memory**: samples from WAV files (the loop in a WAV `smpl` chunk is kept) or other audio files, or received
   from a slot on the sampler. Not limited like the sampler's memory, and kept in the browser between visits
   (samples in IndexedDB, programs in localStorage).
-- **Waveform**: the loop, playback heads of the voices playing the sample (from PLAY, the keyboards or MIDI), what
-  the sampler drops after the loop end (dimmed), and the sampler's length limit (SAMPLER LIMIT) when the sample is
-  longer than it.
+- **START and END**: the part of a sample that is used, to take a portion out of a long one. Playing starts at
+  START, a one shot ends at END, the loop stays between them (moving START or END pushes it along), and only that
+  part is sent to the sampler, which has no start point of its own. TRIM keeps only that part, to save memory.
+- **Waveform**: START and END (tags S, E) and the loop (LS, LE) are dragged on it, and a grabbed point's parameter
+  is selected, so the knob or the arrow keys then move it a sample at a time. The mouse wheel zooms around the
+  pointer (in to single samples), dragging or shift + wheel pans, a double click zooms in, and buttons zoom to each
+  point. The overview under it shows where the view is. It shows playback heads of the voices playing the sample
+  (from PLAY, the keyboards or MIDI), what isn't used or kept (dimmed), and the sampler's length limit from START
+  (SAMPLER LIMIT).
 - **Sampler rates**: the sampler plays samples at 41 rates a semitone apart (39555.4 Hz down to 3924.38 Hz).
   Samples at other rates are marked (`44.1K!`), and so are samples the sampler can't take whole: it takes 32752
   samples, and ends a looped sample at its loop end, so a long sample fits if its loop end is before the limit.

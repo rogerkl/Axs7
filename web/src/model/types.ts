@@ -7,6 +7,10 @@ export interface Sample {
   rate: number;
   /** mono, -1..1 */
   data: Float32Array;
+  /** where playing starts, the part from here to END is what is used and sent to the sampler */
+  start: number;
+  /** after the last sample used */
+  end: number;
   loopStart: number;
   /** after the last sample in the loop */
   loopEnd: number;

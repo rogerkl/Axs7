@@ -1,6 +1,7 @@
 // The sampler's memory: samples and programs, with events for whoever shows or keeps them.
 
 import { newKeygroup, newProgram } from './mapping';
+import { normalizeSample } from './points';
 import type { Envelope, Keygroup, Program, Sample } from './types';
 
 /**
@@ -60,7 +61,7 @@ export class Store {
 
   /** Adds a sample and selects it. A program without keygroups gets one for it, so it can be played at once. */
   addSample(sample: Sample): void {
-    this.samples.set(sample.id, sample);
+    this.samples.set(sample.id, normalizeSample(sample));
     this.selectedSampleId = sample.id;
     this.emit('samples');
     this.emit('selection');
@@ -78,7 +79,7 @@ export class Store {
   }
 
   /** Replaces a sample's audio, as when resampling it. Keygroups keep playing it. */
-  replaceData(id: string, data: { data: Float32Array; rate: number; loopStart: number; loopEnd: number }): void {
+  replaceData(id: string, data: Pick<Sample, 'data' | 'rate' | 'start' | 'end' | 'loopStart' | 'loopEnd'>): void {
     const sample = this.samples.get(id);
     if (sample) {
       Object.assign(sample, data);
@@ -194,7 +195,8 @@ export class Store {
 
   /** Replaces everything, as when loading a bank */
   replaceAll(samples: Sample[], programs: Program[], programIndex = 0): void {
-    this.samples = new Map(samples.map((s) => [s.id, s]));
+    // samples kept from before start and end points get them
+    this.samples = new Map(samples.map((s) => [s.id, normalizeSample(s)]));
     this.programs = programs.length ? programs : [newProgram('PROGRAM 1')];
     this.programIndex = Math.max(0, Math.min(programIndex, this.programs.length - 1));
     this.selectedSampleId = samples[0]?.id ?? null;

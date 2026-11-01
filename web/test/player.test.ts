@@ -5,8 +5,8 @@ import { newKeygroup } from '../src/model/mapping';
 import { Store } from '../src/model/store';
 import type { Sample } from '../src/model/types';
 
-const sample: Sample = { id: 's', name: 'S', rate: 44100, data: new Float32Array(100), loopStart: 0, loopEnd: 100,
-  loopMode: 'off' };
+const sample: Sample = { id: 's', name: 'S', rate: 44100, data: new Float32Array(100), start: 0, end: 100,
+  loopStart: 0, loopEnd: 100, loopMode: 'off' };
 
 function setup() {
   const store = new Store();

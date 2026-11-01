@@ -7,15 +7,18 @@ import { maxCrossfade } from '../../audio/dsp';
 import { samplerFit } from '../../model/convert';
 import type { LoopMode, Sample } from '../../model/types';
 import { h, pickFiles } from '../dom';
-import { ParamCell, choiceCell } from '../param';
+import { ParamCell, choiceCell, dataEntry } from '../param';
+import { isPortion, movePoint } from '../../model/points';
+import type { PointName } from '../../model/points';
 import { slotCell } from '../slot';
 import { Waveform } from '../waveform';
 
 const LOOP_MODES = ['off', 'forward', 'alternating'] as const satisfies readonly LoopMode[];
 const LOOP_NAMES = ['OFF', 'FWD', 'ALT'];
 
+/** How long the part between START and END is */
 function duration(s: Sample): string {
-  return `${(s.data.length / s.rate).toFixed(2)}S`;
+  return `${((s.end - s.start) / s.rate).toFixed(2)}S`;
 }
 
 const khz = (rate: number) => `${(rate / 1000).toFixed(1)}K`;
@@ -51,6 +54,8 @@ export function samplesView(app: App): View {
   let detailOff: (() => void)[] = [];
   /** run when the shown sample's values change */
   let detailRefresh: (() => void)[] = [];
+  /** the shown sample's point cells, to select the one whose marker is grabbed on the waveform */
+  let pointCells: Partial<Record<PointName, ParamCell>> = {};
 
   /** The sampler slot with what to do with it: receive from it, and send the selected sample to it */
   function samplerGroup(withSend: boolean): HTMLElement {
@@ -168,10 +173,17 @@ export function samplesView(app: App): View {
       h('span', { class: 'group-title' }, 'CROSSFADE'), lengthCell.el, shapeCell.el, apply, note);
   }
 
-  wave.onLoop = (loopStart, loopEnd) => {
+  wave.onPoint = (which, value) => {
     const s = store.selectedSample;
     if (s) {
-      store.updateSample(s.id, { loopStart, loopEnd });
+      store.updateSample(s.id, movePoint(s, which, value));
+    }
+  };
+  // a grabbed marker's parameter is selected, so the knob and the arrow keys fine tune it a sample at a time
+  wave.onGrab = (which) => {
+    const cell = pointCells[which];
+    if (cell) {
+      dataEntry.select(cell);
     }
   };
 
@@ -222,21 +234,27 @@ export function samplesView(app: App): View {
     const sample = () => store.samples.get(id) ?? s;
     const name = h('input', { class: 'name-input', value: s.name, maxLength: 24, 'aria-label': 'Sample name',
       onChange: () => store.updateSample(id, { name: name.value.trim() || s.name }) });
+    const pointCell = (which: PointName, label: string) => {
+      const cell = new ParamCell({
+        key: `sample.${which}`, label, min: 0, max: s.data.length, coarse: Math.max(1, Math.round(s.rate / 100)),
+        get: () => sample()[which],
+        set: (v) => {
+          store.updateSample(id, movePoint(sample(), which, v));
+          wave.reveal(sample()[which]); // keep it in view when zoomed in
+        },
+        detail: (v) => `${(v / s.rate).toFixed(3)}S`,
+      }, 'wide');
+      pointCells[which] = cell;
+      return cell;
+    };
+    pointCells = {};
     cells = [
+      pointCell('start', 'START'),
+      pointCell('end', 'END'),
       choiceCell('sample.loop', 'LOOP', LOOP_MODES, LOOP_NAMES, () => sample().loopMode,
         (loopMode) => store.updateSample(id, { loopMode })),
-      new ParamCell({
-        key: 'sample.start', label: 'START', min: 0, max: s.data.length, coarse: Math.max(1, Math.round(s.rate / 100)),
-        get: () => sample().loopStart,
-        set: (v) => store.updateSample(id, { loopStart: Math.min(v, Math.max(0, sample().loopEnd - 2)) }),
-        detail: (v) => `${(v / s.rate).toFixed(3)}S`,
-      }, 'wide'),
-      new ParamCell({
-        key: 'sample.end', label: 'END', min: 0, max: s.data.length, coarse: Math.max(1, Math.round(s.rate / 100)),
-        get: () => sample().loopEnd,
-        set: (v) => store.updateSample(id, { loopEnd: Math.max(v, Math.min(s.data.length, sample().loopStart + 2)) }),
-        detail: (v) => `${(v / s.rate).toFixed(3)}S`,
-      }, 'wide'),
+      pointCell('loopStart', 'LOOP START'),
+      pointCell('loopEnd', 'LOOP END'),
     ];
     const crossfade = crossfadeGroup(s);
     const lastEdit = actions.lastEdit?.id === s.id ? actions.lastEdit : null;
@@ -247,20 +265,28 @@ export function samplesView(app: App): View {
     }
     const bw = samplerBandwidth(s.rate);
     const fitBadge = h('span', { class: 'badge' });
+    const length = h('span', { class: 'info' });
+    const trim = h('button', { class: 'soft', onClick: () => actions.trim(sample()),
+      title: 'Keep only the part between START and END, to save memory (UNDO brings the rest back)' }, 'TRIM');
     const showFit = () => {
-      const fit = fitText(sample());
+      const now = sample();
+      const fit = fitText(now);
       fitBadge.hidden = !fit;
       fitBadge.textContent = fit?.text ?? '';
       fitBadge.classList.toggle('warn', !!fit?.warn);
+      // the sampler's limit counts from START
+      const limitAt = now.start + samplerFit(now).limit;
+      wave.setLimit(limitAt < now.end ? limitAt : null);
+      length.textContent = `${s.rate.toFixed(s.rate % 1 ? 2 : 0)} HZ · `
+        + (isPortion(now) ? `USING ${duration(now)} OF ${(now.data.length / now.rate).toFixed(2)}S`
+          : `${now.data.length} SAMPLES · ${duration(now)}`);
+      trim.disabled = !isPortion(now);
     };
     showFit();
     detailRefresh.push(showFit);
-    const { limit } = samplerFit(s);
-    wave.setLimit(limit < s.data.length ? limit : null);
     detail.replaceChildren(
       h('div', { class: 'row' }, name,
-        h('span', { class: 'info' }, `${s.rate.toFixed(s.rate % 1 ? 2 : 0)} HZ · ${s.data.length} SAMPLES · `
-          + duration(s)),
+        length,
         bw ? h('span', { class: 'badge' }, `SAMPLER RATE, ${bw.name.toUpperCase()} BANDWIDTH`)
           : h('span', { class: 'badge warn' }, 'NOT A SAMPLER RATE: RESAMPLE, OR IT IS WHEN SENT'),
         fitBadge),
@@ -273,6 +299,7 @@ export function samplesView(app: App): View {
             store.addKeygroup(newKeygroup(id));
             app.lcd.flash(`ADDED TO ${store.program.name}`);
           } }, 'ADD TO PROGRAM'),
+        trim,
         lastEdit ? h('button', { class: 'soft', onClick: () => actions.undoEdit() }, `UNDO ${lastEdit.what}`) : null,
         h('button', { class: 'soft', onClick: () => actions.saveWav(sample()) }, 'SAVE WAV'),
         h('button', { class: 'soft danger', onClick: () => {
