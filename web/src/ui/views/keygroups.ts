@@ -44,6 +44,8 @@ export function keygroupsView(app: App): View {
     } as const;
     const cell = new ParamCell({
       key: `kg.${kg.id}.${field}`, label, ...ranges[field],
+      // a played note sets LOW and moves on to HIGH, like on the sampler
+      noteNext: field === 'low' ? `kg.${kg.id}.high` : undefined,
       get: () => store.program.keygroups.find((k) => k.id === kg.id)?.[field] ?? 0,
       set: (v) => store.updateKeygroup(kg.id, { [field]: v }),
     }, 'compact');
@@ -99,9 +101,9 @@ export function keygroupsView(app: App): View {
           const s = store.selectedSample;
           store.addKeygroup(newKeygroup(s?.id ?? null));
         } }, 'ADD KEYGROUP'),
-        h('span', { class: 'info' }, 'Select LOW, HIGH or ROOT and play a note to set it, like on the sampler. A '
-          + 'new keygroup gets the selected sample. Click a bar above the keys to select its keygroup. Notes are '
-          + 'named as on the sampler, C3 = MIDI 60.'))),
+        h('span', { class: 'info' }, 'Select LOW, HIGH or ROOT and play a note to set it, like on the sampler '
+          + '(LOW moves on to HIGH). A new keygroup gets the selected sample. Click a bar above the keys to select '
+          + 'its keygroup. Notes are named as on the sampler, C3 = MIDI 60.'))),
     dispose: () => off.forEach((f) => f()),
   };
 }

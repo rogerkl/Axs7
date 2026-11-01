@@ -19,11 +19,15 @@ export interface ParamSpec {
   coarse?: number;
   /** the value is a note, which can also be set by playing it while the cell is selected, like on the sampler */
   noteInput?: boolean;
+  /** the key of the cell to select after a played note has set this one, like LOW moving on to HIGH */
+  noteNext?: string;
 }
 
 class DataEntry {
   cell: ParamCell | null = null;
   private key: string | null = null;
+  /** the cells by key, to find where a played note moves on to */
+  private cells = new Map<string, WeakRef<ParamCell>>();
   onChange: (cell: ParamCell | null) => void = () => {};
 
   select(cell: ParamCell | null): void {
@@ -36,6 +40,7 @@ class DataEntry {
 
   /** Called by a new cell, takes over the selection from a cell with the same key that was rebuilt */
   adopt(cell: ParamCell): void {
+    this.cells.set(cell.spec.key, new WeakRef(cell));
     if (cell.spec.key === this.key) {
       this.cell = cell;
       cell.el.classList.add('selected');
@@ -48,10 +53,15 @@ class DataEntry {
     }
   }
 
-  /** A played note, sets the selected cell if it takes notes */
+  /** A played note, sets the selected cell if it takes notes, and moves on to the next cell if it has one */
   note(note: number): void {
-    if (this.cell?.el.isConnected && this.cell.spec.noteInput) {
-      this.cell.setValue(note);
+    const cell = this.cell;
+    if (cell?.el.isConnected && cell.spec.noteInput) {
+      cell.setValue(note);
+      const next = cell.spec.noteNext ? this.cells.get(cell.spec.noteNext)?.deref() : undefined;
+      if (next?.el.isConnected) {
+        this.select(next);
+      }
     }
   }
 
