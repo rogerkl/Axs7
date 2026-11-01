@@ -1,6 +1,7 @@
 //! One playing note, like an X7000 voice: a sample read at a pitch ratio, with vibrato from its own LFO, through
 //! a lowpass whose cutoff rises with velocity, at a level that can follow velocity. A looping sample fades out over
-//! its release time after key off, a one shot stops at key off, a drum trigger plays to its end.
+//! its release time after key off, a one shot stops at key off, a drum trigger plays to its end. A reversed voice
+//! plays from END back to START, and its loop mirrored: it plays back into the loop and repeats it there.
 
 use crate::envelope::{Adsr, Envelope};
 use crate::filter::Lowpass;
@@ -49,6 +50,8 @@ pub struct NoteOn {
     /// after the last sample in the loop
     pub loop_end: usize,
     pub loop_mode: LoopMode,
+    /// play from the end back to the start, the X7000's SCAN DIRECTION R
+    pub reverse: bool,
     /// linear
     pub gain: f32,
 }
@@ -77,6 +80,9 @@ pub struct Voice {
     /// step with pitch bend and vibrato
     current_step: f64,
     loop_mode: LoopMode,
+    /// The voice works in its own positions: for a forward voice they are the sample's, a reversed one counts from
+    /// the end, position p reads sample mirror - p
+    mirror: Option<usize>,
     loop_start: usize,
     loop_end: usize,
     len: usize,
@@ -103,6 +109,7 @@ impl Default for Voice {
             step: 1.0,
             current_step: 1.0,
             loop_mode: LoopMode::Off,
+            mirror: None,
             loop_start: 0,
             loop_end: 0,
             len: 0,
@@ -135,10 +142,24 @@ impl Voice {
         self.started = started;
         self.step = step;
         self.current_step = step;
-        self.len = note.end.min(len);
-        self.pos = note.start.min(self.len.saturating_sub(1)) as f64;
-        self.loop_end = note.loop_end.min(self.len);
-        self.loop_start = note.loop_start.min(self.loop_end);
+        let end = note.end.min(len);
+        let start = note.start.min(end.saturating_sub(1));
+        let loop_end = note.loop_end.min(end);
+        let loop_start = note.loop_start.min(loop_end);
+        if note.reverse && end > 0 {
+            // positions counted back from the end, the loop mirrored
+            self.mirror = Some(end - 1);
+            self.len = end - start;
+            self.pos = 0.0;
+            self.loop_start = end - loop_end;
+            self.loop_end = (end - loop_start).min(self.len);
+        } else {
+            self.mirror = None;
+            self.len = end;
+            self.pos = start as f64;
+            self.loop_end = loop_end;
+            self.loop_start = loop_start;
+        }
         // a loop needs two samples to go back and forth between
         self.loop_mode = if !note.loop_mode.looping() || self.loop_end >= self.loop_start + 2 {
             note.loop_mode
@@ -168,7 +189,12 @@ impl Voice {
 
     /// The sample the voice is reading, folded into the loop, for showing a playback head
     pub fn position(&self) -> Option<usize> {
-        self.index(self.pos.floor() as i64)
+        self.index(self.pos.floor() as i64).map(|j| self.sample_at(j))
+    }
+
+    /// The sample read at one of the voice's own positions
+    fn sample_at(&self, position: usize) -> usize {
+        self.mirror.map_or(position, |m| m - position)
     }
 
     fn period(&self) -> usize {
@@ -220,7 +246,7 @@ impl Voice {
         self.filter.set(p[CUTOFF] * (p[VEL_FILTER] * self.velocity).exp2(), FLAT_Q, sample_rate);
         let period = self.period();
         let wrap_at = (self.loop_start + period) as f64;
-        let read = |voice: &Voice, i: i64| voice.index(i).map_or(0.0, |j| data[j]);
+        let read = |voice: &Voice, i: i64| voice.index(i).map_or(0.0, |j| data[voice.sample_at(j)]);
         for o in out.iter_mut() {
             if self.control == 0 {
                 let t = self.age as f32 / sample_rate;
@@ -239,7 +265,7 @@ impl Voice {
                 return;
             };
             let t = (self.pos - i as f64) as f32;
-            let y = hermite(read(self, i - 1), data[j], read(self, i + 1), read(self, i + 2), t);
+            let y = hermite(read(self, i - 1), data[self.sample_at(j)], read(self, i + 1), read(self, i + 2), t);
             let amp = self.amp.tick();
             *o += self.filter.process(y) * amp * level;
             if self.amp.is_idle() {
@@ -262,7 +288,7 @@ mod tests {
     fn note(len: usize, loop_start: usize, loop_end: usize, loop_mode: LoopMode) -> NoteOn {
         NoteOn {
             key: 60, velocity: 1.0, params: 0, sample: 0, ratio: 1.0, start: 0, end: len, loop_start, loop_end,
-            loop_mode, gain: 1.0,
+            loop_mode, reverse: false, gain: 1.0,
         }
     }
 
@@ -315,6 +341,39 @@ mod tests {
         assert_eq!(voice(10, 12, 20, LoopMode::Alternating).index(10), None);
         let clamped = voice(10, 4, 20, LoopMode::Forward);
         assert_eq!(clamped.index(10), Some(4), "loop end clamped to the sample length");
+    }
+
+    /// The samples a voice reads, by its own positions
+    fn reads(v: &Voice, from: i64, to: i64) -> Vec<Option<usize>> {
+        (from..to).map(|i| v.index(i).map(|j| v.sample_at(j))).collect()
+    }
+
+    fn reversed(len: usize, start: usize, end: usize, loop_start: usize, loop_end: usize, mode: LoopMode) -> Voice {
+        let mut n = note(len, loop_start, loop_end, mode);
+        n.start = start;
+        n.end = end;
+        n.reverse = true;
+        let mut v = Voice::default();
+        v.start(&n, len, 1.0, 0);
+        v
+    }
+
+    #[test]
+    fn reversed_plays_from_end_back_to_start() {
+        let v = reversed(10, 2, 8, 0, 0, LoopMode::Off);
+        assert_eq!(v.position(), Some(7));
+        let s = |i| Some(i);
+        assert_eq!(reads(&v, 0, 8), vec![s(7), s(6), s(5), s(4), s(3), s(2), None, None]);
+    }
+
+    #[test]
+    fn reversed_loop_plays_back_into_the_loop_and_repeats_it_backwards() {
+        // samples 0-9, loop 3-6 (3, 4, 5): backwards from 9 into the loop, then 5, 4, 3 over and over
+        let v = reversed(10, 0, 10, 3, 6, LoopMode::Forward);
+        let s = |i| Some(i);
+        assert_eq!(reads(&v, 0, 13), vec![s(9), s(8), s(7), s(6), s(5), s(4), s(3), s(5), s(4), s(3), s(5), s(4), s(3)]);
+        let alt = reversed(10, 0, 10, 3, 7, LoopMode::Alternating);
+        assert_eq!(reads(&alt, 3, 13), vec![s(6), s(5), s(4), s(3), s(4), s(5), s(6), s(5), s(4), s(3)]);
     }
 
     #[test]

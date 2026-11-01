@@ -316,15 +316,23 @@ export class Waveform {
     if (looped) {
       band(s.loopStart, s.loopEnd, color('--wave-loop'));
     }
-    const fade = s.loopMode === 'forward' ? Math.min(this.crossfade, s.loopStart, s.loopEnd - s.loopStart) : 0;
+    // the crossfade: the end of the loop fading into what comes before its start, mirrored when reversed
+    const room = s.reverse ? Math.min(s.data.length - s.loopEnd, s.loopEnd - s.loopStart)
+      : Math.min(s.loopStart, s.loopEnd - s.loopStart);
+    const fade = s.loopMode === 'forward' ? Math.min(this.crossfade, room) : 0;
     if (fade > 0) {
       const xfade = color('--wave-xfade');
-      const ramp = ctx.createLinearGradient(x(s.loopEnd - fade), 0, x(s.loopEnd), 0);
+      const [fadeFrom, fadeTo] = s.reverse ? [s.loopStart + fade, s.loopStart] : [s.loopEnd - fade, s.loopEnd];
+      const ramp = ctx.createLinearGradient(x(fadeFrom), 0, x(fadeTo), 0);
       ramp.addColorStop(0, 'transparent');
       ramp.addColorStop(1, xfade);
-      band(s.loopEnd - fade, s.loopEnd, ramp);
+      band(Math.min(fadeFrom, fadeTo), Math.max(fadeFrom, fadeTo), ramp);
       ctx.globalAlpha = 0.5;
-      band(s.loopStart - fade, s.loopStart, xfade);
+      if (s.reverse) {
+        band(s.loopEnd, s.loopEnd + fade, xfade);
+      } else {
+        band(s.loopStart - fade, s.loopStart, xfade);
+      }
       ctx.globalAlpha = 1;
     }
     this.drawWave(ctx, x, w, height, color('--wave'), dpr);
@@ -332,10 +340,19 @@ export class Waveform {
     band(0, s.start, color('--wave-unused'));
     band(s.end, s.data.length, color('--wave-unused'));
     if (looped) {
-      band(s.loopEnd, s.end, color('--wave-dropped')); // the sampler ends a looped sample at the loop end
+      // the sampler ends a looped sample at the loop end, a reversed one at the loop start
+      if (s.reverse) {
+        band(s.start, s.loopStart, color('--wave-dropped'));
+      } else {
+        band(s.loopEnd, s.end, color('--wave-dropped'));
+      }
     }
     if (this.limit !== null) {
-      band(this.limit, s.data.length, color('--wave-over'));
+      if (s.reverse) {
+        band(0, this.limit, color('--wave-over'));
+      } else {
+        band(this.limit, s.data.length, color('--wave-over'));
+      }
       const lx = x(this.limit);
       if (lx >= 0 && lx <= w) {
         ctx.fillStyle = color('--wave-limit');
@@ -374,9 +391,9 @@ export class Waveform {
     marker('start', color('--wave-point'));
     marker('end', color('--wave-point'));
     const seconds = (i: number) => (i / s.rate).toFixed(span / s.rate < 0.5 ? 4 : 3);
-    this.viewInfo.textContent = this.zoomed()
+    this.viewInfo.textContent = (s.reverse ? '◀ REVERSE  ' : '') + (this.zoomed()
       ? `${seconds(from)}–${seconds(to)}S ×${(s.data.length / span).toFixed(span < s.data.length / 10 ? 0 : 1)}`
-      : `${seconds(s.data.length)}S`;
+      : `${seconds(s.data.length)}S`);
   }
 
   /** Min/max per pixel when zoomed out, a line through the samples when zoomed in, with dots when far in */

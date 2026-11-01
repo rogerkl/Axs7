@@ -31,6 +31,7 @@ interface SampleEntry {
   loopMode: LoopMode;
   /** missing in version 1 banks */
   sound?: Sound;
+  reverse?: boolean;
 }
 
 interface BankJson {
@@ -52,7 +53,7 @@ export function bankToZip(bank: Bank): Uint8Array {
     const file = fileName(i, s.name);
     files[file] = encodeWav(s.data, s.rate, wavLoops(s));
     return { id: s.id, name: s.name, file, rate: s.rate, start: s.start, end: s.end, loopStart: s.loopStart,
-      loopEnd: s.loopEnd, loopMode: s.loopMode, sound: s.sound };
+      loopEnd: s.loopEnd, loopMode: s.loopMode, reverse: s.reverse, sound: s.sound };
   });
   const json: BankJson = { format: BANK_FORMAT, version: BANK_VERSION, programIndex: bank.programIndex, samples,
     programs: bank.programs };
@@ -86,7 +87,7 @@ export function zipToBank(zip: Uint8Array): Bank {
     const loopEnd = Math.min(entry.loopEnd, end);
     return { id: entry.id, name: entry.name, rate: entry.rate || wav.sampleRate, data: wav.data,
       start: Math.min(entry.start ?? 0, end), end, loopStart: Math.min(entry.loopStart, loopEnd), loopEnd,
-      loopMode: entry.loopMode, sound: { ...defaultSound(), ...entry.sound } };
+      loopMode: entry.loopMode, reverse: !!entry.reverse, sound: { ...defaultSound(), ...entry.sound } };
   });
   // version 1 programs had the sound settings, they are left out
   const programs = json.programs.map(normalizeProgram);

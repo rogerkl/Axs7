@@ -3,7 +3,7 @@
 import type { App, View } from '../../app/app';
 import { newKeygroup } from '../../model/mapping';
 import { BANDWIDTHS, MAX_SAMPLES, nearestBandwidth, samplerBandwidth } from '../../protocol/akai';
-import { maxCrossfade } from '../../audio/dsp';
+import { crossfadeRoom } from '../../audio/dsp';
 import { samplerFit } from '../../model/convert';
 import { isLooped } from '../../model/types';
 import type { LoopMode, Sample } from '../../model/types';
@@ -29,11 +29,13 @@ const khz = (rate: number) => `${(rate / 1000).toFixed(1)}K`;
 function fitText(s: Sample): { text: string; warn: boolean } | null {
   const fit = samplerFit(s);
   const seconds = `${fit.maxSeconds.toFixed(2)}S`;
+  // playing backwards, the sampler ends a loop at the loop start
+  const loopPoint = s.reverse ? 'LOOP START' : 'LOOP END';
   if (fit.fits) {
-    return fit.limit < s.data.length ? { text: 'FITS: THE SAMPLER ENDS IT AT THE LOOP END', warn: false } : null;
+    return fit.limit < s.end - s.start ? { text: `FITS: THE SAMPLER ENDS IT AT THE ${loopPoint}`, warn: false } : null;
   }
   return !isLooped(s.loopMode) ? { text: `TOO LONG: THE SAMPLER KEEPS ${seconds}, IT IS CUT THERE`, warn: true }
-    : { text: `LOOP END PAST THE SAMPLER'S ${seconds}: MOVE IT, OR RESAMPLE LOWER`, warn: true };
+    : { text: `${loopPoint} PAST THE SAMPLER'S ${seconds}: MOVE IT, OR RESAMPLE LOWER`, warn: true };
 }
 
 export function samplesView(app: App): View {
@@ -128,7 +130,7 @@ export function samplesView(app: App): View {
   function crossfadeGroup(s: Sample): HTMLElement {
     const { settings } = app;
     const sample = () => store.samples.get(s.id) ?? s;
-    const room = () => maxCrossfade(sample().data.length, sample().loopStart, sample().loopEnd);
+    const room = () => crossfadeRoom(sample());
     const ms = (samples: number) => Math.round((samples / s.rate) * 1000);
     const length = () => Math.min(room(), Math.max(1, Math.round((settings.xfadeMs / 1000) * s.rate)));
     const note = h('span', { class: 'info' });
@@ -161,8 +163,11 @@ export function samplesView(app: App): View {
       const ok = s2.loopMode === 'forward' && room() > 0;
       apply.disabled = !ok;
       note.textContent = s2.loopMode !== 'forward' ? 'NEEDS A FORWARD LOOP'
-        : room() === 0 ? 'MOVE THE LOOP START LATER, THE FADE USES WHAT COMES BEFORE IT'
-          : `THE LAST ${ms(length())}MS OF THE LOOP FADE INTO THE ${ms(length())}MS BEFORE ITS START`;
+        // reversed, the seam is at the loop start, and the fade takes what comes after the loop end
+        : s2.reverse ? (room() === 0 ? 'MOVE THE LOOP END EARLIER, THE FADE USES WHAT COMES AFTER IT'
+          : `PLAYING BACKWARDS: THE FIRST ${ms(length())}MS OF THE LOOP FADE INTO THE ${ms(length())}MS AFTER ITS END`)
+          : room() === 0 ? 'MOVE THE LOOP START LATER, THE FADE USES WHAT COMES BEFORE IT'
+            : `THE LAST ${ms(length())}MS OF THE LOOP FADE INTO THE ${ms(length())}MS BEFORE ITS START`;
       wave.setCrossfade(ok ? length() : 0);
     };
     update();
@@ -201,7 +206,8 @@ export function samplesView(app: App): View {
       : h('span', { class: 'c-small off-rate', title: 'Not one of the sampler\'s rates' }, `${khz(s.rate)}!`),
     samplerFit(s).fits ? h('span', { class: 'c-small' }, duration(s))
       : h('span', { class: 'c-small off-rate', title: 'Too long for the sampler' }, `${duration(s)}!`),
-    h('span', { class: 'c-small' }, LOOP_NAMES[LOOP_MODES.indexOf(s.loopMode)]));
+    h('span', { class: 'c-small', title: s.reverse ? 'Plays backwards' : undefined },
+      (s.reverse ? '◀' : '') + LOOP_NAMES[LOOP_MODES.indexOf(s.loopMode)]));
   }
 
   function buildList(): void {
@@ -255,6 +261,9 @@ export function samplesView(app: App): View {
       pointCell('end', 'END'),
       choiceCell('sample.loop', 'SCAN', LOOP_MODES, LOOP_NAMES, () => sample().loopMode,
         (loopMode) => store.updateSample(id, { loopMode })),
+      // the X7000's SCAN DIRECTION: backwards from END to START, the loop mirrored
+      choiceCell('sample.direction', 'DIR', ['fwd', 'rev'] as const, ['FWD', 'REV'],
+        () => (sample().reverse ? 'rev' : 'fwd'), (v) => store.updateSample(id, { reverse: v === 'rev' })),
       pointCell('loopStart', 'LOOP START'),
       pointCell('loopEnd', 'LOOP END'),
     ];
@@ -277,8 +286,9 @@ export function samplesView(app: App): View {
       fitBadge.textContent = fit?.text ?? '';
       fitBadge.classList.toggle('warn', !!fit?.warn);
       // the sampler's limit counts from START
-      const limitAt = now.start + samplerFit(now).limit;
-      wave.setLimit(limitAt < now.end ? limitAt : null);
+      // the sampler's limit counts from where playing starts: START, or END when reversed
+      const { limitAt } = samplerFit(now);
+      wave.setLimit(now.reverse ? (limitAt > now.start ? limitAt : null) : (limitAt < now.end ? limitAt : null));
       length.textContent = `${s.rate.toFixed(s.rate % 1 ? 2 : 0)} HZ · `
         + (isPortion(now) ? `USING ${duration(now)} OF ${(now.data.length / now.rate).toFixed(2)}S`
           : `${now.data.length} SAMPLES · ${duration(now)}`);

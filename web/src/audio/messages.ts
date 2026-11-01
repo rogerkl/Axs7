@@ -8,7 +8,7 @@ export type EngineMessage =
   | { type: 'params'; id: number; params: Float32Array }
   | {
     type: 'noteOn'; key: number; velocity: number; params: number; sample: number; ratio: number;
-    start: number; end: number; loopStart: number; loopEnd: number; loopMode: number; gain: number;
+    start: number; end: number; loopStart: number; loopEnd: number; loopMode: number; reverse: boolean; gain: number;
   }
   | { type: 'noteOff'; key: number }
   | { type: 'allNotesOff'; hard: boolean }

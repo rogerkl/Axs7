@@ -36,6 +36,10 @@ from the on-screen keyboard, the computer keyboard or a MIDI keyboard (the X7000
   CROSSFADE brings back the sample as it was.
 - **Scan modes** (SCAN), as on the X7000: ONE shot (stops at key off), LOOP, ALT (alternating), DRUM trigger (plays
   to its end whatever the key does). A drum trigger goes to the sampler as a one shot.
+- **Direction** (DIR), the X7000's SCAN DIRECTION: REV plays from END back to START, and a loop mirrored (it plays
+  back into the loop and repeats it backwards). The direction isn't part of a sample dump, so a reversed sample is
+  sent reversed, to sound the same on the sampler with its direction at F. The sampler's limit, what it drops and
+  the crossfade go the other way too.
 - **OUT**, a sample's sound, as on the X7000: LEVEL, FILTER (a lowpass without resonance) and RELEASE (for looping
   and alternating samples), each with how much velocity changes it (velocity raises the cutoff, softer notes get a
   shorter release). No attack or filter envelope, like the X7000.

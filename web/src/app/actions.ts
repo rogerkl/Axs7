@@ -58,7 +58,7 @@ export class Actions {
           // the browser's decoder resamples anyway, straight to the sampler's highest rate if asked to
           const { rate, data } = await decodeAudioFile(buffer, toSampler ? nearestBandwidth(44100).rate : 44100);
           sample = { id: newId(), name, rate, data, start: 0, end: data.length, loopStart: 0, loopEnd: data.length,
-            loopMode: 'off', sound: defaultSound() };
+            loopMode: 'off', reverse: false, sound: defaultSound() };
         }
         store.addSample(sample);
         loaded++;
@@ -111,7 +111,14 @@ export class Actions {
     }
     try {
       const dsp = await getDsp();
-      const r = dsp.crossfadeLoop(sample.data, sample.loopStart, sample.loopEnd, length, shape);
+      // reversed, the seam is at the loop start: crossfade the sample mirrored, and mirror it back
+      const n = sample.data.length;
+      const r = sample.reverse
+        ? dsp.crossfadeLoop(sample.data.slice().reverse(), n - sample.loopEnd, n - sample.loopStart, length, shape)
+        : dsp.crossfadeLoop(sample.data, sample.loopStart, sample.loopEnd, length, shape);
+      if (sample.reverse) {
+        r.data.reverse();
+      }
       if (r.length === 0) {
         lcd.flash('NO ROOM FOR A CROSSFADE');
         return;

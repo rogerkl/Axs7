@@ -192,7 +192,7 @@ mod tests {
     fn note(key: u32, ratio: f64, loop_mode: LoopMode, len: usize) -> NoteOn {
         NoteOn {
             key, velocity: 1.0, params: 0, sample: 1, ratio, start: 0, end: len, loop_start: 0, loop_end: len, loop_mode,
-            gain: 1.0,
+            reverse: false, gain: 1.0,
         }
     }
 
@@ -298,6 +298,23 @@ mod tests {
         assert!((1000..2000).contains(&(engine.positions()[2] as usize)));
         engine.all_notes_off(true);
         assert_eq!(engine.positions(), &[0]);
+    }
+
+    #[test]
+    fn reversed_notes_play_the_sample_backwards() {
+        // a rising ramp: backwards the output falls
+        let mut engine = Engine::new(SR);
+        engine.set_sample(1, (0..48000).map(|i| i as f32 / 48000.0).collect(), SR);
+        let mut p = DEFAULT_PARAMS;
+        p[LEVEL] = 1.0;
+        p[VEL_LEVEL] = 0.0;
+        engine.set_params(0, p);
+        let mut n = note(60, 1.0, LoopMode::Off, 48000);
+        n.reverse = true;
+        engine.note_on(n);
+        let out = render(&mut engine, 0.5);
+        assert!(out[1000] > 0.9 && out[20000] < out[1000] && out[20000] > 0.5, "{} {}", out[1000], out[20000]);
+        assert!(engine.positions()[2] < 30000, "the head moves down from the end");
     }
 
     #[test]

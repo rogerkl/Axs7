@@ -16,7 +16,7 @@ import { fixture, testSine } from './helpers';
 const sample = (overrides: Partial<Sample> = {}): Sample => {
   const data = overrides.data ?? Float32Array.from(testSine());
   return { id: 's1', name: 'SINE', rate: BW16.rate, data, start: 0, end: data.length, loopStart: 0, loopEnd: 5900,
-    loopMode: 'forward', sound: defaultSound(), ...overrides };
+    loopMode: 'forward', reverse: false, sound: defaultSound(), ...overrides };
 };
 
 describe('notes', () => {
@@ -275,6 +275,19 @@ describe('start and end points', () => {
     expect(notes[0]).toMatch(/START to END/);
   });
 
+  test('a reversed sample is sent reversed, with its loop mirrored, to play forward on the sampler', async () => {
+    const data = Float32Array.from({ length: 6000 }, (_, i) => Math.sin(i / 7) * (i / 6000));
+    const s = sample({ data, start: 1000, end: 5000, loopStart: 2000, loopEnd: 3500, reverse: true });
+    const { dump, notes } = await dumpFromSample(s, { slot: 0, normalize: false }, () => Promise.reject(new Error()));
+    // 4000 samples sent, the loop 2000-3500 counted back from END: 1500-3000
+    expect(decodeHeader(dump.bytes)).toMatchObject({ totalWords: 4200, loopStart: 1500, loopEnd: 3000 });
+    const sent = parseDump(dump.bytes).codes!.subarray(0, 4000);
+    expect(sent).toEqual(encodeSamples(data.slice(1000, 5000).reverse()));
+    expect(notes).toContain('Sent reversed, leave SCAN DIRECTION at F on the sampler');
+    // the sampler keeps it from END back to the loop start
+    expect(samplerFit(s)).toMatchObject({ used: 3000, limitAt: 5000 - MAX_SAMPLES });
+  });
+
   test('a drum trigger goes to the sampler as a one shot', async () => {
     const drum = sample({ loopMode: 'drum', loopStart: 1000, loopEnd: 5000 });
     expect(samplerFit(drum).used).toBe(6000);
@@ -327,7 +340,8 @@ describe('bank', () => {
   test('zip round trip keeps samples, loops, exact rates, sounds and programs', () => {
     const program = newProgram('BASS ROOT');
     program.keygroups.push(newKeygroup('s1', { low: 36, high: 59, root: 48, cents: 5 }));
-    const samples = [sample(), sample({ id: 's2', name: 'ONE/SHOT?', loopMode: 'drum', rate: 22199.53, start: 40,
+    const samples = [sample(), sample({ id: 's2', name: 'ONE/SHOT?', loopMode: 'drum', reverse: true, rate: 22199.53,
+      start: 40,
       end: 5950, sound: { ...defaultSound(), filter: 64, velFilter: 30, release: 0, lfoDepth: 12 } })];
     const bank = zipToBank(bankToZip({ samples, programs: [program, newProgram('P2')], programIndex: 1 }));
     expect(bank.programIndex).toBe(1);
@@ -336,6 +350,7 @@ describe('bank', () => {
       .toEqual([['s1', 'SINE', BW16.rate, 'forward', 0, 6000, 0, 5900],
         ['s2', 'ONE/SHOT?', 22199.53, 'drum', 40, 5950, 0, 5900]]);
     expect(bank.samples[1].sound).toEqual(samples[1].sound);
+    expect(bank.samples.map((s) => s.reverse)).toEqual([false, true]);
     expect(bank.samples[0].data.length).toBe(6000);
   });
 

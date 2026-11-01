@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { beforeAll, describe, expect, test } from 'vitest';
-import { Dsp, maxCrossfade } from '../src/audio/dsp';
+import { Dsp, crossfadeRoom, maxCrossfade } from '../src/audio/dsp';
 
 // built by npm run engine (npm test runs it first)
 let dsp: Dsp;
@@ -27,6 +27,14 @@ describe('crossfade loop in Rust', () => {
     for (const [start, end] of [[10, 90], [60, 90], [0, 90], [50, 101], [90, 50]]) {
       expect(dsp.crossfadeLoop(data, start, end, 50, 'equal').length).toBe(Math.min(50, maxCrossfade(100, start, end)));
     }
+  });
+
+  test('reversed, the room is after the loop end', () => {
+    const data = new Float32Array(1000);
+    expect(crossfadeRoom({ data, loopStart: 100, loopEnd: 900, reverse: false })).toBe(100);
+    expect(crossfadeRoom({ data, loopStart: 100, loopEnd: 900, reverse: true })).toBe(100);
+    expect(crossfadeRoom({ data, loopStart: 300, loopEnd: 950, reverse: true })).toBe(50);
+    expect(crossfadeRoom({ data, loopStart: 300, loopEnd: 1000, reverse: true })).toBe(0);
   });
 
   test('memory is given back', () => {

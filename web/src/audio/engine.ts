@@ -170,6 +170,7 @@ export class AudioEngine {
         type: 'noteOn', key, velocity, params: sample, sample, ratio: v.ratio,
         start: v.sample.start, end: v.sample.end, loopStart: v.sample.loopStart, loopEnd: v.sample.loopEnd,
         loopMode: LOOP_MODE_CODE[v.sample.loopMode],
+        reverse: v.sample.reverse,
         gain: v.gain,
       });
     }

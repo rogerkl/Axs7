@@ -28,6 +28,7 @@ export function sampleFromDump(r: ParsedDump, name: string): Sample {
     loopStart: oneShot ? 0 : loopStart,
     loopEnd: end,
     loopMode: oneShot ? 'off' : r.header!.alternating ? 'alternating' : 'forward',
+    reverse: false,
     sound: defaultSound(),
   };
 }
@@ -50,6 +51,7 @@ export function sampleFromWav(wav: Wav, name: string): Sample {
     loopStart: loop ? Math.min(loop.start, loopEnd) : 0,
     loopEnd,
     loopMode: loop ? (loop.alternating ? 'alternating' : 'forward') : 'off',
+    reverse: false,
     sound: defaultSound(),
   };
 }
@@ -94,22 +96,30 @@ export function trimSample(sample: Sample): SampleData {
 export interface SamplerFit {
   /** the rate the sample goes to the sampler at: its own if it is one of the sampler's, else the nearest */
   sendRate: number;
-  /** how many of the sample's own samples the sampler takes, counted from START */
+  /** how many of the sample's own samples the sampler takes, counted from where playing starts */
   limit: number;
-  /** how much of the sample the sampler keeps, from START: to the loop end of a looped sample, to END of a one shot */
+  /** where the sampler's limit is in the sample: START + limit, or END - limit when reversed */
+  limitAt: number;
+  /** how much of the sample the sampler keeps, from where playing starts to the loop end of a looped sample (the
+   * loop start when reversed), all of a one shot */
   used: number;
   fits: boolean;
   /** the longest sample the sampler takes at the send rate */
   maxSeconds: number;
 }
 
-/** Whether a sample fits on the sampler. Only the part from START is sent, the sampler ends a loop at its end. */
+/**
+ * Whether a sample fits on the sampler. Only the part between START and END is sent, and the sampler ends a loop at
+ * its end. A reversed sample is sent reversed, so it starts at END and its loop ends at the loop start.
+ */
 export function samplerFit(sample: Sample, sendRate = (samplerBandwidth(sample.rate)
   ?? nearestBandwidth(sample.rate)).rate): SamplerFit {
+  const { start, end, loopStart, loopEnd, reverse } = sample;
   // the tolerance keeps 32752 * r / r from flooring to 32751
   const limit = Math.floor((MAX_SAMPLES * sample.rate) / sendRate + 1e-6);
-  const used = (isLooped(sample.loopMode) ? sample.loopEnd : sample.end) - sample.start;
-  return { sendRate, limit, used, fits: used <= limit, maxSeconds: MAX_SAMPLES / sendRate };
+  const used = !isLooped(sample.loopMode) ? end - start : reverse ? end - loopStart : loopEnd - start;
+  return { sendRate, limit, limitAt: reverse ? end - limit : start + limit, used, fits: used <= limit,
+    maxSeconds: MAX_SAMPLES / sendRate };
 }
 
 export interface SendOptions {
@@ -131,9 +141,17 @@ export async function dumpFromSample(sample: Sample, options: SendOptions, resam
   const notes: string[] = [];
   const bw = nearestBandwidth(sample.rate);
   let data = sample.data.subarray(sample.start, sample.end);
+  // the loop counted from the start of what is sent
+  let [loopFrom, loopTo] = [sample.loopStart - sample.start, sample.loopEnd - sample.start];
   let ratio = 1;
   if (sample.start > 0 || sample.end < sample.data.length) {
     notes.push(`Sending the part from START to END, ${((sample.end - sample.start) / sample.rate).toFixed(2)} s`);
+  }
+  if (sample.reverse) {
+    // the sampler's direction isn't in a dump: send it reversed, to play forward there as it sounds here
+    data = data.slice().reverse();
+    [loopFrom, loopTo] = [data.length - loopTo, data.length - loopFrom];
+    notes.push('Sent reversed, leave SCAN DIRECTION at F on the sampler');
   }
   if (!matchesBandwidth(bw, sample.rate)) {
     data = await resample(data, sample.rate, bw.rate);
@@ -148,8 +166,8 @@ export async function dumpFromSample(sample: Sample, options: SendOptions, resam
   let loopStart = n;
   let loopEnd = n; // one shot: a loop shorter than 5 samples
   if (isLooped(sample.loopMode)) {
-    loopEnd = Math.min(Math.round((sample.loopEnd - sample.start) * ratio), n);
-    loopStart = Math.min(Math.round((sample.loopStart - sample.start) * ratio), loopEnd);
+    loopEnd = Math.min(Math.round(loopTo * ratio), n);
+    loopStart = Math.min(Math.round(loopFrom * ratio), loopEnd);
     if (isOneShot(loopStart, loopEnd)) {
       notes.push('The loop is shorter than 5 samples, the sampler plays it as one shot');
     } else if (loopEnd < n) {

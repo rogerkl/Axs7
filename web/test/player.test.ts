@@ -6,7 +6,7 @@ import { Store } from '../src/model/store';
 import type { Sample } from '../src/model/types';
 
 const sample: Sample = { id: 's', name: 'S', rate: 44100, data: new Float32Array(100), start: 0, end: 100,
-  loopStart: 0, loopEnd: 100, loopMode: 'off', sound: defaultSound() };
+  loopStart: 0, loopEnd: 100, loopMode: 'off', reverse: false, sound: defaultSound() };
 
 function setup() {
   const store = new Store();

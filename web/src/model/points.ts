@@ -46,6 +46,7 @@ function order(p: Points, len: number): Points {
 export function normalizeSample(sample: Sample): Sample {
   const len = sample.data.length;
   sample.sound = { ...defaultSound(), ...sample.sound };
+  sample.reverse = !!sample.reverse;
   return Object.assign(sample, order({
     start: sample.start ?? 0, end: sample.end ?? len, loopStart: sample.loopStart, loopEnd: sample.loopEnd,
   }, len));

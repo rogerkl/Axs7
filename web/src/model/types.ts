@@ -39,6 +39,8 @@ export interface Sample {
   /** after the last sample in the loop */
   loopEnd: number;
   loopMode: LoopMode;
+  /** plays from END back to START, the loop mirrored, the X7000's SCAN DIRECTION R */
+  reverse: boolean;
   sound: Sound;
 }
 

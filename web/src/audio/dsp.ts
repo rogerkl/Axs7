@@ -16,6 +16,15 @@ export function maxCrossfade(len: number, loopStart: number, loopEnd: number): n
   return loopEnd > len || loopEnd <= loopStart ? 0 : Math.min(loopStart, loopEnd - loopStart);
 }
 
+/**
+ * The crossfade room of a sample. Reversed, the seam is at the loop start, and the fade takes what comes after the
+ * loop end: the sample mirrored.
+ */
+export function crossfadeRoom(s: { data: Float32Array; loopStart: number; loopEnd: number; reverse: boolean }): number {
+  const n = s.data.length;
+  return s.reverse ? maxCrossfade(n, n - s.loopEnd, n - s.loopStart) : maxCrossfade(n, s.loopStart, s.loopEnd);
+}
+
 export class Dsp {
   private constructor(private ex: DspExports) {}
 
