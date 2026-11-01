@@ -3,6 +3,8 @@
 export type ViewName = 'samples' | 'keygroups' | 'filter' | 'amp' | 'midi' | 'bank';
 
 export interface Settings {
+  /** of the stored settings, see loadSettings */
+  version: number;
   midiIn: string | null;
   midiOut: string | null;
   /** keyboard channel, 0 for omni */
@@ -23,15 +25,22 @@ export interface Settings {
 }
 
 const KEY = 'axs7.settings';
+const VERSION = 2;
 
 const DEFAULTS: Settings = {
-  midiIn: null, midiOut: null, channel: 0, slot: 0, slotCount: 6, normalize: true, loadRate: 'keep', ackIntervalMs: 50, lookaheadMs: 1500,
-  fillerPerBlock: 0, volume: 0.8, polyphony: 16, view: 'samples',
+  version: VERSION, midiIn: null, midiOut: null, channel: 0, slot: 0, slotCount: 6, normalize: true,
+  loadRate: 'sampler', ackIntervalMs: 50, lookaheadMs: 1500, fillerPerBlock: 0, volume: 0.8, polyphony: 16,
+  view: 'samples',
 };
 
 export function loadSettings(): Settings {
   try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) ?? '{}') };
+    const stored = JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<Settings>;
+    if ((stored.version ?? 1) < 2) {
+      // version 1 saved its default KEEP with any other setting, chosen or not. SAMPLER is the default now.
+      delete stored.loadRate;
+    }
+    return { ...DEFAULTS, ...stored, version: VERSION };
   } catch {
     return { ...DEFAULTS };
   }

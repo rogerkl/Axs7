@@ -16,8 +16,8 @@ programs, and played from the on-screen keyboard, the computer keyboard or a MID
   Samples at other rates are marked (`44.1K!`), and so are samples longer than the sampler takes (32752 samples).
   RESAMPLE converts a sample to one of the sampler's rates, like the resample function on a sampler: to make it
   compatible, or to a lower rate so a longer sample fits. The loop moves along and keygroups keep playing it at
-  the same pitch, UNDO RESAMPLE brings back the previous version. RATE ON LOAD = SAMPLER converts files to the
-  nearest sampler rate when they are loaded. A WAV file at a sampler rate (whole Hz in the file, like 39555) gets
+  the same pitch, UNDO RESAMPLE brings back the previous version. RATE ON LOAD converts files to the nearest
+  sampler rate when they are loaded (SAMPLER, the default), or keeps their own rate (KEEP). A WAV file at a sampler rate (whole Hz in the file, like 39555) gets
   the exact rate.
 - **Programs**: keygroups, each a sample over a key range with root key, tune and level; a resonant lowpass with
   its own envelope, an amp envelope, velocity sensitivity, 6-32 voices. Parameters are 0-99 like on the sampler,
