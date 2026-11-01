@@ -7,8 +7,10 @@ export interface Settings {
   midiOut: string | null;
   /** keyboard channel, 0 for omni */
   channel: number;
-  /** sampler slot for transfers, 0-5 */
+  /** sampler slot for transfers, from 0 */
   slot: number;
+  /** how many sample slots the sampler has: 6 on a standard X7000, more with a memory expansion */
+  slotCount: number;
   normalize: boolean;
   ackIntervalMs: number;
   lookaheadMs: number;
@@ -21,7 +23,7 @@ export interface Settings {
 const KEY = 'axs7.settings';
 
 const DEFAULTS: Settings = {
-  midiIn: null, midiOut: null, channel: 0, slot: 0, normalize: true, ackIntervalMs: 50, lookaheadMs: 1500,
+  midiIn: null, midiOut: null, channel: 0, slot: 0, slotCount: 6, normalize: true, ackIntervalMs: 50, lookaheadMs: 1500,
   fillerPerBlock: 0, volume: 0.8, polyphony: 16, view: 'samples',
 };
 

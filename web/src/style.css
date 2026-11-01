@@ -418,6 +418,7 @@ button:focus-visible,
 .main {
   gap: 12px;
   align-items: flex-end;
+  flex-wrap: wrap; /* the strip goes under the transfer buttons when there is no room */
 }
 
 .strip {

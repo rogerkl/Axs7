@@ -17,8 +17,10 @@ export interface App {
   actions: Actions;
   showView(view: ViewName): void;
   saveSettings(): void;
-  /** @param slot 0-5, the sampler slot transfers use */
+  /** @param slot from 0, the sampler slot transfers use */
   setSlot(slot: number): void;
+  /** How many slots the sampler has, the slot is kept within them */
+  setSlotCount(count: number): void;
   /** @returns a function that stops listening */
   onSlot(listener: () => void): () => void;
 }

@@ -9,7 +9,7 @@ import { Player } from './audio/player';
 import { noteName } from './model/notes';
 import { Persistence } from './model/persist';
 import { Store } from './model/store';
-import { SLOTS } from './protocol/akai';
+import { MAX_SLOTS } from './protocol/akai';
 import { Fader, Knob, Wheel, panelButton } from './ui/controls';
 import { h, pickFiles, typing } from './ui/dom';
 import { Keyboard } from './ui/keyboard';
@@ -54,11 +54,15 @@ async function main(): Promise<void> {
     store, engine, player, lcd, settings, midi, actions: null as unknown as Actions,
     saveSettings: () => saveSettings(settings),
     setSlot(slot) {
-      settings.slot = Math.max(0, Math.min(SLOTS - 1, slot));
+      settings.slot = Math.max(0, Math.min(settings.slotCount - 1, slot));
       saveSettings(settings);
       for (const listener of slotListeners) {
         listener();
       }
+    },
+    setSlotCount(count) {
+      settings.slotCount = Math.max(1, Math.min(MAX_SLOTS, count));
+      app.setSlot(settings.slot);
     },
     onSlot(listener) {
       slotListeners.add(listener);
@@ -77,6 +81,8 @@ async function main(): Promise<void> {
       lcd.render();
     },
   };
+  settings.slotCount = Math.max(1, Math.min(MAX_SLOTS, settings.slotCount));
+  settings.slot = Math.max(0, Math.min(settings.slotCount - 1, settings.slot));
   const actions = new Actions(app);
   app.actions = actions;
   actions.registerAudition();

@@ -1,6 +1,7 @@
 // MIDI: ports, keyboard channel and transfer settings, with the transfer log. BANK: memory, save and load.
 
 import type { App, View } from '../../app/app';
+import { MAX_SLOTS } from '../../protocol/akai';
 import { h, pickFiles } from '../dom';
 import { ParamCell, choiceCell } from '../param';
 import { slotCell } from '../slot';
@@ -19,6 +20,8 @@ export function midiView(app: App): View {
         save();
       }, format: (v) => (v === 0 ? 'OMNI' : String(v)), parse: (t) => (/^omni$/i.test(t) ? 0 : Number(t)) }),
     slot.cell,
+    new ParamCell({ key: 'midi.slotCount', label: 'SLOTS', min: 1, max: MAX_SLOTS, coarse: 2,
+      get: () => settings.slotCount, set: (v) => app.setSlotCount(v), detail: () => 'ON SAMPLER' }),
     choiceCell('midi.normalize', 'NORMALIZE', ['off', 'on'] as const, ['OFF', 'ON'],
       () => (settings.normalize ? 'on' : 'off'), (v) => {
         settings.normalize = v === 'on';
@@ -73,7 +76,8 @@ export function midiView(app: App): View {
   return {
     el: h('div', { class: 'view view-midi' }, ports,
       h('div', { class: 'params' }, ...cells.map((c) => c.el)),
-      h('p', { class: 'info' }, 'The same input plays the programs (also from the sampler\'s own keyboard) and '
+      h('p', { class: 'info' }, 'SLOTS is how many sample slots the sampler has: 6 on a standard X7000, more '
+        + 'with a memory expansion. The same input plays the programs (also from the sampler\'s own keyboard) and '
         + 'receives sample dumps. Use Chrome or Edge, from localhost or https. Filler adds pauses between blocks '
         + 'when sending, the X7000 doesn\'t need them.'),
       logEl),

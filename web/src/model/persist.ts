@@ -1,4 +1,6 @@
-// Keeps the memory in IndexedDB, so samples and programs are there after a reload.
+// Keeps the memory between visits: the samples in IndexedDB, the programs (small) in localStorage. localStorage
+// writes at once, so a program edited just before the page closes isn't lost, as an IndexedDB write still running
+// then would be.
 
 import type { Store } from './store';
 import type { Program, Sample } from './types';
@@ -6,7 +8,9 @@ import type { Program, Sample } from './types';
 const DB_NAME = 'axs7';
 const SAMPLES = 'samples';
 const META = 'meta';
+/** where the programs were kept in IndexedDB before, still read if localStorage has none */
 const PROGRAMS_KEY = 'programs';
+const PROGRAMS_STORAGE = 'axs7.programs';
 
 interface ProgramsRecord {
   programs: Program[];
@@ -31,6 +35,7 @@ function done(tx: IDBTransaction): Promise<void> {
 export class Persistence {
   private saved = new Set<string>();
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
+  private pending = new Map<string, () => Promise<void>>();
 
   private constructor(private db: IDBDatabase, private onError: (e: unknown) => void) {}
 
@@ -46,7 +51,8 @@ export class Persistence {
   async load(): Promise<{ samples: Sample[]; programs: Program[]; programIndex: number }> {
     const tx = this.db.transaction([SAMPLES, META], 'readonly');
     const samples = await request(tx.objectStore(SAMPLES).getAll() as IDBRequest<Sample[]>);
-    const record = await request(tx.objectStore(META).get(PROGRAMS_KEY) as IDBRequest<ProgramsRecord | undefined>);
+    const record = readPrograms()
+      ?? await request(tx.objectStore(META).get(PROGRAMS_KEY) as IDBRequest<ProgramsRecord | undefined>);
     this.saved = new Set(samples.map((s) => s.id));
     return { samples, programs: record?.programs ?? [], programIndex: record?.programIndex ?? 0 };
   }
@@ -62,15 +68,31 @@ export class Persistence {
     for (const event of ['programs', 'program', 'keygroups'] as const) {
       store.on(event, programs);
     }
+    // saves waiting for changes to settle would be lost when the page closes
+    addEventListener('pagehide', () => this.flush());
+    document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && this.flush());
   }
 
   /** Runs the save after changes have settled, a data knob turn makes many */
   private later(key: string, save: () => Promise<void>): void {
     clearTimeout(this.timers.get(key));
-    this.timers.set(key, setTimeout(() => {
-      this.timers.delete(key);
-      save().catch(this.onError);
-    }, 400));
+    this.pending.set(key, save);
+    this.timers.set(key, setTimeout(() => this.run(key), 400));
+  }
+
+  private run(key: string): void {
+    clearTimeout(this.timers.get(key));
+    this.timers.delete(key);
+    const save = this.pending.get(key);
+    this.pending.delete(key);
+    save?.().catch(this.onError);
+  }
+
+  /** Runs the waiting saves now */
+  flush(): void {
+    for (const key of [...this.pending.keys()]) {
+      this.run(key);
+    }
   }
 
   private async syncSamples(store: Store): Promise<void> {
@@ -101,9 +123,16 @@ export class Persistence {
   }
 
   private async putPrograms(store: Store): Promise<void> {
-    const tx = this.db.transaction(META, 'readwrite');
     const record: ProgramsRecord = { programs: store.programs, programIndex: store.programIndex };
-    tx.objectStore(META).put(record, PROGRAMS_KEY);
-    await done(tx);
+    localStorage.setItem(PROGRAMS_STORAGE, JSON.stringify(record));
+  }
+}
+
+function readPrograms(): ProgramsRecord | undefined {
+  try {
+    const json = localStorage.getItem(PROGRAMS_STORAGE);
+    return json ? (JSON.parse(json) as ProgramsRecord) : undefined;
+  } catch {
+    return undefined;
   }
 }

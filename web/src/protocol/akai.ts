@@ -14,8 +14,10 @@ export const BITS = 12;
 export const ACK = Uint8Array.of(0xf0, 0x7e, 0x7f, 0xf7);
 /** 31250 baud, 10 bits per byte (start, 8 data, stop) */
 export const MIDI_BYTES_PER_SECOND = 3125;
-/** The X7000 has 6 sample slots */
-export const SLOTS = 6;
+/** A standard X7000/S700 has 6 sample slots, more with a memory expansion */
+export const STANDARD_SLOTS = 6;
+/** Two digits on the display. The slot number in the protocol is 7 bits. */
+export const MAX_SLOTS = 99;
 
 export interface Bandwidth {
   name: string;
