@@ -2,8 +2,8 @@
 //! plain C ABI (no wasm-bindgen, so the worklet needs no glue code). The module has no imports.
 //!
 //! Memory protocol: the web side allocates a sample buffer with `alloc_f32`, fills it and hands it over with
-//! `engine_set_sample`, which takes ownership. Program parameters are written to `engine_params` and applied with
-//! `engine_set_program`. `engine_process` returns a pointer to the rendered mono block.
+//! `engine_set_sample`, which takes ownership. Sound parameters (a sample's) are written to `engine_params` and
+//! applied with `engine_set_params`. `engine_process` returns a pointer to the rendered mono block.
 //!
 //! The `dsp_` functions edit a buffer from `alloc_f32` in place, for the web side's main thread.
 
@@ -46,9 +46,9 @@ pub unsafe extern "C" fn engine_params(engine: *mut Engine) -> *mut f32 {
 /// # Safety
 /// see `engine_params`
 #[no_mangle]
-pub unsafe extern "C" fn engine_set_program(engine: *mut Engine, id: u32) {
+pub unsafe extern "C" fn engine_set_params(engine: *mut Engine, id: u32) {
     let params = (*engine).params_in;
-    (*engine).set_program(id, params);
+    (*engine).set_params(id, params);
 }
 
 /// Takes ownership of the buffer
@@ -72,12 +72,12 @@ pub unsafe extern "C" fn engine_remove_sample(engine: *mut Engine, id: u32) {
 /// see `engine_params`
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn engine_note_on(engine: *mut Engine, key: u32, velocity: f32, program: u32, sample: u32,
+pub unsafe extern "C" fn engine_note_on(engine: *mut Engine, key: u32, velocity: f32, params: u32, sample: u32,
     ratio: f64, start: u32, end: u32, loop_start: u32, loop_end: u32, loop_mode: u32, gain: f32) {
     (*engine).note_on(NoteOn {
         key,
         velocity,
-        program,
+        params,
         sample,
         ratio,
         start: start as usize,

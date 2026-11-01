@@ -3,3 +3,7 @@ node_modules/
 dist/
 # built by the engine build, see web/build-engine.sh
 /web/public/engine.wasm
+
+# reference material, not part of the project
+*.pdf
+*:Zone.Identifier

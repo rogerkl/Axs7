@@ -1,4 +1,6 @@
-//! One playing note: a sample read at a pitch ratio, through a lowpass with its own envelope and an amp envelope.
+//! One playing note, like an X7000 voice: a sample read at a pitch ratio, with vibrato from its own LFO, through
+//! a lowpass whose cutoff rises with velocity, at a level that can follow velocity. A looping sample fades out over
+//! its release time after key off, a one shot stops at key off, a drum trigger plays to its end.
 
 use crate::envelope::{Adsr, Envelope};
 use crate::filter::Lowpass;
@@ -6,9 +8,12 @@ use crate::params::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoopMode {
+    /// one shot: plays to the end, or until key off
     Off,
     Forward,
     Alternating,
+    /// one shot that plays to the end whatever the key does
+    Drum,
 }
 
 impl LoopMode {
@@ -16,8 +21,13 @@ impl LoopMode {
         match value {
             1 => LoopMode::Forward,
             2 => LoopMode::Alternating,
+            3 => LoopMode::Drum,
             _ => LoopMode::Off,
         }
+    }
+
+    fn looping(self) -> bool {
+        matches!(self, LoopMode::Forward | LoopMode::Alternating)
     }
 }
 
@@ -26,7 +36,8 @@ pub struct NoteOn {
     pub key: u32,
     /// 0..1
     pub velocity: f32,
-    pub program: u32,
+    /// the id of the sound parameters to play with, the sample's
+    pub params: u32,
     pub sample: u32,
     /// pitch ratio, 2 plays an octave up
     pub ratio: f64,
@@ -38,23 +49,33 @@ pub struct NoteOn {
     /// after the last sample in the loop
     pub loop_end: usize,
     pub loop_mode: LoopMode,
-    /// keygroup level, linear
+    /// linear
     pub gain: f32,
 }
 
-/// Samples between filter cutoff updates
+/// Samples between vibrato updates
 const CONTROL_PERIOD: u32 = 16;
+/// short enough to sound instant, long enough not to click
+const ATTACK: f32 = 0.002;
+const ONE_SHOT_RELEASE: f32 = 0.005;
+/// the vibrato fades in over this after its delay
+const LFO_FADE: f32 = 0.15;
+/// semitones of vibrato the modulation wheel adds at full
+const MOD_DEPTH: f32 = 0.5;
+const FLAT_Q: f32 = core::f32::consts::FRAC_1_SQRT_2;
 
 #[derive(Clone, Debug)]
 pub struct Voice {
     pub active: bool,
     pub key: u32,
-    pub program: u32,
+    pub params: u32,
     pub sample: u32,
     pub started: u64,
     pub released: bool,
     pos: f64,
     step: f64,
+    /// step with pitch bend and vibrato
+    current_step: f64,
     loop_mode: LoopMode,
     loop_start: usize,
     loop_end: usize,
@@ -62,8 +83,10 @@ pub struct Voice {
     gain: f32,
     velocity: f32,
     amp: Envelope,
-    fenv: Envelope,
     filter: Lowpass,
+    lfo_phase: f32,
+    /// samples since key on
+    age: u32,
     control: u32,
 }
 
@@ -72,12 +95,13 @@ impl Default for Voice {
         Voice {
             active: false,
             key: 0,
-            program: 0,
+            params: 0,
             sample: 0,
             started: 0,
             released: false,
             pos: 0.0,
             step: 1.0,
+            current_step: 1.0,
             loop_mode: LoopMode::Off,
             loop_start: 0,
             loop_end: 0,
@@ -85,8 +109,9 @@ impl Default for Voice {
             gain: 1.0,
             velocity: 1.0,
             amp: Envelope::new(),
-            fenv: Envelope::new(),
             filter: Lowpass::new(),
+            lfo_phase: 0.0,
+            age: 0,
             control: 0,
         }
     }
@@ -99,38 +124,42 @@ fn hermite(xm1: f32, x0: f32, x1: f32, x2: f32, t: f32) -> f32 {
     ((c3 * t + c2) * t + c1) * t + x0
 }
 
-fn adsr(p: &Params, first: usize) -> Adsr {
-    Adsr { attack: p[first], decay: p[first + 1], sustain: p[first + 2], release: p[first + 3] }
-}
-
 impl Voice {
     /// @param step how far to move in the sample for each output sample at no pitch bend
     pub fn start(&mut self, note: &NoteOn, len: usize, step: f64, started: u64) {
         self.active = true;
         self.released = false;
         self.key = note.key;
-        self.program = note.program;
+        self.params = note.params;
         self.sample = note.sample;
         self.started = started;
         self.step = step;
+        self.current_step = step;
         self.len = note.end.min(len);
         self.pos = note.start.min(self.len.saturating_sub(1)) as f64;
         self.loop_end = note.loop_end.min(self.len);
         self.loop_start = note.loop_start.min(self.loop_end);
         // a loop needs two samples to go back and forth between
-        self.loop_mode = if self.loop_end >= self.loop_start + 2 { note.loop_mode } else { LoopMode::Off };
+        self.loop_mode = if !note.loop_mode.looping() || self.loop_end >= self.loop_start + 2 {
+            note.loop_mode
+        } else {
+            LoopMode::Off
+        };
         self.gain = note.gain;
         self.velocity = note.velocity.clamp(0.0, 1.0);
         self.filter.reset();
+        self.lfo_phase = 0.0;
+        self.age = 0;
         self.control = 0;
         self.amp.trigger();
-        self.fenv.trigger();
     }
 
+    /// Key off. A drum trigger plays on to its end.
     pub fn release(&mut self) {
-        self.released = true;
-        self.amp.release();
-        self.fenv.release();
+        if self.loop_mode != LoopMode::Drum {
+            self.released = true;
+            self.amp.release();
+        }
     }
 
     pub fn amp_level(&self) -> f32 {
@@ -144,7 +173,7 @@ impl Voice {
 
     fn period(&self) -> usize {
         match self.loop_mode {
-            LoopMode::Off => 0,
+            LoopMode::Off | LoopMode::Drum => 0,
             LoopMode::Forward => self.loop_end - self.loop_start,
             LoopMode::Alternating => 2 * (self.loop_end - 1 - self.loop_start),
         }
@@ -173,23 +202,37 @@ impl Voice {
 
     /// Adds the voice's output to `out`
     ///
-    /// @param pitch pitch bend and vibrato as a ratio
-    pub fn render(&mut self, out: &mut [f32], data: &[f32], p: &Params, pitch: f64, sample_rate: f32) {
-        self.amp.set(&adsr(p, AMP_ATTACK), sample_rate);
-        self.fenv.set(&adsr(p, FILTER_ATTACK), sample_rate);
-        let vs = p[VELOCITY].clamp(0.0, 1.0);
-        let level = p[LEVEL] * self.gain * (1.0 - vs + vs * self.velocity * self.velocity);
-        let step = self.step * pitch;
+    /// @param bend pitch bend as a ratio
+    /// @param modulation the modulation wheel, 0..1, adds vibrato
+    pub fn render(&mut self, out: &mut [f32], data: &[f32], p: &Params, bend: f64, modulation: f32,
+        sample_rate: f32) {
+        // the X7000's release is for looping sounds, a one shot stops at key off
+        let release = if self.loop_mode.looping() {
+            let vr = p[VEL_RELEASE].clamp(0.0, 1.0);
+            p[RELEASE] * (1.0 - vr + vr * self.velocity)
+        } else {
+            ONE_SHOT_RELEASE
+        };
+        self.amp.set(&Adsr { attack: ATTACK, decay: 0.001, sustain: 1.0, release }, sample_rate);
+        let vl = p[VEL_LEVEL].clamp(0.0, 1.0);
+        let level = p[LEVEL] * self.gain * (1.0 - vl + vl * self.velocity * self.velocity);
+        // the cutoff rises with velocity
+        self.filter.set(p[CUTOFF] * (p[VEL_FILTER] * self.velocity).exp2(), FLAT_Q, sample_rate);
         let period = self.period();
         let wrap_at = (self.loop_start + period) as f64;
         let read = |voice: &Voice, i: i64| voice.index(i).map_or(0.0, |j| data[j]);
         for o in out.iter_mut() {
             if self.control == 0 {
-                let cutoff = p[CUTOFF] * (p[ENV_AMOUNT] * self.fenv.level()).exp2();
-                self.filter.set(cutoff, p[RESONANCE], sample_rate);
+                let t = self.age as f32 / sample_rate;
+                let fade = ((t - p[LFO_DELAY]) / LFO_FADE).clamp(0.0, 1.0);
+                let depth = p[LFO_DEPTH] * fade + modulation * MOD_DEPTH;
+                let vibrato = depth * (2.0 * core::f32::consts::PI * self.lfo_phase).sin();
+                self.current_step = self.step * bend * ((vibrato / 12.0) as f64).exp2();
+                self.lfo_phase = (self.lfo_phase + CONTROL_PERIOD as f32 * p[LFO_RATE] / sample_rate).fract();
                 self.control = CONTROL_PERIOD;
             }
             self.control -= 1;
+            self.age = self.age.saturating_add(1);
             let i = self.pos.floor() as i64;
             let Some(j) = self.index(i) else {
                 self.active = false; // end of a sample without loop
@@ -197,15 +240,13 @@ impl Voice {
             };
             let t = (self.pos - i as f64) as f32;
             let y = hermite(read(self, i - 1), data[j], read(self, i + 1), read(self, i + 2), t);
-            let filtered = self.filter.process(y);
-            self.fenv.tick();
             let amp = self.amp.tick();
-            *o += filtered * amp * level;
+            *o += self.filter.process(y) * amp * level;
             if self.amp.is_idle() {
                 self.active = false;
                 return;
             }
-            self.pos += step;
+            self.pos += self.current_step;
             if period > 0 && self.pos >= wrap_at {
                 // keep the position in the loop's first period, so long notes don't lose precision
                 self.pos -= period as f64;
@@ -218,13 +259,16 @@ impl Voice {
 mod tests {
     use super::*;
 
+    fn note(len: usize, loop_start: usize, loop_end: usize, loop_mode: LoopMode) -> NoteOn {
+        NoteOn {
+            key: 60, velocity: 1.0, params: 0, sample: 0, ratio: 1.0, start: 0, end: len, loop_start, loop_end,
+            loop_mode, gain: 1.0,
+        }
+    }
+
     fn voice(len: usize, loop_start: usize, loop_end: usize, loop_mode: LoopMode) -> Voice {
         let mut v = Voice::default();
-        let note = NoteOn {
-            key: 60, velocity: 1.0, program: 0, sample: 0, ratio: 1.0, start: 0, end: len, loop_start, loop_end,
-            loop_mode, gain: 1.0,
-        };
-        v.start(&note, len, 1.0, 0);
+        v.start(&note(len, loop_start, loop_end, loop_mode), len, 1.0, 0);
         v
     }
 
@@ -248,18 +292,19 @@ mod tests {
 
     #[test]
     fn without_loop_the_sample_ends() {
-        let v = voice(5, 0, 5, LoopMode::Off);
-        assert_eq!(indices(&v, -1, 7), vec![Some(0), Some(0), Some(1), Some(2), Some(3), Some(4), None, None]);
+        for mode in [LoopMode::Off, LoopMode::Drum] {
+            let v = voice(5, 0, 5, mode);
+            assert_eq!(indices(&v, -1, 7), vec![Some(0), Some(0), Some(1), Some(2), Some(3), Some(4), None, None]);
+        }
     }
 
     #[test]
     fn plays_from_the_start_point_and_ends_at_the_end_point() {
         let mut v = Voice::default();
-        let note = NoteOn {
-            key: 60, velocity: 1.0, program: 0, sample: 0, ratio: 1.0, start: 3, end: 7, loop_start: 0, loop_end: 0,
-            loop_mode: LoopMode::Off, gain: 1.0,
-        };
-        v.start(&note, 10, 1.0, 0);
+        let mut n = note(10, 0, 0, LoopMode::Off);
+        n.start = 3;
+        n.end = 7;
+        v.start(&n, 10, 1.0, 0);
         assert_eq!(v.position(), Some(3));
         assert_eq!(indices(&v, 5, 9), vec![Some(5), Some(6), None, None]);
     }
@@ -270,5 +315,15 @@ mod tests {
         assert_eq!(voice(10, 12, 20, LoopMode::Alternating).index(10), None);
         let clamped = voice(10, 4, 20, LoopMode::Forward);
         assert_eq!(clamped.index(10), Some(4), "loop end clamped to the sample length");
+    }
+
+    #[test]
+    fn a_drum_trigger_ignores_key_off() {
+        let mut drum = voice(100, 0, 0, LoopMode::Drum);
+        drum.release();
+        assert!(!drum.released);
+        let mut one_shot = voice(100, 0, 0, LoopMode::Off);
+        one_shot.release();
+        assert!(one_shot.released);
     }
 }

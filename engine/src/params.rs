@@ -1,5 +1,6 @@
-//! Layout of a program's parameters as the engine gets them, in physical units. The web side converts from the
-//! 0-99 values the user edits (web/src/model/params.ts has the same layout).
+//! A sample's sound parameters as the engine gets them, in physical units. Like on the X7000 they belong to the
+//! sample (its OUT and LFO settings), not the program. The web side converts from the 0-99 values the user edits
+//! (web/src/model/params.ts has the same layout).
 
 pub const PARAM_COUNT: usize = 16;
 pub type Params = [f32; PARAM_COUNT];
@@ -7,20 +8,25 @@ pub type Params = [f32; PARAM_COUNT];
 /// output level, linear
 pub const LEVEL: usize = 0;
 /// how much velocity changes the level, 0..1
-pub const VELOCITY: usize = 1;
-/// Hz
+pub const VEL_LEVEL: usize = 1;
+/// lowpass cutoff in Hz, at the lowest velocity
 pub const CUTOFF: usize = 2;
-/// Q, 0.707 is flat
-pub const RESONANCE: usize = 3;
-/// octaves the filter envelope moves the cutoff at full level, negative moves it down
-pub const ENV_AMOUNT: usize = 4;
-/// attack, decay, sustain, release in seconds, seconds, 0..1, seconds
-pub const FILTER_ATTACK: usize = 5;
-pub const AMP_ATTACK: usize = 9;
+/// octaves the cutoff rises at full velocity
+pub const VEL_FILTER: usize = 3;
+/// seconds to fade after key off, for looping and alternating samples
+pub const RELEASE: usize = 4;
+/// how much velocity changes the release time, 0..1: softer notes get a shorter release
+pub const VEL_RELEASE: usize = 5;
+/// vibrato rate in Hz
+pub const LFO_RATE: usize = 6;
+/// vibrato depth in semitones
+pub const LFO_DEPTH: usize = 7;
+/// seconds after key on before the vibrato starts
+pub const LFO_DELAY: usize = 8;
 
 pub const DEFAULT_PARAMS: Params = [
-    0.5, 0.5, 20000.0, 0.707, 0.0, // level, velocity, cutoff, resonance, env amount
-    0.001, 0.5, 1.0, 0.3, // filter envelope
-    0.001, 0.5, 1.0, 0.3, // amp envelope
-    0.0, 0.0, 0.0,
+    0.5, 0.5, 20000.0, 0.0, // level, velocity to level, cutoff, velocity to filter
+    0.3, 0.0, // release, velocity to release
+    5.0, 0.0, 0.0, // LFO rate, depth, delay
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
 ];

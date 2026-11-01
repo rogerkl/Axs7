@@ -810,8 +810,7 @@ button.soft.danger {
   pointer-events: none;
 }
 
-.wave,
-.env-graph {
+.wave {
   display: block;
   width: 100%;
   height: 130px;
@@ -821,21 +820,17 @@ button.soft.danger {
   touch-action: none;
 }
 
-.env {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-width: 520px;
-}
-
 .env-title {
   font-size: 9px;
   letter-spacing: 0.14em;
   color: var(--blue-hi);
 }
 
-.env-graph {
-  height: 80px;
+.sample-title {
+  font: 700 13px "Courier New", ui-monospace, monospace;
+  text-transform: uppercase;
+  align-self: flex-end;
+  padding-bottom: 5px;
 }
 
 /* keygroups */

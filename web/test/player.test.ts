@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'vitest';
 import type { AudioEngine } from '../src/audio/engine';
 import { Player } from '../src/audio/player';
-import { newKeygroup } from '../src/model/mapping';
+import { defaultSound, newKeygroup } from '../src/model/mapping';
 import { Store } from '../src/model/store';
 import type { Sample } from '../src/model/types';
 
 const sample: Sample = { id: 's', name: 'S', rate: 44100, data: new Float32Array(100), start: 0, end: 100,
-  loopStart: 0, loopEnd: 100, loopMode: 'off' };
+  loopStart: 0, loopEnd: 100, loopMode: 'off', sound: defaultSound() };
 
 function setup() {
   const store = new Store();
@@ -16,7 +16,7 @@ function setup() {
   const played: { key: number; samples: string[] }[] = [];
   const engine = {
     start: () => Promise.resolve(),
-    noteOn: (key: number, _v: number, _p: unknown, voices: { sample: Sample }[]) =>
+    noteOn: (key: number, _v: number, voices: { sample: Sample }[]) =>
       played.push({ key, samples: voices.map((v) => v.sample.id) }),
     noteOff: () => {},
   } as unknown as AudioEngine;

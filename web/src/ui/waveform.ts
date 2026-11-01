@@ -7,6 +7,7 @@
 
 import { h } from './dom';
 import type { PointName } from '../model/points';
+import { isLooped } from '../model/types';
 import type { Sample } from '../model/types';
 
 const GRAB = 8;
@@ -186,7 +187,7 @@ export class Waveform {
     if (!s) {
       return null;
     }
-    const names: PointName[] = s.loopMode === 'off' ? ['start', 'end'] : ['start', 'end', 'loopStart', 'loopEnd'];
+    const names: PointName[] = isLooped(s.loopMode) ? ['start', 'end', 'loopStart', 'loopEnd'] : ['start', 'end'];
     const near = names.map((n) => ({ n, d: Math.abs(px - this.cssX(s[n])) })).filter((m) => m.d <= GRAB);
     if (!near.length) {
       return null;
@@ -311,7 +312,7 @@ export class Waveform {
         ctx.fillRect(x1, 0, Math.max(1, x2 - x1), height);
       }
     };
-    const looped = s.loopMode !== 'off';
+    const looped = isLooped(s.loopMode);
     if (looped) {
       band(s.loopStart, s.loopEnd, color('--wave-loop'));
     }

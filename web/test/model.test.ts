@@ -5,9 +5,9 @@ import { bankToZip, zipToBank } from '../src/model/bank';
 import {
   dumpFromSample, resampleSample, sampleFromDump, sampleFromWav, samplerFit, trimSample,
 } from '../src/model/convert';
-import { newKeygroup, newProgram, voicesFor } from '../src/model/mapping';
+import { defaultSound, newKeygroup, newProgram, normalizeProgram, voicesFor } from '../src/model/mapping';
 import { noteName, parseNote } from '../src/model/notes';
-import { cutoffHz, engineParams, envTime } from '../src/model/params';
+import { cutoffHz, engineParams, lfoRate, releaseTime } from '../src/model/params';
 import { isPortion, movePoint, normalizeSample } from '../src/model/points';
 import { Store } from '../src/model/store';
 import type { Sample } from '../src/model/types';
@@ -16,7 +16,7 @@ import { fixture, testSine } from './helpers';
 const sample = (overrides: Partial<Sample> = {}): Sample => {
   const data = overrides.data ?? Float32Array.from(testSine());
   return { id: 's1', name: 'SINE', rate: BW16.rate, data, start: 0, end: data.length, loopStart: 0, loopEnd: 5900,
-    loopMode: 'forward', ...overrides };
+    loopMode: 'forward', sound: defaultSound(), ...overrides };
 };
 
 describe('notes', () => {
@@ -33,15 +33,20 @@ describe('notes', () => {
 });
 
 describe('params', () => {
-  test('0-99 to physical units', () => {
-    expect(envTime(0)).toBeCloseTo(0.001);
-    expect(envTime(99)).toBeCloseTo(10.001);
+  test('a sample\'s 0-99 sound to physical units, in the engine\'s layout', () => {
+    expect(releaseTime(0)).toBeCloseTo(0.005);
+    expect(releaseTime(99)).toBeCloseTo(10.005);
     expect(cutoffHz(99)).toBeCloseTo(20000);
     expect(cutoffHz(0)).toBeCloseTo(20);
-    const p = engineParams(newProgram('P'));
+    expect(lfoRate(0)).toBeCloseTo(0.5);
+    expect(lfoRate(99)).toBeCloseTo(20);
+    const p = engineParams({ ...defaultSound(), velFilter: 99, lfoDepth: 99, lfoDelay: 99 });
     expect(p.length).toBe(16);
-    expect(p[2]).toBeCloseTo(20000); // cutoff fully open
-    expect(p[7]).toBe(1); // filter sustain
+    expect(p[0]).toBeCloseTo((80 / 99) ** 2); // level
+    expect(p[2]).toBeCloseTo(20000); // cutoff, open by default
+    expect(p[3]).toBeCloseTo(6); // octaves the cutoff rises at full velocity
+    expect(p[7]).toBeCloseTo(1); // a semitone of vibrato
+    expect(p[8]).toBeCloseTo(4); // seconds before it
   });
 });
 
@@ -51,7 +56,7 @@ describe('keygroups', () => {
     const samples = new Map([['a', sample({ id: 'a' })], ['b', sample({ id: 'b' })]]);
     program.keygroups.push(
       newKeygroup('a', { low: 36, high: 59, root: 48 }),
-      newKeygroup('b', { low: 60, high: 96, root: 60, semitones: 12, cents: 50, level: 50 }),
+      newKeygroup('b', { low: 60, high: 96, root: 60, semitones: 12, cents: 50 }),
       newKeygroup(null, { low: 0, high: 127 }), // no sample, plays nothing
       newKeygroup('missing'),
     );
@@ -62,7 +67,25 @@ describe('keygroups', () => {
     const [high] = voicesFor(program, samples, 72);
     expect(high.sample.id).toBe('b');
     expect(high.ratio).toBeCloseTo(2 ** (24.5 / 12));
-    expect(high.gain).toBeCloseTo((50 / 99) ** 2);
+    expect(high.gain).toBe(1); // the level is the sample's
+  });
+
+  test('constant pitch plays every key at the root\'s pitch, transposed and tuned', () => {
+    const program = newProgram('P');
+    program.keygroups.push(newKeygroup('a', { root: 50, semitones: 2, fixedPitch: true }));
+    const samples = new Map([['a', sample({ id: 'a' })]]);
+    for (const note of [36, 50, 90]) {
+      expect(voicesFor(program, samples, note)[0].ratio).toBeCloseTo(2 ** (2 / 12));
+    }
+  });
+
+  test('programs from before the sound moved to the samples lose it, and keygroups their level', () => {
+    const old = { id: 'p', name: 'OLD', cutoff: 64, ampEnv: { attack: 1 },
+      keygroups: [{ id: 'k', sampleId: 's1', low: 36, high: 60, root: 48, semitones: 0, cents: 5, level: 70 }] };
+    expect(normalizeProgram(old as never)).toEqual({ id: 'p', name: 'OLD', keygroups: [
+      { id: 'k', sampleId: 's1', low: 36, high: 60, root: 48, semitones: 0, cents: 5, fixedPitch: false }] });
+    const oldSample = { ...sample(), sound: undefined } as unknown as Sample;
+    expect(normalizeSample(oldSample).sound).toEqual(defaultSound());
   });
 });
 
@@ -252,6 +275,13 @@ describe('start and end points', () => {
     expect(notes[0]).toMatch(/START to END/);
   });
 
+  test('a drum trigger goes to the sampler as a one shot', async () => {
+    const drum = sample({ loopMode: 'drum', loopStart: 1000, loopEnd: 5000 });
+    expect(samplerFit(drum).used).toBe(6000);
+    const { dump } = await dumpFromSample(drum, { slot: 0, normalize: false }, () => Promise.reject(new Error()));
+    expect(decodeHeader(dump.bytes)).toMatchObject({ loopStart: 6000, loopEnd: 6000 });
+  });
+
   test('the fit counts from START, resampling moves all points', async () => {
     const long = sample({ data: new Float32Array(60000), start: 20000, end: 60000, loopStart: 30000,
       loopEnd: 50000 });
@@ -294,18 +324,18 @@ describe('wav', () => {
 });
 
 describe('bank', () => {
-  test('zip round trip keeps samples, loops, exact rates and programs', () => {
+  test('zip round trip keeps samples, loops, exact rates, sounds and programs', () => {
     const program = newProgram('BASS ROOT');
-    program.cutoff = 64;
     program.keygroups.push(newKeygroup('s1', { low: 36, high: 59, root: 48, cents: 5 }));
-    const samples = [sample(), sample({ id: 's2', name: 'ONE/SHOT?', loopMode: 'off', rate: 22199.53, start: 40,
-      end: 5950 })];
+    const samples = [sample(), sample({ id: 's2', name: 'ONE/SHOT?', loopMode: 'drum', rate: 22199.53, start: 40,
+      end: 5950, sound: { ...defaultSound(), filter: 64, velFilter: 30, release: 0, lfoDepth: 12 } })];
     const bank = zipToBank(bankToZip({ samples, programs: [program, newProgram('P2')], programIndex: 1 }));
     expect(bank.programIndex).toBe(1);
     expect(bank.programs[0]).toEqual(program);
     expect(bank.samples.map((s) => [s.id, s.name, s.rate, s.loopMode, s.start, s.end, s.loopStart, s.loopEnd]))
       .toEqual([['s1', 'SINE', BW16.rate, 'forward', 0, 6000, 0, 5900],
-        ['s2', 'ONE/SHOT?', 22199.53, 'off', 40, 5950, 0, 5900]]);
+        ['s2', 'ONE/SHOT?', 22199.53, 'drum', 40, 5950, 0, 5900]]);
+    expect(bank.samples[1].sound).toEqual(samples[1].sound);
     expect(bank.samples[0].data.length).toBe(6000);
   });
 

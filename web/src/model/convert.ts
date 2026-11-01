@@ -5,7 +5,8 @@ import {
 } from '../protocol/akai';
 import type { Dump, FillerOptions, ParsedDump } from '../protocol/akai';
 import type { Wav, WavLoop } from '../protocol/wav';
-import { newId } from './mapping';
+import { defaultSound, newId } from './mapping';
+import { isLooped } from './types';
 import type { Sample } from './types';
 
 /**
@@ -27,6 +28,7 @@ export function sampleFromDump(r: ParsedDump, name: string): Sample {
     loopStart: oneShot ? 0 : loopStart,
     loopEnd: end,
     loopMode: oneShot ? 'off' : r.header!.alternating ? 'alternating' : 'forward',
+    sound: defaultSound(),
   };
 }
 
@@ -48,11 +50,12 @@ export function sampleFromWav(wav: Wav, name: string): Sample {
     loopStart: loop ? Math.min(loop.start, loopEnd) : 0,
     loopEnd,
     loopMode: loop ? (loop.alternating ? 'alternating' : 'forward') : 'off',
+    sound: defaultSound(),
   };
 }
 
 export function wavLoops(sample: Sample): WavLoop[] {
-  return sample.loopMode === 'off' ? []
+  return !isLooped(sample.loopMode) ? []
     : [{ start: sample.loopStart, end: sample.loopEnd, alternating: sample.loopMode === 'alternating' }];
 }
 
@@ -105,7 +108,7 @@ export function samplerFit(sample: Sample, sendRate = (samplerBandwidth(sample.r
   ?? nearestBandwidth(sample.rate)).rate): SamplerFit {
   // the tolerance keeps 32752 * r / r from flooring to 32751
   const limit = Math.floor((MAX_SAMPLES * sample.rate) / sendRate + 1e-6);
-  const used = (sample.loopMode === 'off' ? sample.end : sample.loopEnd) - sample.start;
+  const used = (isLooped(sample.loopMode) ? sample.loopEnd : sample.end) - sample.start;
   return { sendRate, limit, used, fits: used <= limit, maxSeconds: MAX_SAMPLES / sendRate };
 }
 
@@ -144,7 +147,7 @@ export async function dumpFromSample(sample: Sample, options: SendOptions, resam
   }
   let loopStart = n;
   let loopEnd = n; // one shot: a loop shorter than 5 samples
-  if (sample.loopMode !== 'off') {
+  if (isLooped(sample.loopMode)) {
     loopEnd = Math.min(Math.round((sample.loopEnd - sample.start) * ratio), n);
     loopStart = Math.min(Math.round((sample.loopStart - sample.start) * ratio), loopEnd);
     if (isOneShot(loopStart, loopEnd)) {

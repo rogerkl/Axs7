@@ -8,7 +8,7 @@ import {
   dumpFromSample, resampleSample, sampleData, sampleFromDump, sampleFromWav, trimSample, wavLoops,
 } from '../model/convert';
 import type { SampleData } from '../model/convert';
-import { newId, newProgram } from '../model/mapping';
+import { defaultSound, newId } from '../model/mapping';
 import type { Sample } from '../model/types';
 import { receiveDump, transmitDump } from '../midi/transfer';
 import { readWav, encodeWav } from '../protocol/wav';
@@ -26,7 +26,6 @@ export class Actions {
   private abort: AbortController | null = null;
   /** when the ACKs scheduled by the last receive have gone out */
   private acksUntil = 0;
-  private audition = newProgram('AUDITION');
   /** the sample as it was before the last edit (resample or crossfade), for undo */
   lastEdit: { id: string; what: 'RESAMPLE' | 'CROSSFADE' | 'TRIM'; before: SampleData } | null = null;
   onBusy: () => void = () => {};
@@ -59,7 +58,7 @@ export class Actions {
           // the browser's decoder resamples anyway, straight to the sampler's highest rate if asked to
           const { rate, data } = await decodeAudioFile(buffer, toSampler ? nearestBandwidth(44100).rate : 44100);
           sample = { id: newId(), name, rate, data, start: 0, end: data.length, loopStart: 0, loopEnd: data.length,
-            loopMode: 'off' };
+            loopMode: 'off', sound: defaultSound() };
         }
         store.addSample(sample);
         loaded++;
@@ -275,7 +274,7 @@ export class Actions {
     }
   }
 
-  /** Plays a sample at its own pitch, without the program's filter and envelopes */
+  /** Plays a sample at its own pitch, with its sound */
   auditionStart(sample: Sample | null): void {
     if (!sample) {
       this.app.lcd.flash('NO SAMPLE SELECTED');
@@ -284,16 +283,11 @@ export class Actions {
     const { engine } = this.app;
     void engine.start();
     engine.noteOff(AUDITION_KEY);
-    engine.noteOn(AUDITION_KEY, 1, this.audition, [{ sample, ratio: 1, gain: 1 }]);
+    engine.noteOn(AUDITION_KEY, 1, [{ sample, ratio: 1, gain: 1 }]);
   }
 
   auditionStop(): void {
     this.app.engine.noteOff(AUDITION_KEY);
-  }
-
-  /** The engine needs the audition program's settings */
-  registerAudition(): void {
-    this.app.engine.registerProgram(this.audition);
   }
 
   saveWav(sample: Sample): void {

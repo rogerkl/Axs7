@@ -1,4 +1,4 @@
-//! The sampler engine: sample memory, program parameters and the voices playing them.
+//! The sampler engine: sample memory, the samples' sound parameters and the voices playing them.
 
 use std::collections::BTreeMap;
 
@@ -8,9 +8,6 @@ use crate::voice::{NoteOn, Voice};
 pub const MAX_VOICES: usize = 32;
 /// The longest block the engine renders, AudioWorklets use 128
 pub const MAX_FRAMES: usize = 4096;
-const VIBRATO_HZ: f32 = 5.5;
-/// semitones of vibrato at full modulation
-const VIBRATO_DEPTH: f32 = 0.5;
 
 pub struct SampleData {
     pub data: Vec<f32>,
@@ -20,15 +17,15 @@ pub struct SampleData {
 pub struct Engine {
     sample_rate: f32,
     samples: BTreeMap<u32, SampleData>,
-    programs: BTreeMap<u32, Params>,
+    /// sound parameters by id, a sample's are under its id
+    params: BTreeMap<u32, Params>,
     voices: Vec<Voice>,
     polyphony: usize,
     out: Vec<f32>,
-    /// where the web side writes program parameters before calling set_program
+    /// where the web side writes sound parameters before calling set_params
     pub params_in: Params,
     bend: f32,
     modulation: f32,
-    lfo_phase: f32,
     volume: f32,
     notes_started: u64,
     /// count, then sample id and position of each playing voice
@@ -40,14 +37,13 @@ impl Engine {
         Engine {
             sample_rate,
             samples: BTreeMap::new(),
-            programs: BTreeMap::new(),
+            params: BTreeMap::new(),
             voices: vec![Voice::default(); MAX_VOICES],
             polyphony: 16,
             out: vec![0.0; MAX_FRAMES],
             params_in: DEFAULT_PARAMS,
             bend: 0.0,
             modulation: 0.0,
-            lfo_phase: 0.0,
             volume: 1.0,
             notes_started: 0,
             positions: Vec::with_capacity(1 + 2 * MAX_VOICES),
@@ -75,9 +71,9 @@ impl Engine {
         self.samples.len()
     }
 
-    /// Sets a program's parameters, notes playing it follow the change
-    pub fn set_program(&mut self, id: u32, params: Params) {
-        self.programs.insert(id, params);
+    /// Sets sound parameters, notes playing with them follow the change
+    pub fn set_params(&mut self, id: u32, params: Params) {
+        self.params.insert(id, params);
     }
 
     pub fn note_on(&mut self, note: NoteOn) {
@@ -166,16 +162,14 @@ impl Engine {
         let frames = frames.min(MAX_FRAMES);
         let out = &mut self.out[..frames];
         out.fill(0.0);
-        let vibrato = self.modulation * VIBRATO_DEPTH * (2.0 * core::f32::consts::PI * self.lfo_phase).sin();
-        self.lfo_phase = (self.lfo_phase + frames as f32 * VIBRATO_HZ / self.sample_rate).fract();
-        let pitch = (((self.bend + vibrato) / 12.0) as f64).exp2();
+        let bend = ((self.bend / 12.0) as f64).exp2();
         for v in self.voices.iter_mut().filter(|v| v.active) {
             let Some(sample) = self.samples.get(&v.sample) else {
                 v.active = false;
                 continue;
             };
-            let params = self.programs.get(&v.program).unwrap_or(&DEFAULT_PARAMS);
-            v.render(out, &sample.data, params, pitch, self.sample_rate);
+            let params = self.params.get(&v.params).unwrap_or(&DEFAULT_PARAMS);
+            v.render(out, &sample.data, params, bend, self.modulation, self.sample_rate);
         }
         for o in out.iter_mut() {
             *o = (*o * self.volume).clamp(-1.0, 1.0);
@@ -197,7 +191,7 @@ mod tests {
 
     fn note(key: u32, ratio: f64, loop_mode: LoopMode, len: usize) -> NoteOn {
         NoteOn {
-            key, velocity: 1.0, program: 0, sample: 1, ratio, start: 0, end: len, loop_start: 0, loop_end: len, loop_mode,
+            key, velocity: 1.0, params: 0, sample: 1, ratio, start: 0, end: len, loop_start: 0, loop_end: len, loop_mode,
             gain: 1.0,
         }
     }
@@ -331,19 +325,115 @@ mod tests {
         assert!(engine.process(128).iter().all(|&x| x == 0.0));
     }
 
+    /// How much the frequency moves between zero crossings
+    fn frequency_spread(d: &[f32]) -> f32 {
+        let crossings: Vec<f32> = d.windows(2).enumerate().filter(|(_, w)| w[0] < 0.0 && w[1] >= 0.0)
+            .map(|(i, w)| i as f32 + w[0] / (w[0] - w[1])).collect();
+        let hz: Vec<f32> = crossings.windows(2).map(|c| SR / (c[1] - c[0])).collect();
+        hz.iter().cloned().fold(f32::MIN, f32::max) - hz.iter().cloned().fold(f32::MAX, f32::min)
+    }
+
+    fn peak(d: &[f32]) -> f32 {
+        d.iter().fold(0.0f32, |m, x| m.max(x.abs()))
+    }
+
     #[test]
-    fn filter_envelope_and_program_changes_apply_to_playing_notes() {
+    fn sound_changes_apply_to_playing_notes() {
         let mut engine = engine_with_sine(40000);
         let mut p = DEFAULT_PARAMS;
         p[CUTOFF] = 100.0; // far below 440 Hz
-        engine.set_program(0, p);
+        engine.set_params(0, p);
         engine.note_on(note(60, 1.0, LoopMode::Off, 40000));
         let quiet = render(&mut engine, 0.2);
-        let peak = |d: &[f32]| d[d.len() / 2..].iter().fold(0.0f32, |m, x| m.max(x.abs()));
-        assert!(peak(&quiet) < 0.05);
+        assert!(peak(&quiet[quiet.len() / 2..]) < 0.05);
         p[CUTOFF] = 20000.0;
-        engine.set_program(0, p);
+        engine.set_params(0, p);
         let open = render(&mut engine, 0.2);
-        assert!(peak(&open) > 0.4);
+        assert!(peak(&open[open.len() / 2..]) > 0.4);
+    }
+
+    #[test]
+    fn velocity_opens_the_filter() {
+        let level_at = |velocity: f32| {
+            let mut engine = engine_with_sine(40000);
+            let mut p = DEFAULT_PARAMS;
+            p[CUTOFF] = 100.0;
+            p[VEL_FILTER] = 5.0; // up to 3.2 kHz at full velocity
+            p[VEL_LEVEL] = 0.0;
+            engine.set_params(0, p);
+            let mut n = note(60, 1.0, LoopMode::Off, 40000);
+            n.velocity = velocity;
+            engine.note_on(n);
+            let out = render(&mut engine, 0.2);
+            peak(&out[out.len() / 2..])
+        };
+        assert!(level_at(0.0) < 0.05, "soft: the cutoff stays at 100 Hz");
+        assert!(level_at(1.0) > 0.4, "hard: it rises above the tone");
+    }
+
+    #[test]
+    fn a_one_shot_stops_at_key_off_a_drum_trigger_plays_on() {
+        for (mode, playing) in [(LoopMode::Off, 0), (LoopMode::Drum, 1)] {
+            let mut engine = engine_with_sine(40000); // 1 s
+            engine.note_on(note(60, 1.0, mode, 40000));
+            render(&mut engine, 0.1);
+            engine.note_off(60);
+            render(&mut engine, 0.05);
+            assert_eq!(engine.active_voices(), playing, "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn softer_notes_get_a_shorter_release_with_velocity_to_release() {
+        let time_to_silence = |velocity: f32| {
+            let mut engine = engine_with_sine(4000);
+            let mut p = DEFAULT_PARAMS;
+            p[RELEASE] = 1.0;
+            p[VEL_RELEASE] = 1.0;
+            engine.set_params(0, p);
+            let mut n = note(60, 1.0, LoopMode::Forward, 4000);
+            n.velocity = velocity;
+            n.loop_start = 1000;
+            engine.note_on(n);
+            render(&mut engine, 0.05);
+            engine.note_off(60);
+            let mut blocks = 0;
+            while engine.active_voices() > 0 && blocks < 1000 {
+                engine.process(128);
+                blocks += 1;
+            }
+            blocks as f32 * 128.0 / SR
+        };
+        let soft = time_to_silence(0.3);
+        let hard = time_to_silence(1.0);
+        assert!((hard - 1.33).abs() < 0.1, "-80 dB of a 1 s release (-60 dB) is 1.33 s: {hard}");
+        assert!(soft < 0.5 * hard, "{soft} {hard}");
+    }
+
+    #[test]
+    fn vibrato_starts_after_its_delay() {
+        let mut engine = engine_with_sine(400000);
+        let mut p = DEFAULT_PARAMS;
+        p[LFO_RATE] = 5.0;
+        p[LFO_DEPTH] = 1.0; // a semitone
+        p[LFO_DELAY] = 0.5;
+        engine.set_params(0, p);
+        engine.note_on(note(60, 1.0, LoopMode::Off, 400000));
+        let out = render(&mut engine, 1.2);
+        assert!(frequency_spread(&out[2400..(0.45 * SR) as usize]) < 1.0, "steady before the delay");
+        assert!(frequency_spread(&out[(0.8 * SR) as usize..]) > 30.0, "a semitone either way after it");
+    }
+
+    #[test]
+    fn the_modulation_wheel_adds_vibrato() {
+        let spread_with = |modulation: f32| {
+            let mut engine = engine_with_sine(400000);
+            engine.set_modulation(modulation);
+            engine.note_on(note(60, 1.0, LoopMode::Off, 400000));
+            let out = render(&mut engine, 0.6);
+            frequency_spread(&out[2400..])
+        };
+        assert!(spread_with(0.0) < 1.0);
+        assert!(spread_with(1.0) > 15.0, "half a semitone either way");
     }
 }

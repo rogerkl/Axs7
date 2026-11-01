@@ -1,20 +1,22 @@
-// From the 0-99 values the user edits to the physical units the engine works in. The layout matches
-// engine/src/params.rs.
+// From a sample's 0-99 values (its OUT and LFO settings, as on the X7000) to the physical units the engine works
+// in. The layout matches engine/src/params.rs.
 
-import type { Program } from './types';
+import type { Sound } from './types';
 
 export const PARAM_COUNT = 16;
 const LEVEL = 0;
-const VELOCITY = 1;
+const VEL_LEVEL = 1;
 const CUTOFF = 2;
-const RESONANCE = 3;
-const ENV_AMOUNT = 4;
-const FILTER_ATTACK = 5;
-const AMP_ATTACK = 9;
+const VEL_FILTER = 3;
+const RELEASE = 4;
+const VEL_RELEASE = 5;
+const LFO_RATE = 6;
+const LFO_DEPTH = 7;
+const LFO_DELAY = 8;
 
-/** 0 → 1 ms, 50 → 1.3 s, 99 → 10 s, most of the range for the shorter times */
-export function envTime(v: number): number {
-  return 0.001 + 10 * (v / 99) ** 3;
+/** 0-99 → linear gain */
+export function levelGain(v: number): number {
+  return (v / 99) ** 2;
 }
 
 /** 20 Hz to 20 kHz, exponentially */
@@ -22,44 +24,50 @@ export function cutoffHz(v: number): number {
   return 20 * 1000 ** (v / 99);
 }
 
-/** Q from flat (0.707) to a strong peak (20) */
-export function resonanceQ(v: number): number {
-  return 0.7071 + 19.3 * (v / 99) ** 2;
+/** octaves the cutoff rises at full velocity, up to 6 */
+export function velFilterOctaves(v: number): number {
+  return (v / 99) * 6;
 }
 
-/** -99..99 → -8..8 octaves at full envelope */
-export function envOctaves(v: number): number {
-  return (v / 99) * 8;
+/** 0 stops at once (5 ms against clicks), 50 → 1.3 s, 99 → 10 s, most of the range for the shorter times */
+export function releaseTime(v: number): number {
+  return 0.005 + 10 * (v / 99) ** 3;
 }
 
-/** 0-99 → linear gain */
-export function levelGain(v: number): number {
+/** 0.5 Hz to 20 Hz */
+export function lfoRate(v: number): number {
+  return 0.5 * 40 ** (v / 99);
+}
+
+/** semitones either way, up to one */
+export function lfoDepth(v: number): number {
   return (v / 99) ** 2;
 }
 
-export function engineParams(p: Program): Float32Array {
+/** seconds, up to 4 */
+export function lfoDelay(v: number): number {
+  return 4 * (v / 99) ** 2;
+}
+
+export function engineParams(s: Sound): Float32Array {
   const out = new Float32Array(PARAM_COUNT);
-  out[LEVEL] = levelGain(p.level);
-  out[VELOCITY] = p.velocity / 99;
-  out[CUTOFF] = cutoffHz(p.cutoff);
-  out[RESONANCE] = resonanceQ(p.resonance);
-  out[ENV_AMOUNT] = envOctaves(p.envAmount);
-  for (const [first, env] of [[FILTER_ATTACK, p.filterEnv], [AMP_ATTACK, p.ampEnv]] as const) {
-    out[first] = envTime(env.attack);
-    out[first + 1] = envTime(env.decay);
-    out[first + 2] = env.sustain / 99;
-    out[first + 3] = envTime(env.release);
-  }
+  out[LEVEL] = levelGain(s.level);
+  out[VEL_LEVEL] = s.velLevel / 99;
+  out[CUTOFF] = cutoffHz(s.filter);
+  out[VEL_FILTER] = velFilterOctaves(s.velFilter);
+  out[RELEASE] = releaseTime(s.release);
+  out[VEL_RELEASE] = s.velRelease / 99;
+  out[LFO_RATE] = lfoRate(s.lfoSpeed);
+  out[LFO_DEPTH] = lfoDepth(s.lfoDepth);
+  out[LFO_DELAY] = lfoDelay(s.lfoDelay);
   return out;
 }
 
-/** Shown on the LCD for an envelope time */
-export function formatTime(v: number): string {
-  const t = envTime(v);
+/** Shown on the LCD */
+export function formatSeconds(t: number): string {
   return t < 1 ? `${Math.round(t * 1000)}MS` : `${t.toFixed(t < 10 ? 2 : 1)}S`;
 }
 
-export function formatHz(v: number): string {
-  const hz = cutoffHz(v);
-  return hz < 1000 ? `${Math.round(hz)}HZ` : `${(hz / 1000).toFixed(1)}KHZ`;
+export function formatHz(hz: number): string {
+  return hz < 1000 ? `${hz < 10 ? hz.toFixed(1) : Math.round(hz)}HZ` : `${(hz / 1000).toFixed(1)}KHZ`;
 }

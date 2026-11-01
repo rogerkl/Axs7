@@ -1,17 +1,18 @@
-// KEYGROUPS: the current program's name and its keygroups, each a sample over a key range.
+// PROGRAM: the current program's name and its keygroups, each a sample over a key range with its pitch, like an
+// X7000 program ("P1:S1:L=36:H=96"). The sound is the sample's (OUT and LFO).
 
 import type { App, View } from '../../app/app';
 import { newKeygroup } from '../../model/mapping';
 import { noteName, parseNote } from '../../model/notes';
 import type { Keygroup } from '../../model/types';
 import { h } from '../dom';
-import { ParamCell } from '../param';
+import { ParamCell, choiceCell } from '../param';
 
 /** Key range and root: like on the sampler, playing a note sets them while selected */
 const noteSpec = { min: 0, max: 127, coarse: 12, format: noteName, parse: parseNote, noteInput: true,
   detail: () => 'OR PLAY KEY' };
 
-export function keygroupsView(app: App): View {
+export function programView(app: App): View {
   const { store } = app;
   const head = h('div', { class: 'row program-row' });
   const table = h('div', { class: 'kg-table', role: 'table', 'aria-label': 'Keygroups' });
@@ -34,13 +35,12 @@ export function keygroupsView(app: App): View {
       } }, 'DELETE PROGRAM'));
   }
 
-  function kgCell(kg: Keygroup, field: 'low' | 'high' | 'root' | 'semitones' | 'cents' | 'level', label: string)
+  function kgCell(kg: Keygroup, field: 'low' | 'high' | 'root' | 'semitones' | 'cents', label: string)
     : ParamCell {
     const ranges = {
       low: noteSpec, high: noteSpec, root: noteSpec,
       semitones: { min: -48, max: 48, coarse: 12, format: (v: number) => (v > 0 ? `+${v}` : String(v)) },
       cents: { min: -50, max: 50, coarse: 10, format: (v: number) => (v > 0 ? `+${v}` : String(v)) },
-      level: { min: 0, max: 99, coarse: 10 },
     } as const;
     const cell = new ParamCell({
       key: `kg.${kg.id}.${field}`, label, ...ranges[field],
@@ -61,8 +61,13 @@ export function keygroupsView(app: App): View {
         onChange: () => store.updateKeygroup(kg.id, { sampleId: select.value || null }) },
       h('option', { value: '' }, '– NO SAMPLE –'),
       ...samples.map((s) => h('option', { value: s.id, selected: s.id === kg.sampleId }, s.name)));
+      // the X7000's CONSTANT PITCH: every key plays the root's pitch
+      const pitch = choiceCell(`kg.${kg.id}.pitch`, 'PITCH', ['track', 'fixed'] as const, ['TRACK', 'FIXED'],
+        () => (store.program.keygroups.find((k) => k.id === kg.id)?.fixedPitch ? 'fixed' : 'track'),
+        (v) => store.updateKeygroup(kg.id, { fixedPitch: v === 'fixed' }), 'compact');
+      pitch.el.addEventListener('pointerdown', () => store.selectKeygroup(kg.id));
       const rowCells = [kgCell(kg, 'low', 'LOW'), kgCell(kg, 'high', 'HIGH'), kgCell(kg, 'root', 'ROOT'),
-        kgCell(kg, 'semitones', 'SEMI'), kgCell(kg, 'cents', 'FINE'), kgCell(kg, 'level', 'LEVEL')];
+        kgCell(kg, 'semitones', 'SEMI'), kgCell(kg, 'cents', 'FINE'), pitch];
       cells.push(...rowCells);
       return h('div', {
         class: `kg-row${kg.id === store.selectedKeygroupId ? ' selected' : ''}`, role: 'row',
@@ -102,8 +107,9 @@ export function keygroupsView(app: App): View {
           store.addKeygroup(newKeygroup(s?.id ?? null));
         } }, 'ADD KEYGROUP'),
         h('span', { class: 'info' }, 'Select LOW, HIGH or ROOT and play a note to set it, like on the sampler '
-          + '(LOW moves on to HIGH). A new keygroup gets the selected sample. Click a bar above the keys to select '
-          + 'its keygroup. Notes are named as on the sampler, C3 = MIDI 60.'))),
+          + '(LOW moves on to HIGH). PITCH FIXED plays every key at the root\'s pitch, the X7000\'s CONSTANT '
+          + 'PITCH. The sound is the sample\'s, see OUT and LFO. A new keygroup gets the selected sample, a bar above '
+          + 'the keys selects its keygroup. Notes are named as on the sampler, C3 = MIDI 60.'))),
     dispose: () => off.forEach((f) => f()),
   };
 }

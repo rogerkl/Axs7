@@ -4,11 +4,12 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { encodeWav, readWav } from '../protocol/wav';
 import { wavLoops } from './convert';
-import { newKeygroup, newProgram } from './mapping';
-import type { LoopMode, Program, Sample } from './types';
+import { defaultSound, normalizeProgram } from './mapping';
+import type { LoopMode, Program, Sample, Sound } from './types';
 
 export const BANK_FORMAT = 'axs7-bank';
-export const BANK_VERSION = 1;
+/** 2: samples have their sound, programs only key ranges */
+export const BANK_VERSION = 2;
 
 export interface Bank {
   samples: Sample[];
@@ -28,6 +29,8 @@ interface SampleEntry {
   loopStart: number;
   loopEnd: number;
   loopMode: LoopMode;
+  /** missing in version 1 banks */
+  sound?: Sound;
 }
 
 interface BankJson {
@@ -49,7 +52,7 @@ export function bankToZip(bank: Bank): Uint8Array {
     const file = fileName(i, s.name);
     files[file] = encodeWav(s.data, s.rate, wavLoops(s));
     return { id: s.id, name: s.name, file, rate: s.rate, start: s.start, end: s.end, loopStart: s.loopStart,
-      loopEnd: s.loopEnd, loopMode: s.loopMode };
+      loopEnd: s.loopEnd, loopMode: s.loopMode, sound: s.sound };
   });
   const json: BankJson = { format: BANK_FORMAT, version: BANK_VERSION, programIndex: bank.programIndex, samples,
     programs: bank.programs };
@@ -83,17 +86,9 @@ export function zipToBank(zip: Uint8Array): Bank {
     const loopEnd = Math.min(entry.loopEnd, end);
     return { id: entry.id, name: entry.name, rate: entry.rate || wav.sampleRate, data: wav.data,
       start: Math.min(entry.start ?? 0, end), end, loopStart: Math.min(entry.loopStart, loopEnd), loopEnd,
-      loopMode: entry.loopMode };
+      loopMode: entry.loopMode, sound: { ...defaultSound(), ...entry.sound } };
   });
-  // defaults for anything a program from an older version doesn't have
-  const programs = json.programs.map((p): Program => {
-    const defaults = newProgram(p.name ?? 'PROGRAM');
-    return {
-      ...defaults, ...p,
-      filterEnv: { ...defaults.filterEnv, ...p.filterEnv },
-      ampEnv: { ...defaults.ampEnv, ...p.ampEnv },
-      keygroups: (p.keygroups ?? []).map((k) => newKeygroup(k.sampleId, k)),
-    };
-  });
+  // version 1 programs had the sound settings, they are left out
+  const programs = json.programs.map(normalizeProgram);
   return { samples, programs, programIndex: json.programIndex ?? 0 };
 }

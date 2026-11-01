@@ -1,6 +1,6 @@
 // Settings kept in the browser between visits
 
-export type ViewName = 'samples' | 'keygroups' | 'filter' | 'amp' | 'midi' | 'bank';
+export type ViewName = 'samples' | 'out' | 'lfo' | 'program' | 'midi' | 'bank';
 
 export interface Settings {
   /** of the stored settings, see loadSettings */

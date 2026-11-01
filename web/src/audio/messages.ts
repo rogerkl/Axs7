@@ -4,9 +4,10 @@ export type EngineMessage =
   | { type: 'init'; wasm: ArrayBuffer }
   | { type: 'sample'; id: number; data: Float32Array; rate: number }
   | { type: 'removeSample'; id: number }
-  | { type: 'program'; id: number; params: Float32Array }
+  /** sound parameters, a sample's are under its id */
+  | { type: 'params'; id: number; params: Float32Array }
   | {
-    type: 'noteOn'; key: number; velocity: number; program: number; sample: number; ratio: number;
+    type: 'noteOn'; key: number; velocity: number; params: number; sample: number; ratio: number;
     start: number; end: number; loopStart: number; loopEnd: number; loopMode: number; gain: number;
   }
   | { type: 'noteOff'; key: number }

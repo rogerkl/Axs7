@@ -1,8 +1,8 @@
 // The sampler's memory: samples and programs, with events for whoever shows or keeps them.
 
-import { newKeygroup, newProgram } from './mapping';
+import { newKeygroup, newProgram, normalizeProgram } from './mapping';
 import { normalizeSample } from './points';
-import type { Envelope, Keygroup, Program, Sample } from './types';
+import type { Keygroup, Program, Sample, Sound } from './types';
 
 /**
  * samples, programs and keygroups: the lists changed. sample: one sample's values changed (its id is passed).
@@ -150,14 +150,18 @@ export class Store {
     this.emit('selection');
   }
 
-  updateProgram(patch: Partial<Omit<Program, 'id' | 'keygroups' | 'filterEnv' | 'ampEnv'>>): void {
+  updateProgram(patch: Partial<Pick<Program, 'name'>>): void {
     Object.assign(this.program, patch);
     this.emit('program');
   }
 
-  updateEnvelope(which: 'filterEnv' | 'ampEnv', patch: Partial<Envelope>): void {
-    Object.assign(this.program[which], patch);
-    this.emit('program');
+  /** Changes a sample's OUT and LFO settings */
+  updateSound(id: string, patch: Partial<Sound>): void {
+    const sample = this.samples.get(id);
+    if (sample) {
+      Object.assign(sample.sound, patch);
+      this.emit('sample', id);
+    }
   }
 
   addKeygroup(keygroup: Keygroup): void {
@@ -197,7 +201,7 @@ export class Store {
   replaceAll(samples: Sample[], programs: Program[], programIndex = 0): void {
     // samples kept from before start and end points get them
     this.samples = new Map(samples.map((s) => [s.id, normalizeSample(s)]));
-    this.programs = programs.length ? programs : [newProgram('PROGRAM 1')];
+    this.programs = programs.length ? programs.map(normalizeProgram) : [newProgram('PROGRAM 1')];
     this.programIndex = Math.max(0, Math.min(programIndex, this.programs.length - 1));
     this.selectedSampleId = samples[0]?.id ?? null;
     this.selectedKeygroupId = this.program.keygroups[0]?.id ?? null;

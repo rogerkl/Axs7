@@ -30,8 +30,7 @@ export class Player {
       this.engine.noteOff(note); // retrigger
       this.sustained.delete(note);
     }
-    const program = this.store.program;
-    this.engine.noteOn(note, velocity / 127, program, voicesFor(program, this.store.samples, note));
+    this.engine.noteOn(note, velocity / 127, voicesFor(this.store.program, this.store.samples, note));
     this.down.add(note);
     this.onNotes(this.down);
   }

@@ -3,9 +3,10 @@
 A sampler in the browser with multi-sample programs, that sends and receives samples to and from an Akai
 X7000/S700 over Web MIDI. Its look is loosely based on the X7000's front panel.
 
-It follows the Java tool [Axs7Sds](../Axs7Sds), which can only transfer single samples. The X7000 can't transfer
-its program data, so the programs live here: samples are loaded or received into memory, mapped to key ranges in
-programs, and played from the on-screen keyboard, the computer keyboard or a MIDI keyboard (the X7000's own works).
+It follows the Java tool [Axs7Sds](../Axs7Sds), which can only transfer single samples. A sample dump has only the
+audio and the loop, so the rest lives here, kept close to how the X7000 has it (its manual): each sample has its
+sound (OUT and LFO), and programs map samples to key ranges. Samples are loaded or received into memory and played
+from the on-screen keyboard, the computer keyboard or a MIDI keyboard (the X7000's own works).
 
 ## What it does
 
@@ -33,11 +34,18 @@ programs, and played from the on-screen keyboard, the computer keyboard or a MID
   the start doesn't click (the Java tool's X-fade). LENGTH in ms, SHAPE linear (for a steady sound) or equal power
   (keeps the level when the two sides differ, like noise). The two regions are shown on the waveform, and UNDO
   CROSSFADE brings back the sample as it was.
-- **Programs**: keygroups, each a sample over a key range with root key, tune and level; a resonant lowpass with
-  its own envelope, an amp envelope, velocity sensitivity, 6-32 voices. Parameters are 0-99 like on the sampler,
-  and note names follow the sampler: C3 = MIDI 60.
+- **Scan modes** (SCAN), as on the X7000: ONE shot (stops at key off), LOOP, ALT (alternating), DRUM trigger (plays
+  to its end whatever the key does). A drum trigger goes to the sampler as a one shot.
+- **OUT**, a sample's sound, as on the X7000: LEVEL, FILTER (a lowpass without resonance) and RELEASE (for looping
+  and alternating samples), each with how much velocity changes it (velocity raises the cutoff, softer notes get a
+  shorter release). No attack or filter envelope, like the X7000.
+- **LFO**, a sample's vibrato: SPEED, DEPTH, DELAY. The modulation wheel adds vibrato too.
+- **Programs** (PROGRAM): keygroups, each a sample over a key range with root, semitones and fine tune, and PITCH
+  FIXED for the X7000's constant pitch (every key at the root's pitch). The sound is the sample's, so every program
+  playing a sample sounds the same, as on the X7000. 6-32 voices (the X7000 has 6). Parameters are 0-99 like on
+  the sampler, and note names follow it: C3 = MIDI 60.
 - **Transfers**: receive a sample slot from the sampler, send the selected sample to one. The slot is chosen in
-  the app, with SLOT ▲▼ next to RECEIVE and SEND (also in the SAMPLES and MIDI views), nothing needs to be set on
+  the app, with SLOT ▲▼ next to RECEIVE and SEND (also in the SAMPLE and MIDI views), nothing needs to be set on
   the sampler: the slot number goes in the dump request and in the header of a sent dump. How many slots the
   sampler has is set with SLOTS in the MIDI view: 6 on a standard X7000, more with a memory expansion (tested
   receiving and sending slot 7 on an X7000 with 16). Samples are

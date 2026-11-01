@@ -7,7 +7,7 @@ import { LOOP_MODE_CODE } from '../model/mapping';
 import type { VoiceStart } from '../model/mapping';
 import { engineParams } from '../model/params';
 import type { Store } from '../model/store';
-import type { Program } from '../model/types';
+import type { Sample } from '../model/types';
 
 export class AudioEngine {
   private ctx: AudioContext | null = null;
@@ -20,15 +20,18 @@ export class AudioEngine {
   /** the data each sample was loaded with, to see when it changes */
   private loaded = new Map<string, Float32Array>();
   private nextId = 1;
-  /** programs the engine needs that aren't in the store, like the one for auditioning */
-  private extraPrograms: Program[] = [];
   onVoices: (voices: number) => void = () => {};
   onError: (message: string) => void = () => {};
 
   constructor(private store: Store) {
     store.on('samples', () => this.syncSamples());
-    store.on('programs', () => this.syncPrograms());
-    store.on('program', () => this.setProgram(store.program));
+    // a sample's sound (OUT and LFO) can change, cheap to send on any change of the sample
+    store.on('sample', (id) => {
+      const sample = id && store.samples.get(id);
+      if (sample) {
+        this.setParams(sample);
+      }
+    });
   }
 
   get state(): AudioContextState | 'off' {
@@ -81,7 +84,6 @@ export class AudioEngine {
     node.port.postMessage({ type: 'init', wasm } satisfies EngineMessage, [wasm]);
     this.node = node;
     this.syncSamples();
-    this.syncPrograms();
     for (const message of this.queue.splice(0)) {
       node.port.postMessage(message);
     }
@@ -114,7 +116,7 @@ export class AudioEngine {
     return () => this.positionListeners.delete(listener);
   }
 
-  /** Messages before the engine runs wait, except the samples and programs, which are synced when it starts */
+  /** Messages before the engine runs wait, except the samples, which are synced when it starts */
   private post(message: EngineMessage, transfer: Transferable[] = []): void {
     if (this.node) {
       this.node.port.postMessage(message, transfer);
@@ -148,35 +150,24 @@ export class AudioEngine {
         const copy = sample.data.slice();
         this.post({ type: 'sample', id: this.id(sample.id), data: copy, rate: sample.rate }, [copy.buffer]);
         this.loaded.set(sample.id, sample.data);
+        this.setParams(sample);
       }
     }
   }
 
-  private syncPrograms(): void {
+  /** A sample's sound goes to the engine under the sample's id */
+  private setParams(sample: Sample): void {
     if (this.node) {
-      for (const program of [...this.store.programs, ...this.extraPrograms]) {
-        this.setProgram(program);
-      }
-    }
-  }
-
-  registerProgram(program: Program): void {
-    this.extraPrograms.push(program);
-    this.setProgram(program);
-  }
-
-  private setProgram(program: Program): void {
-    if (this.node) {
-      this.post({ type: 'program', id: this.id(program.id), params: engineParams(program) });
+      this.post({ type: 'params', id: this.id(sample.id), params: engineParams(sample.sound) });
     }
   }
 
   /** @param velocity 0..1 */
-  noteOn(key: number, velocity: number, program: Program,
-    voices: Pick<VoiceStart, 'sample' | 'ratio' | 'gain'>[]): void {
+  noteOn(key: number, velocity: number, voices: Pick<VoiceStart, 'sample' | 'ratio' | 'gain'>[]): void {
     for (const v of voices) {
+      const sample = this.id(v.sample.id);
       this.post({
-        type: 'noteOn', key, velocity, program: this.id(program.id), sample: this.id(v.sample.id), ratio: v.ratio,
+        type: 'noteOn', key, velocity, params: sample, sample, ratio: v.ratio,
         start: v.sample.start, end: v.sample.end, loopStart: v.sample.loopStart, loopEnd: v.sample.loopEnd,
         loopMode: LOOP_MODE_CODE[v.sample.loopMode],
         gain: v.gain,

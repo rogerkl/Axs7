@@ -8,10 +8,10 @@ interface EngineExports {
   alloc_f32(len: number): number;
   engine_new(sampleRate: number): number;
   engine_params(engine: number): number;
-  engine_set_program(engine: number, id: number): void;
+  engine_set_params(engine: number, id: number): void;
   engine_set_sample(engine: number, id: number, data: number, len: number, rate: number): void;
   engine_remove_sample(engine: number, id: number): void;
-  engine_note_on(engine: number, key: number, velocity: number, program: number, sample: number, ratio: number,
+  engine_note_on(engine: number, key: number, velocity: number, params: number, sample: number, ratio: number,
     start: number, end: number, loopStart: number, loopEnd: number, loopMode: number, gain: number): void;
   engine_note_off(engine: number, key: number): void;
   engine_all_notes_off(engine: number, hard: number): void;
@@ -77,12 +77,12 @@ class EngineProcessor extends AudioWorkletProcessor {
       case 'removeSample':
         ex.engine_remove_sample(e, m.id);
         break;
-      case 'program':
+      case 'params':
         new Float32Array(ex.memory.buffer, ex.engine_params(e), m.params.length).set(m.params);
-        ex.engine_set_program(e, m.id);
+        ex.engine_set_params(e, m.id);
         break;
       case 'noteOn':
-        ex.engine_note_on(e, m.key, m.velocity, m.program, m.sample, m.ratio, m.start, m.end, m.loopStart, m.loopEnd,
+        ex.engine_note_on(e, m.key, m.velocity, m.params, m.sample, m.ratio, m.start, m.end, m.loopStart, m.loopEnd,
           m.loopMode, m.gain);
         break;
       case 'noteOff':

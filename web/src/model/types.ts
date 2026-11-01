@@ -1,4 +1,28 @@
-export type LoopMode = 'off' | 'forward' | 'alternating';
+/** The X7000's scan modes: one shot (stops at key off), looping, alternating, drum trigger (plays to its end) */
+export type LoopMode = 'off' | 'forward' | 'alternating' | 'drum';
+
+export function isLooped(mode: LoopMode): boolean {
+  return mode === 'forward' || mode === 'alternating';
+}
+
+/**
+ * A sample's sound, its OUT and LFO settings, 0-99 as on the X7000. They belong to the sample, not the program, and
+ * aren't part of a sample dump, so they stay here.
+ */
+export interface Sound {
+  level: number;
+  velLevel: number;
+  /** lowpass cutoff, no resonance */
+  filter: number;
+  /** how much velocity raises the cutoff */
+  velFilter: number;
+  /** for looping and alternating samples */
+  release: number;
+  velRelease: number;
+  lfoSpeed: number;
+  lfoDepth: number;
+  lfoDelay: number;
+}
 
 export interface Sample {
   id: string;
@@ -15,9 +39,10 @@ export interface Sample {
   /** after the last sample in the loop */
   loopEnd: number;
   loopMode: LoopMode;
+  sound: Sound;
 }
 
-/** A sample mapped to a key range of a program */
+/** A sample mapped to a key range of a program ("P1:S1:L=36:H=96" on the X7000) */
 export interface Keygroup {
   id: string;
   sampleId: string | null;
@@ -28,28 +53,13 @@ export interface Keygroup {
   root: number;
   semitones: number;
   cents: number;
-  /** 0-99 */
-  level: number;
+  /** every key plays the same pitch, the X7000's CONSTANT PITCH */
+  fixedPitch: boolean;
 }
 
-/** 0-99 like on the sampler */
-export interface Envelope {
-  attack: number;
-  decay: number;
-  sustain: number;
-  release: number;
-}
-
-/** Parameters are 0-99 like on the sampler, env amount -99..99 */
+/** Key ranges for samples, like an X7000 program. The sound is the samples'. */
 export interface Program {
   id: string;
   name: string;
   keygroups: Keygroup[];
-  level: number;
-  velocity: number;
-  cutoff: number;
-  resonance: number;
-  envAmount: number;
-  filterEnv: Envelope;
-  ampEnv: Envelope;
 }

@@ -5,6 +5,7 @@ import { newKeygroup } from '../../model/mapping';
 import { BANDWIDTHS, MAX_SAMPLES, nearestBandwidth, samplerBandwidth } from '../../protocol/akai';
 import { maxCrossfade } from '../../audio/dsp';
 import { samplerFit } from '../../model/convert';
+import { isLooped } from '../../model/types';
 import type { LoopMode, Sample } from '../../model/types';
 import { h, pickFiles } from '../dom';
 import { ParamCell, choiceCell, dataEntry } from '../param';
@@ -13,8 +14,9 @@ import type { PointName } from '../../model/points';
 import { slotCell } from '../slot';
 import { Waveform } from '../waveform';
 
-const LOOP_MODES = ['off', 'forward', 'alternating'] as const satisfies readonly LoopMode[];
-const LOOP_NAMES = ['OFF', 'FWD', 'ALT'];
+/** The X7000's scan modes: one shot, looping, alternating, drum trigger */
+const LOOP_MODES = ['off', 'forward', 'alternating', 'drum'] as const satisfies readonly LoopMode[];
+const LOOP_NAMES = ['ONE', 'LOOP', 'ALT', 'DRUM'];
 
 /** How long the part between START and END is */
 function duration(s: Sample): string {
@@ -30,7 +32,7 @@ function fitText(s: Sample): { text: string; warn: boolean } | null {
   if (fit.fits) {
     return fit.limit < s.data.length ? { text: 'FITS: THE SAMPLER ENDS IT AT THE LOOP END', warn: false } : null;
   }
-  return s.loopMode === 'off' ? { text: `TOO LONG: THE SAMPLER KEEPS ${seconds}, IT IS CUT THERE`, warn: true }
+  return !isLooped(s.loopMode) ? { text: `TOO LONG: THE SAMPLER KEEPS ${seconds}, IT IS CUT THERE`, warn: true }
     : { text: `LOOP END PAST THE SAMPLER'S ${seconds}: MOVE IT, OR RESAMPLE LOWER`, warn: true };
 }
 
@@ -251,7 +253,7 @@ export function samplesView(app: App): View {
     cells = [
       pointCell('start', 'START'),
       pointCell('end', 'END'),
-      choiceCell('sample.loop', 'LOOP', LOOP_MODES, LOOP_NAMES, () => sample().loopMode,
+      choiceCell('sample.loop', 'SCAN', LOOP_MODES, LOOP_NAMES, () => sample().loopMode,
         (loopMode) => store.updateSample(id, { loopMode })),
       pointCell('loopStart', 'LOOP START'),
       pointCell('loopEnd', 'LOOP END'),

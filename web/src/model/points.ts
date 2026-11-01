@@ -1,6 +1,7 @@
 // A sample's four points: START and END mark the part of it that is used (playing starts at START, a one shot ends
 // at END, only that part is sent to the sampler), the loop is inside them.
 
+import { defaultSound } from './mapping';
 import type { Sample } from './types';
 
 export type PointName = 'start' | 'end' | 'loopStart' | 'loopEnd';
@@ -41,9 +42,10 @@ function order(p: Points, len: number): Points {
   return { start, end, loopStart, loopEnd };
 }
 
-/** A sample from before there were start and end points, or with points out of order, put right */
+/** A sample from an older version (without start and end points, or a sound of its own), or with points out of order */
 export function normalizeSample(sample: Sample): Sample {
   const len = sample.data.length;
+  sample.sound = { ...defaultSound(), ...sample.sound };
   return Object.assign(sample, order({
     start: sample.start ?? 0, end: sample.end ?? len, loopStart: sample.loopStart, loopEnd: sample.loopEnd,
   }, len));

@@ -16,16 +16,16 @@ import { Keyboard } from './ui/keyboard';
 import { Lcd } from './ui/lcd';
 import { dataEntry } from './ui/param';
 import { slotStepper } from './ui/slot';
-import { keygroupsView } from './ui/views/keygroups';
+import { programView } from './ui/views/keygroups';
 import { samplesView } from './ui/views/samples';
-import { ampView, filterView } from './ui/views/sound';
+import { lfoView, outView } from './ui/views/sound';
 import { bankView, midiView } from './ui/views/system';
 
 const SECTIONS: [ViewName, string, (app: App) => View][] = [
-  ['samples', 'SAMPLES', samplesView],
-  ['keygroups', 'KEYGROUP', keygroupsView],
-  ['filter', 'FILTER', filterView],
-  ['amp', 'AMP', ampView],
+  ['samples', 'SAMPLE', samplesView],
+  ['out', 'OUT', outView],
+  ['lfo', 'LFO', lfoView],
+  ['program', 'PROGRAM', programView],
   ['midi', 'MIDI', midiView],
   ['bank', 'BANK', bankView],
 ];
@@ -85,7 +85,6 @@ async function main(): Promise<void> {
   settings.slot = Math.max(0, Math.min(settings.slotCount - 1, settings.slot));
   const actions = new Actions(app);
   app.actions = actions;
-  actions.registerAudition();
   engine.volume(settings.volume ** 2);
   engine.polyphony(settings.polyphony);
   engine.onError = (message) => {
@@ -106,8 +105,12 @@ async function main(): Promise<void> {
 
   // ---- display and data entry
   lcd.status = () => {
-    const p = store.program;
-    const line1 = Lcd.pair(`P${String(store.programIndex + 1).padStart(2, '0')} ${p.name}`, voices ? `${voices}V` : '');
+    // a sample's settings show the sample, the rest the program, like the X7000's S1: and P1:
+    const s = store.selectedSample;
+    const sampleView = s && ['samples', 'out', 'lfo'].includes(settings.view);
+    const line1 = Lcd.pair(sampleView
+      ? `S${String([...store.samples.keys()].indexOf(s.id) + 1).padStart(2, '0')} ${s.name}`
+      : `P${String(store.programIndex + 1).padStart(2, '0')} ${store.program.name}`, voices ? `${voices}V` : '');
     const cell = dataEntry.cell;
     if (cell?.el.isConnected) {
       const detail = cell.spec.detail?.(cell.spec.get());
@@ -147,7 +150,7 @@ async function main(): Promise<void> {
     panelButton('PROG ▶', () => store.selectProgram(store.programIndex + 1), { title: 'Next program' }),
     panelButton('NEW PROG', () => {
       store.addProgram();
-      app.showView('keygroups');
+      app.showView('program');
     }, { title: 'New program' }),
     panelButton('LOAD WAV', async () => actions.loadFiles(await pickFiles('.wav,audio/*', true)),
       { title: 'Load WAV or other audio files into memory' }),
@@ -208,8 +211,8 @@ async function main(): Promise<void> {
     noteOff: (n) => player.noteOff(n),
     selectKeygroup: (id) => {
       store.selectKeygroup(id);
-      if (settings.view !== 'keygroups') {
-        app.showView('keygroups');
+      if (settings.view !== 'program') {
+        app.showView('program');
       }
     },
   });
