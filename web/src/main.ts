@@ -214,6 +214,7 @@ async function main(): Promise<void> {
     },
   });
   player.onNotes = (down) => keyboard.setDown(down);
+  player.onNoteOn = (note) => dataEntry.note(note);
   const updateKeyboard = () => keyboard.setKeygroups(store.program, store.selectedKeygroupId,
     new Map([...store.samples.values()].map((s) => [s.id, s.name])));
   const memoryEl = h('span', { class: 'plate-value' });

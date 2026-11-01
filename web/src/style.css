@@ -669,6 +669,11 @@ button:focus-visible,
   color: var(--blue-hi);
 }
 
+/* a selected note parameter is set by playing a key */
+.param.note-input.selected .param-label::after {
+  content: " ♪";
+}
+
 .param.selected .param-value {
   box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.35), 0 0 0 2px var(--blue);
 }

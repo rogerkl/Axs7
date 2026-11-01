@@ -15,6 +15,8 @@ export class Player {
   /** 0 for omni, 1-16 */
   channel = 0;
   onNotes: (down: ReadonlySet<number>) => void = () => {};
+  /** every note played, before it sounds: it can set a key range parameter, and then sounds with the new range */
+  onNoteOn: (note: number) => void = () => {};
   onBend: (value: number) => void = () => {};
   onModulation: (value: number) => void = () => {};
 
@@ -22,6 +24,7 @@ export class Player {
 
   /** @param velocity 1-127 */
   noteOn(note: number, velocity = 100): void {
+    this.onNoteOn(note);
     void this.engine.start();
     if (this.down.has(note) || this.sustained.has(note)) {
       this.engine.noteOff(note); // retrigger

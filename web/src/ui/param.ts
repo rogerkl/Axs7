@@ -17,6 +17,8 @@ export interface ParamSpec {
   parse?(text: string): number | null;
   /** steps for coarse changes (shift), by default a twentieth of the range */
   coarse?: number;
+  /** the value is a note, which can also be set by playing it while the cell is selected, like on the sampler */
+  noteInput?: boolean;
 }
 
 class DataEntry {
@@ -46,6 +48,13 @@ class DataEntry {
     }
   }
 
+  /** A played note, sets the selected cell if it takes notes */
+  note(note: number): void {
+    if (this.cell?.el.isConnected && this.cell.spec.noteInput) {
+      this.cell.setValue(note);
+    }
+  }
+
   changed(cell: ParamCell): void {
     if (cell === this.cell) {
       this.onChange(cell);
@@ -61,8 +70,9 @@ export class ParamCell {
 
   constructor(readonly spec: ParamSpec, className = '') {
     this.value = h('div', { class: 'param-value' });
-    this.el = h('div', { class: `param ${className}`, title: 'Select, then turn the data knob, scroll, drag or '
-      + 'use the arrow keys. Double click to type.' },
+    this.el = h('div', { class: `param ${className}${spec.noteInput ? ' note-input' : ''}`,
+      title: `Select, then turn the data knob, scroll, drag or use the arrow keys${spec.noteInput
+        ? ', or play the note' : ''}. Double click to type.` },
     h('div', { class: 'param-label' }, spec.label), this.value);
     this.el.addEventListener('pointerdown', this.onPointerDown);
     this.el.addEventListener('wheel', this.onWheel, { passive: false });

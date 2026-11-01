@@ -25,7 +25,8 @@ programs, and played from the on-screen keyboard, the computer keyboard or a MID
 
 Editing works like on the sampler: select a parameter, then turn the data knob. Parameters also change with the
 mouse wheel, by dragging up and down, or with the arrow keys (shift for bigger steps). Double click a value to
-type it, notes can be typed as names like `F#2`. The computer keys `A W S E D F T G Y H U J K O L P` play, `Z` and
+type it, notes can be typed as names like `F#2`. A keygroup's LOW, HIGH and ROOT can also be set by playing the
+note while they are selected, from the screen, the computer keys or a MIDI keyboard. The computer keys `A W S E D F T G Y H U J K O L P` play, `Z` and
 `X` change octave.
 
 ## Running

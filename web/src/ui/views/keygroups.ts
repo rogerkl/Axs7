@@ -7,7 +7,9 @@ import type { Keygroup } from '../../model/types';
 import { h } from '../dom';
 import { ParamCell } from '../param';
 
-const noteSpec = { min: 0, max: 127, coarse: 12, format: noteName, parse: parseNote };
+/** Key range and root: like on the sampler, playing a note sets them while selected */
+const noteSpec = { min: 0, max: 127, coarse: 12, format: noteName, parse: parseNote, noteInput: true,
+  detail: () => 'OR PLAY KEY' };
 
 export function keygroupsView(app: App): View {
   const { store } = app;
@@ -97,8 +99,9 @@ export function keygroupsView(app: App): View {
           const s = store.selectedSample;
           store.addKeygroup(newKeygroup(s?.id ?? null));
         } }, 'ADD KEYGROUP'),
-        h('span', { class: 'info' }, 'A new keygroup gets the selected sample. Click a bar above the keys to select '
-          + 'its keygroup. Notes are named as on the sampler, C3 = MIDI 60.'))),
+        h('span', { class: 'info' }, 'Select LOW, HIGH or ROOT and play a note to set it, like on the sampler. A '
+          + 'new keygroup gets the selected sample. Click a bar above the keys to select its keygroup. Notes are '
+          + 'named as on the sampler, C3 = MIDI 60.'))),
     dispose: () => off.forEach((f) => f()),
   };
 }
