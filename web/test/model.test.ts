@@ -40,13 +40,15 @@ describe('params', () => {
     expect(cutoffHz(0)).toBeCloseTo(20);
     expect(lfoRate(0)).toBeCloseTo(0.5);
     expect(lfoRate(99)).toBeCloseTo(20);
-    const p = engineParams({ ...defaultSound(), velFilter: 99, lfoDepth: 99, lfoDelay: 99 });
+    const p = engineParams({ ...defaultSound(), velFilter: 99, lfoDepth: 99, lfoDelay: 99, pressure: 50 });
     expect(p.length).toBe(16);
     expect(p[0]).toBeCloseTo((80 / 99) ** 2); // level
     expect(p[2]).toBeCloseTo(20000); // cutoff, open by default
     expect(p[3]).toBeCloseTo(6); // octaves the cutoff rises at full velocity
     expect(p[7]).toBeCloseTo(1); // a semitone of vibrato
     expect(p[8]).toBeCloseTo(4); // seconds before it
+    expect(p[9]).toBeCloseTo((50 / 99) ** 2); // semitones of vibrato at full aftertouch
+    expect(defaultSound().pressure).toBe(0);
   });
 });
 

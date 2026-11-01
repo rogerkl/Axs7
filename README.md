@@ -43,7 +43,9 @@ from the on-screen keyboard, the computer keyboard or a MIDI keyboard (the X7000
 - **OUT**, a sample's sound, as on the X7000: LEVEL, FILTER (a lowpass without resonance) and RELEASE (for looping
   and alternating samples), each with how much velocity changes it (velocity raises the cutoff, softer notes get a
   shorter release). No attack or filter envelope, like the X7000.
-- **LFO**, a sample's vibrato: SPEED, DEPTH, DELAY. The modulation wheel adds vibrato too.
+- **LFO**, a sample's vibrato: SPEED, DEPTH, DELAY. The modulation wheel adds vibrato too, and so does MIDI
+  aftertouch (channel or polyphonic), as deep as the sample's PRESSURE (the X7000's pressure sens), at once without
+  the delay. AFTERTOUCH IN shows what the keyboard sends (the X7000's own keyboard has no aftertouch).
 - **Programs** (PROGRAM): keygroups, each a sample over a key range with root, semitones and fine tune, and PITCH
   FIXED for the X7000's constant pitch (every key at the root's pitch). The sound is the sample's, so every program
   playing a sample sounds the same, as on the X7000. 6-32 voices (the X7000 has 6). Parameters are 0-99 like on

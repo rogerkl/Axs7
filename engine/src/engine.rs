@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use crate::params::*;
-use crate::voice::{NoteOn, Voice};
+use crate::voice::{Controls, NoteOn, Voice};
 
 pub const MAX_VOICES: usize = 32;
 /// The longest block the engine renders, AudioWorklets use 128
@@ -26,6 +26,7 @@ pub struct Engine {
     pub params_in: Params,
     bend: f32,
     modulation: f32,
+    pressure: f32,
     volume: f32,
     notes_started: u64,
     /// count, then sample id and position of each playing voice
@@ -44,6 +45,7 @@ impl Engine {
             params_in: DEFAULT_PARAMS,
             bend: 0.0,
             modulation: 0.0,
+            pressure: 0.0,
             volume: 1.0,
             notes_started: 0,
             positions: Vec::with_capacity(1 + 2 * MAX_VOICES),
@@ -135,6 +137,18 @@ impl Engine {
         self.modulation = amount.clamp(0.0, 1.0);
     }
 
+    /// Channel aftertouch, 0..1, for all voices
+    pub fn set_pressure(&mut self, amount: f32) {
+        self.pressure = amount.clamp(0.0, 1.0);
+    }
+
+    /// Polyphonic aftertouch, 0..1, for the voices playing a key
+    pub fn set_key_pressure(&mut self, key: u32, amount: f32) {
+        for v in self.voices.iter_mut().filter(|v| v.active && v.key == key) {
+            v.key_pressure = amount.clamp(0.0, 1.0);
+        }
+    }
+
     pub fn set_volume(&mut self, volume: f32) {
         self.volume = volume.max(0.0);
     }
@@ -162,14 +176,15 @@ impl Engine {
         let frames = frames.min(MAX_FRAMES);
         let out = &mut self.out[..frames];
         out.fill(0.0);
-        let bend = ((self.bend / 12.0) as f64).exp2();
+        let controls = Controls { bend: ((self.bend / 12.0) as f64).exp2(), modulation: self.modulation,
+            pressure: self.pressure };
         for v in self.voices.iter_mut().filter(|v| v.active) {
             let Some(sample) = self.samples.get(&v.sample) else {
                 v.active = false;
                 continue;
             };
             let params = self.params.get(&v.params).unwrap_or(&DEFAULT_PARAMS);
-            v.render(out, &sample.data, params, bend, self.modulation, self.sample_rate);
+            v.render(out, &sample.data, params, &controls, self.sample_rate);
         }
         for o in out.iter_mut() {
             *o = (*o * self.volume).clamp(-1.0, 1.0);
@@ -439,6 +454,29 @@ mod tests {
         let out = render(&mut engine, 1.2);
         assert!(frequency_spread(&out[2400..(0.45 * SR) as usize]) < 1.0, "steady before the delay");
         assert!(frequency_spread(&out[(0.8 * SR) as usize..]) > 30.0, "a semitone either way after it");
+    }
+
+    #[test]
+    fn aftertouch_adds_vibrato_as_deep_as_the_sounds_pressure_sens() {
+        let spread_with = |pressure_depth: f32, channel: f32, key: Option<(u32, f32)>| {
+            let mut engine = engine_with_sine(400000);
+            let mut p = DEFAULT_PARAMS;
+            p[PRESSURE_DEPTH] = pressure_depth;
+            p[LFO_DELAY] = 2.0; // the LFO's own delay doesn't hold aftertouch back
+            engine.set_params(0, p);
+            engine.note_on(note(60, 1.0, LoopMode::Off, 400000));
+            engine.set_pressure(channel);
+            if let Some((k, amount)) = key {
+                engine.set_key_pressure(k, amount);
+            }
+            let out = render(&mut engine, 0.6);
+            frequency_spread(&out[2400..])
+        };
+        assert!(spread_with(1.0, 0.0, None) < 1.0, "no pressure, no vibrato");
+        assert!(spread_with(0.0, 1.0, None) < 1.0, "no pressure sens, no vibrato");
+        assert!(spread_with(1.0, 1.0, None) > 30.0, "a semitone either way, at once");
+        assert!(spread_with(1.0, 0.0, Some((60, 1.0))) > 30.0, "polyphonic aftertouch on the key");
+        assert!(spread_with(1.0, 0.0, Some((61, 1.0))) < 1.0, "on another key it does nothing");
     }
 
     #[test]

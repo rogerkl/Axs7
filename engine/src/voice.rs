@@ -65,6 +65,23 @@ const ONE_SHOT_RELEASE: f32 = 0.005;
 const LFO_FADE: f32 = 0.15;
 /// semitones of vibrato the modulation wheel adds at full
 const MOD_DEPTH: f32 = 0.5;
+
+/// What the player's hands do to all voices
+#[derive(Clone, Copy, Debug)]
+pub struct Controls {
+    /// pitch bend as a ratio
+    pub bend: f64,
+    /// the modulation wheel, 0..1, adds vibrato
+    pub modulation: f32,
+    /// channel aftertouch, 0..1, adds vibrato as deep as the sound's PRESSURE_DEPTH
+    pub pressure: f32,
+}
+
+impl Default for Controls {
+    fn default() -> Self {
+        Controls { bend: 1.0, modulation: 0.0, pressure: 0.0 }
+    }
+}
 const FLAT_Q: f32 = core::f32::consts::FRAC_1_SQRT_2;
 
 #[derive(Clone, Debug)]
@@ -91,6 +108,8 @@ pub struct Voice {
     amp: Envelope,
     filter: Lowpass,
     lfo_phase: f32,
+    /// polyphonic aftertouch on this voice's key, 0..1
+    pub key_pressure: f32,
     /// samples since key on
     age: u32,
     control: u32,
@@ -118,6 +137,7 @@ impl Default for Voice {
             amp: Envelope::new(),
             filter: Lowpass::new(),
             lfo_phase: 0.0,
+            key_pressure: 0.0,
             age: 0,
             control: 0,
         }
@@ -170,6 +190,7 @@ impl Voice {
         self.velocity = note.velocity.clamp(0.0, 1.0);
         self.filter.reset();
         self.lfo_phase = 0.0;
+        self.key_pressure = 0.0;
         self.age = 0;
         self.control = 0;
         self.amp.trigger();
@@ -227,11 +248,7 @@ impl Voice {
     }
 
     /// Adds the voice's output to `out`
-    ///
-    /// @param bend pitch bend as a ratio
-    /// @param modulation the modulation wheel, 0..1, adds vibrato
-    pub fn render(&mut self, out: &mut [f32], data: &[f32], p: &Params, bend: f64, modulation: f32,
-        sample_rate: f32) {
+    pub fn render(&mut self, out: &mut [f32], data: &[f32], p: &Params, controls: &Controls, sample_rate: f32) {
         // the X7000's release is for looping sounds, a one shot stops at key off
         let release = if self.loop_mode.looping() {
             let vr = p[VEL_RELEASE].clamp(0.0, 1.0);
@@ -251,9 +268,11 @@ impl Voice {
             if self.control == 0 {
                 let t = self.age as f32 / sample_rate;
                 let fade = ((t - p[LFO_DELAY]) / LFO_FADE).clamp(0.0, 1.0);
-                let depth = p[LFO_DEPTH] * fade + modulation * MOD_DEPTH;
+                // the LFO's own depth after its delay, the wheel and aftertouch at once
+                let pressure = controls.pressure.max(self.key_pressure);
+                let depth = p[LFO_DEPTH] * fade + controls.modulation * MOD_DEPTH + pressure * p[PRESSURE_DEPTH];
                 let vibrato = depth * (2.0 * core::f32::consts::PI * self.lfo_phase).sin();
-                self.current_step = self.step * bend * ((vibrato / 12.0) as f64).exp2();
+                self.current_step = self.step * controls.bend * ((vibrato / 12.0) as f64).exp2();
                 self.lfo_phase = (self.lfo_phase + CONTROL_PERIOD as f32 * p[LFO_RATE] / sample_rate).fract();
                 self.control = CONTROL_PERIOD;
             }

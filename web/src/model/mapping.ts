@@ -28,7 +28,7 @@ export function normalizeProgram(p: Partial<Program>): Program {
 /** A new sample's sound: a little below full level, filter open, a short release, no vibrato */
 export function defaultSound(): Sound {
   return { level: 80, velLevel: 50, filter: 99, velFilter: 0, release: 30, velRelease: 0, lfoSpeed: 60, lfoDepth: 0,
-    lfoDelay: 0 };
+    lfoDelay: 0, pressure: 0 };
 }
 
 export const LOOP_MODE_CODE: Record<LoopMode, number> = { off: 0, forward: 1, alternating: 2, drum: 3 };

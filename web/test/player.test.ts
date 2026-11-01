@@ -19,6 +19,8 @@ function setup() {
     noteOn: (key: number, _v: number, voices: { sample: Sample }[]) =>
       played.push({ key, samples: voices.map((v) => v.sample.id) }),
     noteOff: () => {},
+    pressure: (amount: number) => played.push({ key: -1, samples: [`pressure ${amount.toFixed(2)}`] }),
+    keyPressure: (key: number, amount: number) => played.push({ key, samples: [`key pressure ${amount.toFixed(2)}`] }),
   } as unknown as AudioEngine;
   return { store, player: new Player(store, engine), played };
 }
@@ -32,6 +34,16 @@ describe('player', () => {
     player.noteOn(84);
     expect(store.selectedKeygroup?.high).toBe(84);
     expect(played[1]).toEqual({ key: 84, samples: ['s'] });
+  });
+
+  test('channel and polyphonic aftertouch from MIDI reach the engine', () => {
+    const { player, played } = setup();
+    const seen: number[] = [];
+    player.onPressure = (v) => seen.push(Math.round(v * 127));
+    player.midi(Uint8Array.of(0xd0, 127));
+    player.midi(Uint8Array.of(0xa0, 60, 64));
+    expect(played).toEqual([{ key: -1, samples: ['pressure 1.00'] }, { key: 60, samples: ['key pressure 0.50'] }]);
+    expect(seen).toEqual([127, 64]);
   });
 
   test('notes from MIDI go the same way, on the keyboard channel', () => {

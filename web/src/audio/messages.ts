@@ -14,6 +14,10 @@ export type EngineMessage =
   | { type: 'allNotesOff'; hard: boolean }
   | { type: 'bend'; semitones: number }
   | { type: 'modulation'; amount: number }
+  /** channel aftertouch, 0..1 */
+  | { type: 'pressure'; amount: number }
+  /** polyphonic aftertouch, 0..1 */
+  | { type: 'keyPressure'; key: number; amount: number }
   | { type: 'volume'; volume: number }
   | { type: 'polyphony'; voices: number };
 

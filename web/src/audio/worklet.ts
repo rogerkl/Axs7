@@ -18,6 +18,8 @@ interface EngineExports {
   engine_all_notes_off(engine: number, hard: number): void;
   engine_set_bend(engine: number, semitones: number): void;
   engine_set_modulation(engine: number, amount: number): void;
+  engine_set_pressure(engine: number, amount: number): void;
+  engine_set_key_pressure(engine: number, key: number, amount: number): void;
   engine_set_volume(engine: number, volume: number): void;
   engine_set_polyphony(engine: number, voices: number): void;
   engine_active_voices(engine: number): number;
@@ -97,6 +99,12 @@ class EngineProcessor extends AudioWorkletProcessor {
         break;
       case 'modulation':
         ex.engine_set_modulation(e, m.amount);
+        break;
+      case 'pressure':
+        ex.engine_set_pressure(e, m.amount);
+        break;
+      case 'keyPressure':
+        ex.engine_set_key_pressure(e, m.key, m.amount);
         break;
       case 'volume':
         ex.engine_set_volume(e, m.volume);

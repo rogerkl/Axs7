@@ -19,6 +19,8 @@ export class Player {
   onNoteOn: (note: number) => void = () => {};
   onBend: (value: number) => void = () => {};
   onModulation: (value: number) => void = () => {};
+  /** aftertouch from MIDI, 0..1, the highest of channel and key pressure */
+  onPressure: (value: number) => void = () => {};
 
   constructor(private store: Store, private engine: AudioEngine) {}
 
@@ -75,6 +77,7 @@ export class Player {
     this.sustained.clear();
     this.pedal = false;
     this.engine.allNotesOff(hard);
+    this.engine.pressure(0);
     this.onNotes(this.down);
   }
 
@@ -106,6 +109,14 @@ export class Player {
         break;
       case 0xe0:
         this.bend(Math.max(-1, ((data[2] << 7) + data[1] - 8192) / 8191));
+        break;
+      case 0xd0: // channel aftertouch, vibrato as deep as each sample's PRESSURE
+        this.engine.pressure(data[1] / 127);
+        this.onPressure(data[1] / 127);
+        break;
+      case 0xa0: // polyphonic aftertouch, the same for one key
+        this.engine.keyPressure(data[1], data[2] / 127);
+        this.onPressure(data[2] / 127);
         break;
       case 0xc0:
         if (data[1] < this.store.programs.length) {

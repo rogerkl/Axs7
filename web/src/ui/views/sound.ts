@@ -1,5 +1,5 @@
 // OUT and LFO: a sample's sound, as on the X7000, where they belong to the sample. OUT is its level, lowpass filter
-// and release, each with how much velocity changes it. LFO is its vibrato.
+// and release, each with how much velocity changes it. LFO is its vibrato, also from MIDI aftertouch.
 
 import type { App, View } from '../../app/app';
 import {
@@ -12,7 +12,8 @@ import { ParamCell } from '../param';
 type SoundSpec = [keyof Sound, string, ((v: number) => string)?];
 
 /** The selected sample's sound settings, with a SAMPLE cell to pick the sample, like the X7000's SAMPLE button */
-function soundView(app: App, className: string, title: string, specs: SoundSpec[], help: string): View {
+function soundView(app: App, className: string, title: string, specs: SoundSpec[], help: string,
+  extra?: { el: HTMLElement; dispose: () => void }): View {
   const { store } = app;
   const body = h('div', { class: 'detail' });
   let cells: ParamCell[] = [];
@@ -42,6 +43,7 @@ function soundView(app: App, className: string, title: string, specs: SoundSpec[
       h('div', { class: 'row' }, picker.el, h('span', { class: 'sample-title' }, s.name)),
       h('div', { class: 'env-title' }, title),
       h('div', { class: 'params' }, ...cells.map((c) => c.el)),
+      ...(extra ? [extra.el] : []),
       h('p', { class: 'info' }, help));
   }
 
@@ -51,7 +53,13 @@ function soundView(app: App, className: string, title: string, specs: SoundSpec[
     store.on('selection', build),
     store.on('sample', () => cells.forEach((c) => c.refresh())),
   ];
-  return { el: h('div', { class: `view ${className}` }, body), dispose: () => off.forEach((f) => f()) };
+  return {
+    el: h('div', { class: `view ${className}` }, body),
+    dispose: () => {
+      off.forEach((f) => f());
+      extra?.dispose();
+    },
+  };
 }
 
 const percent = (v: number) => `${Math.round((v / 99) * 100)}%`;
@@ -70,9 +78,27 @@ export function outView(app: App): View {
 }
 
 export function lfoView(app: App): View {
+  const cents = (v: number) => `±${Math.round(lfoDepth(v) * 100)} CENTS`;
+  // what comes in, to see that the keyboard sends aftertouch at all (the X7000's doesn't)
+  const meter = h('div', { class: 'pressure-meter' }, h('div', { class: 'pressure-fill' }));
+  const value = h('span', { class: 'info' }, 'NONE YET');
+  const previous = app.player.onPressure;
+  app.player.onPressure = (v) => {
+    previous(v);
+    (meter.firstChild as HTMLElement).style.width = `${v * 100}%`;
+    value.textContent = String(Math.round(v * 127));
+  };
   return soundView(app, 'view-lfo', 'LFO', [
     ['lfoSpeed', 'SPEED', (v) => formatHz(lfoRate(v))],
-    ['lfoDepth', 'DEPTH', (v) => `±${Math.round(lfoDepth(v) * 100)} CENTS`],
+    ['lfoDepth', 'DEPTH', cents],
     ['lfoDelay', 'DELAY', (v) => formatSeconds(lfoDelay(v))],
-  ], 'Vibrato, starting DELAY after key on. The modulation wheel adds vibrato too, at the sample\'s speed.');
+    ['pressure', 'PRESSURE', cents], // at full aftertouch
+  ], 'Vibrato, starting DELAY after key on. The modulation wheel adds vibrato too, at the sample\'s speed. '
+    + 'PRESSURE is the X7000\'s pressure sens: MIDI aftertouch (channel or polyphonic) adds vibrato that deep at full '
+    + 'pressure, at once, without the delay.', {
+    el: h('div', { class: 'row' }, h('span', { class: 'param-label' }, 'AFTERTOUCH IN'), meter, value),
+    dispose: () => {
+      app.player.onPressure = previous;
+    },
+  });
 }

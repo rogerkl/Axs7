@@ -192,6 +192,16 @@ export class AudioEngine {
     this.post({ type: 'modulation', amount });
   }
 
+  /** Channel aftertouch, 0..1 */
+  pressure(amount: number): void {
+    this.post({ type: 'pressure', amount });
+  }
+
+  /** Polyphonic aftertouch on a key, 0..1 */
+  keyPressure(key: number, amount: number): void {
+    this.post({ type: 'keyPressure', key, amount });
+  }
+
   volume(volume: number): void {
     this.post({ type: 'volume', volume });
   }

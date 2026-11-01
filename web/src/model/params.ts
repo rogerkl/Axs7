@@ -13,6 +13,7 @@ const VEL_RELEASE = 5;
 const LFO_RATE = 6;
 const LFO_DEPTH = 7;
 const LFO_DELAY = 8;
+const PRESSURE_DEPTH = 9;
 
 /** 0-99 → linear gain */
 export function levelGain(v: number): number {
@@ -60,6 +61,7 @@ export function engineParams(s: Sound): Float32Array {
   out[LFO_RATE] = lfoRate(s.lfoSpeed);
   out[LFO_DEPTH] = lfoDepth(s.lfoDepth);
   out[LFO_DELAY] = lfoDelay(s.lfoDelay);
+  out[PRESSURE_DEPTH] = lfoDepth(s.pressure); // the same scale as the LFO's depth
   return out;
 }
 

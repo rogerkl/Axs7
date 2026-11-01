@@ -23,10 +23,13 @@ pub const LFO_RATE: usize = 6;
 pub const LFO_DEPTH: usize = 7;
 /// seconds after key on before the vibrato starts
 pub const LFO_DELAY: usize = 8;
+/// vibrato depth in semitones at full aftertouch, the X7000's pressure sens (no delay)
+pub const PRESSURE_DEPTH: usize = 9;
 
 pub const DEFAULT_PARAMS: Params = [
     0.5, 0.5, 20000.0, 0.0, // level, velocity to level, cutoff, velocity to filter
     0.3, 0.0, // release, velocity to release
     5.0, 0.0, 0.0, // LFO rate, depth, delay
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    0.0, // aftertouch depth
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
 ];

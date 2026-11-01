@@ -22,6 +22,8 @@ export interface Sound {
   lfoSpeed: number;
   lfoDepth: number;
   lfoDelay: number;
+  /** vibrato depth from MIDI aftertouch, the X7000's pressure sens */
+  pressure: number;
 }
 
 export interface Sample {
