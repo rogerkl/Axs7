@@ -119,3 +119,7 @@ IP the page loads without MIDI. Close the Java tool or a DAW using the MIDI port
 
 The protocol tests use a dump received from a real X7000 and check sent dumps byte for byte against the Java
 version's encoder. The transfer tests run against a simulated sampler that delivers sysex like Chrome does.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
