@@ -1,4 +1,5 @@
-// SAMPLES: the sample memory, and the selected sample's name, loop, rate and transfers.
+// SAMPLES: the sample memory, and the selected sample's name, points, edits and transfers. The edits are settings,
+// the sample is rendered from its original with them whenever they change.
 
 import type { App, View } from '../../app/app';
 import { newKeygroup } from '../../model/mapping';
@@ -6,6 +7,7 @@ import { BANDWIDTHS, MAX_SAMPLES, nearestBandwidth, samplerBandwidth } from '../
 import { crossfadeRoom } from '../../audio/dsp';
 import { samplerFit } from '../../model/convert';
 import { attackRoom, isTwelveBit, portionPeak } from '../../model/edit';
+import { isEdited } from '../../model/recipe';
 import { isLooped } from '../../model/types';
 import type { LoopMode, Sample } from '../../model/types';
 import { h, pickFiles } from '../dom';
@@ -25,6 +27,10 @@ function duration(s: Sample): string {
 }
 
 const khz = (rate: number) => `${(rate / 1000).toFixed(1)}K`;
+/** Samples as ms at the sample's rate */
+const msOf = (s: Sample, samples: number) => Math.round((samples / s.rate) * 1000);
+/** How many samples a fade of ms is, as rendering makes it: no longer than its room */
+const fadeSamples = (s: Sample, ms: number, room: number) => Math.min(room, Math.round((ms / 1000) * s.rate));
 
 /** What the sampler keeps of a sample, for a badge: null if it fits whole */
 function fitText(s: Sample): { text: string; warn: boolean } | null {
@@ -84,144 +90,47 @@ export function samplesView(app: App): View {
       h('span', { class: 'group-title' }, 'SAMPLER'), slot.cell.el, send, receive);
   }
 
-  /**
-   * Resampling to one of the sampler's rates, like on the sampler: to make a sample's rate the sampler's, or to
-   * save space on the sampler with a lower rate. The sample is replaced, keygroups keep playing it at its pitch.
-   */
-  function resampleGroup(s: Sample): HTMLElement {
-    const last = BANDWIDTHS.length - 1;
-    let to = BANDWIDTHS.indexOf(nearestBandwidth(s.rate)); // BANDWIDTHS go from the highest rate down
-    const result = h('span', { class: 'info' });
-    const button = h('button', { class: 'soft', onClick: () => actions.resample(store.samples.get(s.id) ?? s,
-      BANDWIDTHS[to].rate) }, 'RESAMPLE');
-    const describe = () => {
-      const bw = BANDWIDTHS[to];
-      const n = Math.round((s.data.length * bw.rate) / s.rate);
-      const same = Math.abs(bw.rate - s.rate) < 0.01;
-      const fit = samplerFit(store.samples.get(s.id) ?? s, bw.rate);
-      button.disabled = same;
-      result.textContent = same ? 'THE SAMPLE IS AT THIS RATE' : `${n} SAMPLES, `
-        + (!fit.fits ? `THE SAMPLER KEEPS ${fit.maxSeconds.toFixed(2)}S`
-          : fit.limit < s.data.length ? 'FITS TO THE LOOP END' : 'FITS ON THE SAMPLER');
-      result.classList.toggle('warn', !same && !fit.fits);
-    };
-    detailRefresh.push(describe);
-    const cell = new ParamCell({
-      key: 'samples.resampleTo', label: 'TO', min: 0, max: last, coarse: 12, // the rates are a semitone apart
-      get: () => last - to,
-      set: (v) => {
-        to = last - v;
-        describe();
-      },
-      format: (v) => khz(BANDWIDTHS[last - v].rate),
-      detail: (v) => `MAX ${(MAX_SAMPLES / BANDWIDTHS[last - v].rate).toFixed(2)}S`,
-      parse: (text) => {
-        const hz = Number(text.replace(/k$/i, '')) * (/k$/i.test(text) || Number(text) < 100 ? 1000 : 1);
-        return hz > 0 ? last - BANDWIDTHS.indexOf(nearestBandwidth(hz)) : null;
-      },
-    }, 'wide');
-    cell.el.title = 'One of the sampler\'s rates, a semitone apart. Lower rates hold longer samples.';
-    describe();
-    return h('div', { class: 'sampler-group', role: 'group', 'aria-label': 'Resample' },
-      h('span', { class: 'group-title' }, 'RESAMPLE'), cell.el, button, result);
-  }
-
-  /**
-   * Crossfade loop: the end of a forward loop fades into what comes before the loop start, so the jump back to the
-   * start doesn't click. Shown on the waveform while the sample is shown.
-   */
-  function crossfadeGroup(s: Sample): HTMLElement {
-    const { settings } = app;
-    const sample = () => store.samples.get(s.id) ?? s;
-    const room = () => crossfadeRoom(sample());
-    const ms = (samples: number) => Math.round((samples / s.rate) * 1000);
-    const length = () => Math.min(room(), Math.max(1, Math.round((settings.xfadeMs / 1000) * s.rate)));
-    const note = h('span', { class: 'info' });
-    const apply = h('button', { class: 'soft', onClick: () => actions.crossfade(sample(), length(), settings.xfadeShape) },
-      'APPLY');
-    const lengthCell = new ParamCell({
-      key: 'samples.xfadeLength', label: 'LENGTH', min: 1, coarse: 10,
+  /** A fade's length in ms, 0 is off, up to the room there is for it */
+  function fadeLengthCell(key: string, sample: () => Sample, room: () => number, get: () => number,
+    set: (ms: number) => void): ParamCell {
+    const maxMs = () => msOf(sample(), room());
+    return new ParamCell({
+      key, label: 'LENGTH', min: 0, coarse: 10,
       get max() {
-        return Math.max(1, ms(room()));
+        return maxMs();
       },
-      get: () => Math.min(settings.xfadeMs, Math.max(1, ms(room()))),
-      set: (v) => {
-        settings.xfadeMs = v;
-        app.saveSettings();
-        update();
+      get: () => Math.min(get(), maxMs()),
+      set,
+      format: (v) => (v === 0 ? 'OFF' : `${v}MS`),
+      parse: (text) => {
+        const ms = /^off$/i.test(text.trim()) ? 0 : Number(text.trim().replace(/ms$/i, ''));
+        return Number.isFinite(ms) && ms >= 0 ? ms : null;
       },
-      format: (v) => `${v}MS`,
-      parse: (text) => Number(text.replace(/ms$/i, '')) || null,
-      detail: () => `${length()} SMP`,
+      detail: (v) => (v === 0 ? '' : `${fadeSamples(sample(), v, room())} SMP`),
     }, 'wide');
-    const shapeCell = choiceCell('samples.xfadeShape', 'SHAPE', ['linear', 'equal'] as const, ['LIN', 'EQP'],
-      () => settings.xfadeShape, (v) => {
-        settings.xfadeShape = v;
-        app.saveSettings();
-      });
-    shapeCell.el.title = 'LIN for a steady sound, alike on both sides of the seam. EQP (equal power) keeps the level '
-      + 'when the two sides differ, like noise.';
-    const update = () => {
-      const s2 = sample();
-      const ok = s2.loopMode === 'forward' && room() > 0;
-      apply.disabled = !ok;
-      note.textContent = s2.loopMode !== 'forward' ? 'NEEDS A FORWARD LOOP'
-        // reversed, the seam is at the loop start, and the fade takes what comes after the loop end
-        : s2.reverse ? (room() === 0 ? 'MOVE THE LOOP END EARLIER, THE FADE USES WHAT COMES AFTER IT'
-          : `PLAYING BACKWARDS: THE FIRST ${ms(length())}MS OF THE LOOP FADE INTO THE ${ms(length())}MS AFTER ITS END`)
-          : room() === 0 ? 'MOVE THE LOOP START LATER, THE FADE USES WHAT COMES BEFORE IT'
-            : `THE LAST ${ms(length())}MS OF THE LOOP FADE INTO THE ${ms(length())}MS BEFORE ITS START`;
-      wave.setCrossfade(ok ? length() : 0);
-    };
-    update();
-    detailRefresh.push(() => {
-      lengthCell.refresh(); // the room changes with the loop
-      shapeCell.refresh();
-      update();
-    });
-    return h('div', { class: 'sampler-group', role: 'group', 'aria-label': 'Crossfade loop' },
-      h('span', { class: 'group-title' }, 'CROSSFADE'), lengthCell.el, shapeCell.el, apply, note);
   }
 
-  /** An attack rendered into the sample, the X7000 has no attack setting: what is played first fades in */
+  /**
+   * An attack rendered into the sample, the X7000 has no attack setting: what is played first fades in. It has to
+   * end before the loop starts.
+   */
   function attackGroup(s: Sample): HTMLElement {
-    const { settings } = app;
     const sample = () => store.samples.get(s.id) ?? s;
     const room = () => attackRoom(sample());
-    const ms = (samples: number) => Math.round((samples / s.rate) * 1000);
-    const length = () => Math.min(room(), Math.max(1, Math.round((settings.attackMs / 1000) * s.rate)));
     const note = h('span', { class: 'info' });
-    const apply = h('button', { class: 'soft', onClick: () => actions.attack(sample(), length(), settings.attackShape) },
-      'APPLY');
-    const lengthCell = new ParamCell({
-      key: 'samples.attackLength', label: 'LENGTH', min: 1, coarse: 10,
-      get max() {
-        return Math.max(1, ms(room()));
-      },
-      get: () => Math.min(settings.attackMs, Math.max(1, ms(room()))),
-      set: (v) => {
-        settings.attackMs = v;
-        app.saveSettings();
-        update();
-      },
-      format: (v) => `${v}MS`,
-      parse: (text) => Number(text.replace(/ms$/i, '')) || null,
-      detail: () => `${length()} SMP`,
-    }, 'wide');
+    const lengthCell = fadeLengthCell('samples.attackLength', sample, room, () => sample().recipe.attackMs,
+      (attackMs) => store.updateRecipe(s.id, { attackMs }));
     const shapeCell = choiceCell('samples.attackShape', 'SHAPE', ['linear', 'curve'] as const, ['LIN', 'CURVE'],
-      () => settings.attackShape, (v) => {
-        settings.attackShape = v;
-        app.saveSettings();
-        update();
-      });
+      () => sample().recipe.attackShape, (attackShape) => store.updateRecipe(s.id, { attackShape }));
     shapeCell.el.title = 'LIN rises evenly, CURVE starts slower, like an exponential attack';
     const update = () => {
       const now = sample();
-      apply.disabled = room() === 0;
-      note.textContent = room() === 0
-        ? `MOVE THE LOOP ${now.reverse ? 'END EARLIER' : 'START LATER'}, THE ATTACK HAS TO END BEFORE THE LOOP`
-        : `THE FIRST ${ms(length())}MS PLAYED FADE IN FROM SILENCE${now.reverse ? ', BACK FROM END' : ''}`;
-      wave.setAttack(room() > 0 ? length() : 0, settings.attackShape === 'curve');
+      const length = fadeSamples(now, now.recipe.attackMs, room());
+      note.textContent = now.recipe.attackMs === 0 ? 'OFF: THE SAMPLE STARTS AS IT IS'
+        : room() === 0 ? `MOVE THE LOOP ${now.reverse ? 'END EARLIER' : 'START LATER'}, THE ATTACK HAS TO END BEFORE `
+          + 'THE LOOP'
+          : `THE FIRST ${msOf(now, length)}MS PLAYED FADE IN FROM SILENCE${now.reverse ? ', BACK FROM END' : ''}`;
+      wave.setAttack(length, now.recipe.attackShape === 'curve');
     };
     update();
     detailRefresh.push(() => {
@@ -230,35 +139,122 @@ export function samplesView(app: App): View {
       update();
     });
     return h('div', { class: 'sampler-group', role: 'group', 'aria-label': 'Attack' },
-      h('span', { class: 'group-title' }, 'ATTACK'), lengthCell.el, shapeCell.el, apply, note);
+      h('span', { class: 'group-title' }, 'ATTACK'), lengthCell.el, shapeCell.el, note);
   }
 
   /**
-   * What sending does to a sample, done here to hear and edit it that way: normalized, and 12 bit. A 12 bit sample
-   * is sent as it is.
+   * Crossfade loop: the end of a forward loop fades into what comes before the loop start, so the jump back to the
+   * start doesn't click.
+   */
+  function crossfadeGroup(s: Sample): HTMLElement {
+    const sample = () => store.samples.get(s.id) ?? s;
+    const room = () => crossfadeRoom(sample());
+    const note = h('span', { class: 'info' });
+    const lengthCell = fadeLengthCell('samples.xfadeLength', sample, room, () => sample().recipe.crossfadeMs,
+      (crossfadeMs) => store.updateRecipe(s.id, { crossfadeMs }));
+    const shapeCell = choiceCell('samples.xfadeShape', 'SHAPE', ['linear', 'equal'] as const, ['LIN', 'EQP'],
+      () => sample().recipe.crossfadeShape, (crossfadeShape) => store.updateRecipe(s.id, { crossfadeShape }));
+    shapeCell.el.title = 'LIN for a steady sound, alike on both sides of the seam. EQP (equal power) keeps the level '
+      + 'when the two sides differ, like noise.';
+    const update = () => {
+      const now = sample();
+      const length = now.loopMode === 'forward' ? fadeSamples(now, now.recipe.crossfadeMs, room()) : 0;
+      const ms = msOf(now, length);
+      note.textContent = now.recipe.crossfadeMs === 0 ? 'OFF: THE LOOP AS IT IS'
+        : now.loopMode !== 'forward' ? 'NEEDS A FORWARD LOOP'
+          // reversed, the seam is at the loop start, and the fade takes what comes after the loop end
+          : now.reverse ? (room() === 0 ? 'MOVE THE LOOP END EARLIER, THE FADE USES WHAT COMES AFTER IT'
+            : `PLAYING BACKWARDS: THE FIRST ${ms}MS OF THE LOOP FADE INTO THE ${ms}MS AFTER ITS END`)
+            : room() === 0 ? 'MOVE THE LOOP START LATER, THE FADE USES WHAT COMES BEFORE IT'
+              : `THE LAST ${ms}MS OF THE LOOP FADE INTO THE ${ms}MS BEFORE ITS START`;
+      wave.setCrossfade(length);
+    };
+    update();
+    detailRefresh.push(() => {
+      lengthCell.refresh(); // the room changes with the loop
+      shapeCell.refresh();
+      update();
+    });
+    return h('div', { class: 'sampler-group', role: 'group', 'aria-label': 'Crossfade loop' },
+      h('span', { class: 'group-title' }, 'CROSSFADE'), lengthCell.el, shapeCell.el, note);
+  }
+
+  /**
+   * Resampling to one of the sampler's rates, like on the sampler: to make a sample's rate the sampler's, or to
+   * save space on the sampler with a lower rate. OWN keeps the original's rate. The points stay at the same times,
+   * keygroups play the sample at its pitch.
+   */
+  function resampleGroup(s: Sample): HTMLElement {
+    const sample = () => store.samples.get(s.id) ?? s;
+    const last = BANDWIDTHS.length - 1;
+    // 0 is the original's own rate, then the sampler's rates from the lowest up (BANDWIDTHS go from the highest)
+    const rateAt = (v: number) => BANDWIDTHS[last - (v - 1)].rate;
+    const valueOf = (rate: number | null) => (rate === null ? 0 : last - BANDWIDTHS.indexOf(nearestBandwidth(rate)) + 1);
+    const result = h('span', { class: 'info' });
+    const describe = () => {
+      const now = sample();
+      const own = Math.abs(now.rate - now.sourceRate) < 0.01;
+      result.textContent = !own ? `FROM ${khz(now.sourceRate)}: ${now.data.length} SAMPLES`
+        : samplerBandwidth(now.sourceRate) ? `THE ORIGINAL'S RATE, ${now.data.length} SAMPLES`
+          : 'THE ORIGINAL\'S RATE ISN\'T THE SAMPLER\'S, IT IS RESAMPLED WHEN SENT';
+    };
+    const cell = new ParamCell({
+      key: 'samples.resampleTo', label: 'TO', min: 0, max: last + 1, coarse: 12, // the rates are a semitone apart
+      get: () => valueOf(sample().recipe.resampleTo),
+      set: (v) => store.updateRecipe(s.id, { resampleTo: v === 0 ? null : rateAt(v) }),
+      format: (v) => (v === 0 ? 'OWN' : khz(rateAt(v))),
+      detail: (v) => (v === 0 ? khz(sample().sourceRate) : `MAX ${(MAX_SAMPLES / rateAt(v)).toFixed(2)}S`),
+      parse: (text) => {
+        if (/^(own|off)$/i.test(text.trim())) {
+          return 0;
+        }
+        const hz = Number(text.replace(/k$/i, '')) * (/k$/i.test(text) || Number(text) < 100 ? 1000 : 1);
+        return hz > 0 ? valueOf(hz) : null;
+      },
+    }, 'wide');
+    cell.el.title = 'OWN keeps the original\'s rate, or one of the sampler\'s rates, a semitone apart. Lower rates hold '
+      + 'longer samples.';
+    describe();
+    detailRefresh.push(() => {
+      cell.refresh();
+      describe();
+    });
+    return h('div', { class: 'sampler-group', role: 'group', 'aria-label': 'Resample' },
+      h('span', { class: 'group-title' }, 'RESAMPLE'), cell.el, result);
+  }
+
+  /**
+   * What the sampler will have, to hear and edit it that way: normalized, and 12 bit. A sample is sent as it is
+   * here, made 12 bit if it isn't. One from the sampler is sent back as it came.
    */
   function asSentGroup(s: Sample): HTMLElement {
     const sample = () => store.samples.get(s.id) ?? s;
     const status = h('span', { class: 'info' });
-    const normalize = h('button', { class: 'soft', onClick: () => actions.normalize(sample()),
-      title: 'Scale the part between START and END to full level, as sending with NORMALIZE does' }, 'NORMALIZE');
-    const twelve = h('button', { class: 'soft', onClick: () => actions.to12Bit(sample()),
-      title: 'Make the sample 12 bit, as the sampler will have it. Do it last: a 12 bit sample is sent as it is.' },
-    '12 BIT');
+    const cells = s.fromSampler ? [] : [
+      choiceCell('samples.normalize', 'NORMALIZE', ['off', 'on'] as const, ['OFF', 'ON'],
+        () => (sample().recipe.normalize ? 'on' : 'off'), (v) => store.updateRecipe(s.id, { normalize: v === 'on' })),
+      choiceCell('samples.twelveBit', '12 BIT', ['off', 'on'] as const, ['OFF', 'ON'],
+        () => (sample().recipe.twelveBit ? 'on' : 'off'), (v) => store.updateRecipe(s.id, { twelveBit: v === 'on' })),
+    ];
+    if (cells.length) {
+      cells[0].el.title = 'The part between START and END to full level';
+      cells[1].el.title = 'The values the sampler keeps, to hear it as the sampler will have it';
+    }
     const update = () => {
       const now = sample();
-      const level = portionPeak(now);
-      const twelveBit = isTwelveBit(now.data.subarray(now.start, now.end));
-      normalize.disabled = level === 0 || level > 0.999;
-      twelve.disabled = twelveBit;
+      const level = portionPeak(now.data, now.start, now.end);
       const db = 20 * Math.log10(level);
       status.textContent = `PEAK ${level === 0 ? '-∞' : db > -0.05 ? '0.0' : db.toFixed(1)} DB · `
-        + (twelveBit ? '12 BIT, SENT AS IT IS' : 'MADE 12 BIT WHEN SENT');
+        + (now.fromSampler ? 'FROM THE SAMPLER, SENT BACK AS IT CAME'
+          : isTwelveBit(now.data.subarray(now.start, now.end)) ? '12 BIT, SENT AS IT IS' : 'MADE 12 BIT WHEN SENT');
     };
     update();
-    detailRefresh.push(update);
+    detailRefresh.push(() => {
+      cells.forEach((c) => c.refresh());
+      update();
+    });
     return h('div', { class: 'sampler-group', role: 'group', 'aria-label': 'As sent' },
-      h('span', { class: 'group-title' }, 'AS SENT'), normalize, twelve, status);
+      h('span', { class: 'group-title' }, 'AS SENT'), ...cells.map((c) => c.el), status);
   }
 
   wave.onPoint = (which, value) => {
@@ -327,13 +323,19 @@ export function samplesView(app: App): View {
       onChange: () => store.updateSample(id, { name: name.value.trim() || s.name }) });
     const pointCell = (which: PointName, label: string) => {
       const cell = new ParamCell({
-        key: `sample.${which}`, label, min: 0, max: s.data.length, coarse: Math.max(1, Math.round(s.rate / 100)),
+        key: `sample.${which}`, label, min: 0,
+        get max() {
+          return sample().data.length;
+        },
+        get coarse() {
+          return Math.max(1, Math.round(sample().rate / 100));
+        },
         get: () => sample()[which],
         set: (v) => {
           store.updateSample(id, movePoint(sample(), which, v));
           wave.reveal(sample()[which]); // keep it in view when zoomed in
         },
-        detail: (v) => `${(v / s.rate).toFixed(3)}S`,
+        detail: (v) => `${(v / sample().rate).toFixed(3)}S`,
       }, 'wide');
       pointCells[which] = cell;
       return cell;
@@ -350,40 +352,49 @@ export function samplesView(app: App): View {
       pointCell('loopStart', 'LOOP START'),
       pointCell('loopEnd', 'LOOP END'),
     ];
-    const crossfade = crossfadeGroup(s);
-    const lastEdit = actions.lastEdit?.id === s.id ? actions.lastEdit : null;
     const audition = h('button', { class: 'soft', title: 'Hold to play the sample at its own pitch' }, 'PLAY');
     audition.addEventListener('pointerdown', () => actions.auditionStart(sample()));
     for (const type of ['pointerup', 'pointerleave', 'pointercancel']) {
       audition.addEventListener(type, () => actions.auditionStop());
     }
-    const bw = samplerBandwidth(s.rate);
+    const rateBadge = h('span', { class: 'badge' });
     const fitBadge = h('span', { class: 'badge' });
     const length = h('span', { class: 'info' });
-    const trim = h('button', { class: 'soft', onClick: () => actions.trim(sample()),
-      title: 'Keep only the part between START and END, to save memory (UNDO brings the rest back)' }, 'TRIM');
+    const reset = s.fromSampler ? null : h('button', { class: 'soft', onClick: () => actions.resetEdits(sample()),
+      title: 'Back to the original as it was loaded: no resampling, normalizing, 12 bit, attack or crossfade' },
+    'RESET EDITS');
     const showFit = () => {
       const now = sample();
       const fit = fitText(now);
       fitBadge.hidden = !fit;
       fitBadge.textContent = fit?.text ?? '';
       fitBadge.classList.toggle('warn', !!fit?.warn);
-      // the sampler's limit counts from START
+      const bw = samplerBandwidth(now.rate);
+      rateBadge.textContent = bw ? `SAMPLER RATE, ${bw.name.toUpperCase()} BANDWIDTH`
+        : 'NOT A SAMPLER RATE: RESAMPLE, OR IT IS WHEN SENT';
+      rateBadge.classList.toggle('warn', !bw);
       // the sampler's limit counts from where playing starts: START, or END when reversed
       const { limitAt } = samplerFit(now);
       wave.setLimit(now.reverse ? (limitAt > now.start ? limitAt : null) : (limitAt < now.end ? limitAt : null));
-      length.textContent = `${s.rate.toFixed(s.rate % 1 ? 2 : 0)} HZ · `
+      length.textContent = `${now.rate.toFixed(now.rate % 1 ? 2 : 0)} HZ · `
         + (isPortion(now) ? `USING ${duration(now)} OF ${(now.data.length / now.rate).toFixed(2)}S`
           : `${now.data.length} SAMPLES · ${duration(now)}`);
-      trim.disabled = !isPortion(now);
+      if (reset) {
+        reset.disabled = !isEdited(now.recipe);
+      }
     };
     showFit();
     detailRefresh.push(showFit);
+    const edits = s.fromSampler
+      ? [h('p', { class: 'info sampler-note' }, 'FROM THE SAMPLER: IT IS SENT BACK AS IT CAME, SO THE AUDIO ISN\'T '
+        + 'EDITED (NO RESAMPLING, NORMALIZING, ATTACK OR CROSSFADE). THE POINTS, SCAN, DIR AND SOUND CAN BE SET.')]
+      : [attackGroup(s), crossfadeGroup(s), resampleGroup(s)];
     detail.replaceChildren(
       h('div', { class: 'row' }, name,
         length,
-        bw ? h('span', { class: 'badge' }, `SAMPLER RATE, ${bw.name.toUpperCase()} BANDWIDTH`)
-          : h('span', { class: 'badge warn' }, 'NOT A SAMPLER RATE: RESAMPLE, OR IT IS WHEN SENT'),
+        s.fromSampler ? h('span', { class: 'badge', title: 'Received from the sampler, or saved from such a sample' },
+          'FROM THE SAMPLER') : null,
+        rateBadge,
         fitBadge),
       wave.el,
       h('div', { class: 'params' }, ...cells.map((c) => c.el)),
@@ -394,17 +405,15 @@ export function samplesView(app: App): View {
             store.addKeygroup(newKeygroup(id));
             app.lcd.flash(`ADDED TO ${store.program.name}`);
           } }, 'ADD TO PROGRAM'),
-        trim,
-        lastEdit ? h('button', { class: 'soft', onClick: () => actions.undoEdit() }, `UNDO ${lastEdit.what}`) : null,
-        h('button', { class: 'soft', onClick: () => actions.saveWav(sample()) }, 'SAVE WAV'),
+        reset,
+        h('button', { class: 'soft', onClick: () => actions.saveWav(sample()),
+          title: 'The sample as it sounds, with its loop' }, 'SAVE WAV'),
         h('button', { class: 'soft danger', onClick: () => {
           if (confirm(`Delete ${sample().name}?`)) {
             store.removeSample(id);
           }
         } }, 'DELETE')),
-      attackGroup(s),
-      crossfade,
-      resampleGroup(s));
+      ...edits);
     side.replaceChildren(asSentGroup(s), samplerGroup(true));
   }
 
@@ -440,6 +449,13 @@ export function samplesView(app: App): View {
       buildDetail();
     }),
     store.on('sample', refresh),
+    // rendered again: new audio, and new points at a new rate
+    store.on('audio', (id) => {
+      if (id && id === store.selectedSampleId) {
+        wave.setSample(store.selectedSample);
+      }
+      refresh(id);
+    }),
     app.engine.onPositions((bySample) => wave.setHeads(bySample.get(store.selectedSampleId ?? '') ?? [])),
   ];
   detail.dataset.sample = store.selectedSampleId ?? '';

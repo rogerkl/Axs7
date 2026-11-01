@@ -2,16 +2,18 @@
 
 import { newKeygroup, newProgram, normalizeProgram } from './mapping';
 import { normalizeSample } from './points';
-import type { Keygroup, Program, Sample, Sound } from './types';
+import type { Rendered } from './render';
+import type { Keygroup, Program, Recipe, Sample, Sound } from './types';
 
 /**
  * samples, programs and keygroups: the lists changed. sample: one sample's values changed (its id is passed).
+ * audio: one sample's rendered audio changed (its id is passed).
  * program: the current program's values changed. selection: the selected sample or keygroup changed.
  */
-export type StoreEvent = 'samples' | 'sample' | 'programs' | 'program' | 'keygroups' | 'selection';
+export type StoreEvent = 'samples' | 'sample' | 'audio' | 'programs' | 'program' | 'keygroups' | 'selection';
 type Listener = (id?: string) => void;
 
-export type SamplePatch = Partial<Omit<Sample, 'id' | 'data'>>;
+export type SamplePatch = Partial<Omit<Sample, 'id' | 'data' | 'source' | 'sourceRate' | 'recipe' | 'rate'>>;
 
 export class Store {
   samples = new Map<string, Sample>();
@@ -78,13 +80,21 @@ export class Store {
     }
   }
 
-  /** Replaces a sample's audio, as when resampling it. Keygroups keep playing it. */
-  replaceData(id: string, data: Pick<Sample, 'data' | 'rate' | 'start' | 'end' | 'loopStart' | 'loopEnd'>): void {
+  /** Changes how a sample is rendered from its original, it is rendered again */
+  updateRecipe(id: string, patch: Partial<Recipe>): void {
+    const sample = this.samples.get(id);
+    if (sample && !sample.fromSampler) {
+      Object.assign(sample.recipe, patch);
+      this.emit('sample', id);
+    }
+  }
+
+  /** A sample's newly rendered audio, with its points if a new rate moved them */
+  setRendered(id: string, rendered: Rendered): void {
     const sample = this.samples.get(id);
     if (sample) {
-      Object.assign(sample, data);
-      this.emit('sample', id);
-      this.emit('samples');
+      Object.assign(sample, rendered);
+      this.emit('audio', id);
     }
   }
 

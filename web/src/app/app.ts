@@ -4,6 +4,7 @@ import type { Store } from '../model/store';
 import type { Lcd } from '../ui/lcd';
 import type { Actions } from './actions';
 import type { MidiController } from './midi';
+import type { Renderer } from './renderer';
 import type { Settings, ViewName } from './settings';
 
 /** What the views and actions share */
@@ -15,6 +16,7 @@ export interface App {
   settings: Settings;
   midi: MidiController;
   actions: Actions;
+  renderer: Renderer;
   showView(view: ViewName): void;
   saveSettings(): void;
   /** @param slot from 0, the sampler slot transfers use */

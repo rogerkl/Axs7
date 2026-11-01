@@ -13,15 +13,8 @@ export interface Settings {
   slot: number;
   /** how many sample slots the sampler has: 6 on a standard X7000, more with a memory expansion */
   slotCount: number;
-  normalize: boolean;
   /** keep a loaded file's rate, or resample it to the nearest of the sampler's rates */
   loadRate: 'keep' | 'sampler';
-  /** crossfade loop length in ms, and its shape */
-  xfadeMs: number;
-  xfadeShape: 'linear' | 'equal';
-  /** rendered attack length in ms, and its shape */
-  attackMs: number;
-  attackShape: 'linear' | 'curve';
   ackIntervalMs: number;
   lookaheadMs: number;
   fillerPerBlock: number;
@@ -34,8 +27,8 @@ const KEY = 'axs7.settings';
 const VERSION = 2;
 
 const DEFAULTS: Settings = {
-  version: VERSION, midiIn: null, midiOut: null, channel: 0, slot: 0, slotCount: 6, normalize: true,
-  loadRate: 'sampler', xfadeMs: 50, xfadeShape: 'linear', attackMs: 20, attackShape: 'linear', ackIntervalMs: 50, lookaheadMs: 1500, fillerPerBlock: 0, volume: 0.8, polyphony: 16,
+  version: VERSION, midiIn: null, midiOut: null, channel: 0, slot: 0, slotCount: 6,
+  loadRate: 'sampler', ackIntervalMs: 50, lookaheadMs: 1500, fillerPerBlock: 0, volume: 0.8, polyphony: 16,
   view: 'samples',
 };
 

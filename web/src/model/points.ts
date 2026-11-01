@@ -2,6 +2,7 @@
 // at END, only that part is sent to the sampler), the loop is inside them.
 
 import { defaultSound } from './mapping';
+import { plainRecipe } from './recipe';
 import type { Sample } from './types';
 
 export type PointName = 'start' | 'end' | 'loopStart' | 'loopEnd';
@@ -47,6 +48,11 @@ export function normalizeSample(sample: Sample): Sample {
   const len = sample.data.length;
   sample.sound = { ...defaultSound(), ...sample.sound };
   sample.reverse = !!sample.reverse;
+  // from before the original was kept: what it has is its original
+  sample.source ??= sample.data;
+  sample.sourceRate ??= sample.rate;
+  sample.recipe = { ...plainRecipe(), ...sample.recipe };
+  sample.fromSampler = !!sample.fromSampler;
   return Object.assign(sample, order({
     start: sample.start ?? 0, end: sample.end ?? len, loopStart: sample.loopStart, loopEnd: sample.loopEnd,
   }, len));

@@ -1,5 +1,6 @@
 import './style.css';
 import { Actions } from './app/actions';
+import { Renderer } from './app/renderer';
 import type { App, View } from './app/app';
 import { MidiController } from './app/midi';
 import { loadSettings, saveSettings } from './app/settings';
@@ -50,8 +51,12 @@ async function main(): Promise<void> {
   const sectionButtons = new Map<ViewName, ReturnType<typeof panelButton>>();
   const slotListeners = new Set<() => void>();
 
+  const renderer = new Renderer(store, (message) => {
+    midi.logLine(message, 'error');
+    lcd.flash('RENDER FAILED, SEE MIDI');
+  });
   const app: App = {
-    store, engine, player, lcd, settings, midi, actions: null as unknown as Actions,
+    store, engine, player, lcd, settings, midi, renderer, actions: null as unknown as Actions,
     saveSettings: () => saveSettings(settings),
     setSlot(slot) {
       settings.slot = Math.max(0, Math.min(settings.slotCount - 1, slot));
@@ -96,6 +101,7 @@ async function main(): Promise<void> {
     const persistence = await Persistence.open((e) => midi.logLine(`Could not save to the browser: ${e}`, 'warn'));
     const saved = await persistence.load();
     if (saved.samples.length || saved.programs.length) {
+      renderer.adopt(saved.samples); // stored as rendered
       store.replaceAll(saved.samples, saved.programs, saved.programIndex);
     }
     persistence.attach(store);

@@ -96,12 +96,21 @@ export class Waveform {
     return this.to - this.from < this.length;
   }
 
+  /**
+   * Another sample is shown whole. The same sample rendered again keeps the part shown, at a new rate the same
+   * part in time.
+   */
   setSample(sample: Sample | null): void {
-    const fresh = sample?.data !== this.sample?.data; // another sample, or new audio after a resample or trim
+    const before = this.sample;
+    const shownLength = before ? before.data.length : 0;
     this.sample = sample;
-    if (fresh) {
+    if (!sample || sample.id !== before?.id) {
       this.from = 0;
       this.to = Math.max(1, this.length);
+    } else if (sample.data.length !== shownLength && shownLength > 0) {
+      const scale = sample.data.length / shownLength;
+      this.setView(this.from * scale, (this.to - this.from) * scale);
+      return;
     }
     this.draw();
   }

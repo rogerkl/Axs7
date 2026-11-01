@@ -1,17 +1,19 @@
 // Between samples in memory and the sampler's dumps and wav files.
 
 import {
-  MAX_SAMPLES, buildDump, encodeSamples, isOneShot, matchesBandwidth, nearestBandwidth, peak, samplerBandwidth,
+  MAX_SAMPLES, buildDump, encodeSamples, isOneShot, matchesBandwidth, nearestBandwidth, samplerBandwidth,
 } from '../protocol/akai';
 import type { Dump, FillerOptions, ParsedDump } from '../protocol/akai';
 import type { Wav, WavLoop } from '../protocol/wav';
 import { isTwelveBit } from './edit';
 import { defaultSound, newId } from './mapping';
+import { plainRecipe } from './recipe';
 import { isLooped } from './types';
 import type { Sample } from './types';
 
 /**
- * A received dump as a sample. The sampler ends a sample at its loop end, so what comes after it is left out.
+ * A received dump as a sample, marked as from the sampler: it is sent back as it came. The sampler ends a sample at
+ * its loop end, so what comes after it is left out.
  */
 export function sampleFromDump(r: ParsedDump, name: string): Sample {
   const data = r.data ?? new Float32Array(0);
@@ -19,11 +21,16 @@ export function sampleFromDump(r: ParsedDump, name: string): Sample {
   const loopStart = r.loopStart ?? 0;
   const end = loopEnd > 0 ? loopEnd : data.length;
   const oneShot = isOneShot(loopStart, loopEnd);
+  const kept = data.slice(0, end);
   return {
     id: newId(),
     name,
+    source: kept,
+    sourceRate: r.header!.sampleRate,
+    recipe: plainRecipe(),
+    fromSampler: true,
     rate: r.header!.sampleRate,
-    data: data.slice(0, end),
+    data: kept,
     start: 0,
     end,
     loopStart: oneShot ? 0 : loopStart,
@@ -35,17 +42,23 @@ export function sampleFromDump(r: ParsedDump, name: string): Sample {
 }
 
 /**
- * A wav file as a sample, with the first loop of its smpl chunk, or as one shot without one. A wav file only has
- * whole Hz, so a rate that is one of the sampler's (like 39555 for 39555.4) gets the sampler's exact rate.
+ * A wav file as a sample, with the first loop of its smpl chunk, or as one shot without one, without edits. A wav
+ * file only has whole Hz, so a rate that is one of the sampler's (like 39555 for 39555.4) gets the sampler's exact
+ * rate. A file saved from a sample that came from the sampler is marked so again.
  */
 export function sampleFromWav(wav: Wav, name: string): Sample {
   const n = wav.data.length;
   const loop = wav.loops?.[0];
   const loopEnd = loop ? Math.min(loop.end, n) : n;
+  const rate = samplerBandwidth(wav.sampleRate)?.rate ?? wav.sampleRate;
   return {
     id: newId(),
     name,
-    rate: samplerBandwidth(wav.sampleRate)?.rate ?? wav.sampleRate,
+    source: wav.data,
+    sourceRate: rate,
+    recipe: plainRecipe(),
+    fromSampler: !!wav.meta.fromSampler,
+    rate,
     data: wav.data,
     start: 0,
     end: n,
@@ -63,36 +76,6 @@ export function wavLoops(sample: Sample): WavLoop[] {
 }
 
 export type Resampler = (data: Float32Array, fromRate: number, toRate: number) => Promise<Float32Array>;
-
-/** A sample's audio with what depends on it, what resampling, crossfading and trimming change */
-export interface SampleData {
-  data: Float32Array;
-  rate: number;
-  start: number;
-  end: number;
-  loopStart: number;
-  loopEnd: number;
-}
-
-export function sampleData(s: Sample): SampleData {
-  return { data: s.data, rate: s.rate, start: s.start, end: s.end, loopStart: s.loopStart, loopEnd: s.loopEnd };
-}
-
-/** A sample at another rate, with its points moved to the same places in time */
-export async function resampleSample(sample: Sample, toRate: number, resample: Resampler): Promise<SampleData> {
-  const data = await resample(sample.data, sample.rate, toRate);
-  const ratio = toRate / sample.rate;
-  const at = (i: number) => Math.min(Math.round(i * ratio), data.length);
-  return { data, rate: toRate, start: at(sample.start), end: at(sample.end), loopStart: at(sample.loopStart),
-    loopEnd: at(sample.loopEnd) };
-}
-
-/** Keeps only the part between START and END */
-export function trimSample(sample: Sample): SampleData {
-  const { start, end } = sample;
-  return { data: sample.data.slice(start, end), rate: sample.rate, start: 0, end: end - start,
-    loopStart: sample.loopStart - start, loopEnd: sample.loopEnd - start };
-}
 
 export interface SamplerFit {
   /** the rate the sample goes to the sampler at: its own if it is one of the sampler's, else the nearest */
@@ -126,14 +109,14 @@ export function samplerFit(sample: Sample, sendRate = (samplerBandwidth(sample.r
 export interface SendOptions {
   /** from 0 */
   slot: number;
-  normalize: boolean;
   filler?: FillerOptions;
 }
 
 /**
- * Makes the dump to send a sample to the sampler: the part between START and END (the sampler has no start point
- * of its own), resampled to the nearest of its rates (it rounds other rates down and keeps the rest as a fine tune
- * it applies in the wrong direction), truncated to its maximum length.
+ * Makes the dump to send a sample to the sampler: the part between START and END of the rendered audio (the sampler
+ * has no start point of its own), resampled to the nearest of its rates if it isn't at one (it rounds other rates
+ * down and keeps the rest as a fine tune it applies in the wrong direction), truncated to its maximum length.
+ * It is sent as it sounds: normalizing is the recipe's, not done again here.
  *
  * @returns the dump and notes about what had to be changed
  */
@@ -182,8 +165,7 @@ export async function dumpFromSample(sample: Sample, options: SendOptions, resam
     codes = Uint16Array.from(slice, (v) => Math.round(v * 2048) + 2048);
     notes.push('Already 12 bit, sent as it is');
   } else {
-    const max = peak(slice);
-    codes = encodeSamples(slice, options.normalize && max > 0 ? 1 / max : 1);
+    codes = encodeSamples(slice);
   }
   const dump = buildDump({
     slot: options.slot, sampleRate: bw.rate, numSamples: n, loopStart, loopEnd,

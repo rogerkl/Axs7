@@ -2,11 +2,14 @@ import { describe, expect, test } from 'vitest';
 import type { AudioEngine } from '../src/audio/engine';
 import { Player } from '../src/audio/player';
 import { defaultSound, newKeygroup } from '../src/model/mapping';
+import { plainRecipe } from '../src/model/recipe';
 import { Store } from '../src/model/store';
 import type { Sample } from '../src/model/types';
 
-const sample: Sample = { id: 's', name: 'S', rate: 44100, data: new Float32Array(100), start: 0, end: 100,
-  loopStart: 0, loopEnd: 100, loopMode: 'off', reverse: false, sound: defaultSound() };
+const data = new Float32Array(100);
+const sample: Sample = { id: 's', name: 'S', source: data, sourceRate: 44100, recipe: plainRecipe(), fromSampler: false,
+  rate: 44100, data, start: 0, end: 100, loopStart: 0, loopEnd: 100, loopMode: 'off', reverse: false,
+  sound: defaultSound() };
 
 function setup() {
   const store = new Store();

@@ -26,12 +26,37 @@ export interface Sound {
   pressure: number;
 }
 
+/**
+ * How a sample is rendered from its original. Edits are settings, the original is never changed: a change renders
+ * the sample again from it, in the order resample, normalize, crossfade, attack, 12 bit.
+ */
+export interface Recipe {
+  /** the rate to resample to, null keeps the original's */
+  resampleTo: number | null;
+  /** the part between START and END to full level */
+  normalize: boolean;
+  /** the values the sampler keeps */
+  twelveBit: boolean;
+  /** a fade in of what is played first, the X7000 has no attack: ms, 0 for none */
+  attackMs: number;
+  attackShape: 'linear' | 'curve';
+  /** a forward loop's end faded into what comes before its start: ms, 0 for none */
+  crossfadeMs: number;
+  crossfadeShape: 'linear' | 'equal';
+}
+
 export interface Sample {
   id: string;
   name: string;
-  /** the sample's own rate, kept as loaded or received */
+  /** the audio as loaded or received, never changed */
+  source: Float32Array;
+  sourceRate: number;
+  recipe: Recipe;
+  /** received from the sampler: sent back as it came, so its recipe isn't applied. Kept in its wav files too. */
+  fromSampler: boolean;
+  /** the rate of `data` */
   rate: number;
-  /** mono, -1..1 */
+  /** rendered from the original by the recipe, mono, -1..1: what plays and is sent. The points are in its samples. */
   data: Float32Array;
   /** where playing starts, the part from here to END is what is used and sent to the sampler */
   start: number;

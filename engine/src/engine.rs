@@ -52,9 +52,13 @@ impl Engine {
         }
     }
 
-    /// Replaces the sample with this id, voices playing the old one stop
+    /// Replaces the sample with this id. Voices playing it go on with the new audio if it is as long and at the same
+    /// rate (an edit, like a crossfade, can be heard while a note is held), else they stop.
     pub fn set_sample(&mut self, id: u32, data: Vec<f32>, rate: f32) {
-        self.stop_sample(id);
+        let same_shape = self.samples.get(&id).is_some_and(|old| old.data.len() == data.len() && old.rate == rate);
+        if !same_shape {
+            self.stop_sample(id);
+        }
         self.samples.insert(id, SampleData { data, rate });
     }
 
@@ -330,6 +334,19 @@ mod tests {
         let out = render(&mut engine, 0.5);
         assert!(out[1000] > 0.9 && out[20000] < out[1000] && out[20000] > 0.5, "{} {}", out[1000], out[20000]);
         assert!(engine.positions()[2] < 30000, "the head moves down from the end");
+    }
+
+    #[test]
+    fn notes_go_on_when_the_audio_is_replaced_by_audio_as_long() {
+        let mut engine = engine_with_sine(40000);
+        engine.note_on(note(60, 1.0, LoopMode::Off, 40000));
+        render(&mut engine, 0.05);
+        engine.set_sample(1, vec![0.25; 40000], 39555.4);
+        let out = render(&mut engine, 0.05);
+        assert_eq!(engine.active_voices(), 1, "the same length: it plays on");
+        assert!((out[out.len() - 1] - 0.25 * DEFAULT_PARAMS[LEVEL]).abs() < 0.01, "with the new audio");
+        engine.set_sample(1, vec![0.25; 20000], 39555.4);
+        assert_eq!(engine.active_voices(), 0, "another length: it stops");
     }
 
     #[test]

@@ -1,15 +1,10 @@
 // What the panel buttons do: load files, transfers with the sampler, banks.
 
 import { decodeAudioFile, resampleInBrowser } from '../audio/decode';
-import { getDsp } from '../audio/dsp';
-import type { AttackShape, FadeShape } from '../audio/dsp';
-import { normalizeLevel, quantize12 } from '../model/edit';
 import { bankToZip, zipToBank } from '../model/bank';
-import {
-  dumpFromSample, resampleSample, sampleData, sampleFromDump, sampleFromWav, trimSample, wavLoops,
-} from '../model/convert';
-import type { SampleData } from '../model/convert';
+import { dumpFromSample, sampleFromDump, sampleFromWav, wavLoops } from '../model/convert';
 import { defaultSound, newId } from '../model/mapping';
+import { plainRecipe } from '../model/recipe';
 import type { Sample } from '../model/types';
 import { receiveDump, transmitDump } from '../midi/transfer';
 import { readWav, encodeWav } from '../protocol/wav';
@@ -27,9 +22,6 @@ export class Actions {
   private abort: AbortController | null = null;
   /** when the ACKs scheduled by the last receive have gone out */
   private acksUntil = 0;
-  /** the sample as it was before the last edit (resample or crossfade), for undo */
-  lastEdit: { id: string; what: 'RESAMPLE' | 'CROSSFADE' | 'TRIM' | 'NORMALIZE' | '12 BIT' | 'ATTACK';
-    before: SampleData; } | null = null;
   onBusy: () => void = () => {};
 
   constructor(private app: App) {}
@@ -39,29 +31,36 @@ export class Actions {
     this.onBusy();
   }
 
+  /**
+   * Loads audio files as samples. The file is kept as the original; what is loaded starts out normalized, and at
+   * the nearest of the sampler's rates with RATE ON LOAD = SAMPLER, as edits that can be changed. A wav file saved
+   * from a sample that came from the sampler is marked as such again, and isn't edited.
+   */
   async loadFiles(files: File[]): Promise<void> {
-    const { store, lcd } = this.app;
+    const { store, lcd, renderer } = this.app;
     let loaded = 0;
     for (const file of files) {
       const name = store.uniqueSampleName(file.name.replace(/\.[^.]+$/, ''));
       try {
         const buffer = await file.arrayBuffer();
         const wav = readWav(buffer);
-        const toSampler = this.app.settings.loadRate === 'sampler';
         let sample: Sample;
         if (wav) {
           sample = sampleFromWav(wav, name);
-          if (toSampler && !samplerBandwidth(sample.rate)) {
-            const to = nearestBandwidth(sample.rate);
-            Object.assign(sample, await resampleSample(sample, to.rate, resampleInBrowser));
-            this.app.midi.logLine(`${name}: resampled from ${wav.sampleRate} to ${to.rate} Hz (${to.name}) on load`);
-          }
         } else {
-          // the browser's decoder resamples anyway, straight to the sampler's highest rate if asked to
-          const { rate, data } = await decodeAudioFile(buffer, toSampler ? nearestBandwidth(44100).rate : 44100);
-          sample = { id: newId(), name, rate, data, start: 0, end: data.length, loopStart: 0, loopEnd: data.length,
-            loopMode: 'off', reverse: false, sound: defaultSound() };
+          const { rate, data } = await decodeAudioFile(buffer);
+          sample = { id: newId(), name, source: data, sourceRate: rate, recipe: plainRecipe(), fromSampler: false,
+            rate, data, start: 0, end: data.length, loopStart: 0, loopEnd: data.length, loopMode: 'off',
+            reverse: false, sound: defaultSound() };
         }
+        if (!sample.fromSampler) {
+          sample.recipe.normalize = true;
+          if (this.app.settings.loadRate === 'sampler' && !samplerBandwidth(sample.sourceRate)) {
+            sample.recipe.resampleTo = nearestBandwidth(sample.sourceRate).rate;
+          }
+          Object.assign(sample, await renderer.render(sample));
+        }
+        renderer.adopt([sample]);
         store.addSample(sample);
         loaded++;
       } catch (e) {
@@ -74,121 +73,10 @@ export class Actions {
     }
   }
 
-  /**
-   * Resamples a sample to another rate in place, like the resample function on a sampler: to make it one of the
-   * sampler's rates, or to save space on the sampler with a lower one. Keygroups keep playing it at the same pitch.
-   */
-  async resample(sample: Sample, toRate: number): Promise<void> {
-    const { store, lcd } = this.app;
-    if (Math.abs(sample.rate - toRate) < 0.01) {
-      lcd.flash('ALREADY AT THAT RATE');
-      return;
-    }
-    lcd.hold(`RESAMPLING ${sample.name}`);
-    try {
-      const before = sampleData(sample);
-      const after = await resampleSample(sample, toRate, resampleInBrowser);
-      this.lastEdit = { id: sample.id, what: 'RESAMPLE', before };
-      store.replaceData(sample.id, after);
-      lcd.release();
-      lcd.flash(`RESAMPLED TO ${(toRate / 1000).toFixed(1)}KHZ`);
-    } catch (e) {
-      lcd.release();
-      this.app.midi.logLine(`Could not resample ${sample.name}: ${errorText(e)}`, 'error');
-      lcd.flash('RESAMPLE FAILED');
-    }
-  }
-
-  /**
-   * Crossfades a forward loop's end into what comes before its start, so the loop has no click (the Java tool's
-   * X-fade). Done in Rust, see engine/src/dsp.rs.
-   *
-   * @param length in samples
-   */
-  async crossfade(sample: Sample, length: number, shape: FadeShape): Promise<void> {
-    const { store, lcd } = this.app;
-    if (sample.loopMode !== 'forward') {
-      lcd.flash('NEEDS A FORWARD LOOP');
-      return;
-    }
-    try {
-      const dsp = await getDsp();
-      // reversed, the seam is at the loop start: crossfade the sample mirrored, and mirror it back
-      const n = sample.data.length;
-      const r = sample.reverse
-        ? dsp.crossfadeLoop(sample.data.slice().reverse(), n - sample.loopEnd, n - sample.loopStart, length, shape)
-        : dsp.crossfadeLoop(sample.data, sample.loopStart, sample.loopEnd, length, shape);
-      if (sample.reverse) {
-        r.data.reverse();
-      }
-      if (r.length === 0) {
-        lcd.flash('NO ROOM FOR A CROSSFADE');
-        return;
-      }
-      const before = sampleData(sample);
-      this.lastEdit = { id: sample.id, what: 'CROSSFADE', before };
-      store.replaceData(sample.id, { ...before, data: r.data });
-      lcd.flash(`CROSSFADED ${Math.round((r.length / sample.rate) * 1000)}MS`);
-    } catch (e) {
-      this.app.midi.logLine(`Could not crossfade ${sample.name}: ${errorText(e)}`, 'error');
-      lcd.flash('CROSSFADE FAILED');
-    }
-  }
-
-  /** Keeps only the part between START and END, to save memory. UNDO brings the rest back. */
-  trim(sample: Sample): void {
-    if (sample.start === 0 && sample.end === sample.data.length) {
-      this.app.lcd.flash('NOTHING TO TRIM');
-      return;
-    }
-    this.lastEdit = { id: sample.id, what: 'TRIM', before: sampleData(sample) };
-    this.app.store.replaceData(sample.id, trimSample(sample));
-    this.app.lcd.flash(`TRIMMED TO ${(sample.data.length / sample.rate).toFixed(2)}S`);
-  }
-
-  /** Applies an edit to a sample, so UNDO can bring it back */
-  private apply(sample: Sample, what: NonNullable<Actions['lastEdit']>['what'], after: SampleData, message: string): void {
-    this.lastEdit = { id: sample.id, what, before: sampleData(sample) };
-    this.app.store.replaceData(sample.id, after);
-    this.app.lcd.flash(message);
-  }
-
-  /** Scales the part between START and END to full level, as sending with NORMALIZE does */
-  normalize(sample: Sample): void {
-    this.apply(sample, 'NORMALIZE', normalizeLevel(sample), 'NORMALIZED');
-  }
-
-  /** Makes the sample 12 bit, to hear and edit it as the sampler will have it */
-  to12Bit(sample: Sample): void {
-    this.apply(sample, '12 BIT', quantize12(sample), 'NOW 12 BIT');
-  }
-
-  /**
-   * Renders an attack into the sample, the X7000 has no attack setting: fades in what is played first, from START,
-   * or from END when reversed.
-   *
-   * @param length in samples
-   */
-  async attack(sample: Sample, length: number, shape: AttackShape): Promise<void> {
-    try {
-      const dsp = await getDsp();
-      const r = dsp.fadeIn(sample.data, sample.reverse ? sample.end - 1 : sample.start, length, shape, sample.reverse);
-      this.apply(sample, 'ATTACK', { ...sampleData(sample), data: r.data },
-        `ATTACK ${Math.round((r.length / sample.rate) * 1000)}MS`);
-    } catch (e) {
-      this.app.midi.logLine(`Could not render the attack of ${sample.name}: ${errorText(e)}`, 'error');
-      this.app.lcd.flash('ATTACK FAILED');
-    }
-  }
-
-  /** Undoes the last edit of a sample */
-  undoEdit(): void {
-    const undo = this.lastEdit;
-    if (undo && this.app.store.samples.has(undo.id)) {
-      this.lastEdit = null;
-      this.app.store.replaceData(undo.id, undo.before);
-      this.app.lcd.flash(`${undo.what} UNDONE`);
-    }
+  /** Back to the original, without edits */
+  resetEdits(sample: Sample): void {
+    this.app.store.updateRecipe(sample.id, plainRecipe());
+    this.app.lcd.flash('EDITS OFF');
   }
 
   /** Stops waiting for a transfer. A sent dump can't be called back, it is with the MIDI driver. */
@@ -290,7 +178,7 @@ export class Actions {
     try {
       lcd.hold(`PREPARING ${sample.name}`);
       const { dump, notes } = await dumpFromSample(sample,
-        { slot, normalize: settings.normalize, filler: { fillerPerBlock: settings.fillerPerBlock } }, resampleInBrowser);
+        { slot, filler: { fillerPerBlock: settings.fillerPerBlock } }, resampleInBrowser);
       for (const note of notes) {
         midi.logLine(`${sample.name}: ${note}`);
       }
@@ -334,8 +222,10 @@ export class Actions {
     this.app.engine.noteOff(AUDITION_KEY);
   }
 
+  /** The sample as it plays, with its loop, and marked if it came from the sampler */
   saveWav(sample: Sample): void {
-    download(encodeWav(sample.data, sample.rate, wavLoops(sample)), `${sample.name}.wav`, 'audio/wav');
+    download(encodeWav(sample.data, sample.rate, wavLoops(sample), sample.fromSampler ? { fromSampler: true } : undefined),
+      `${sample.name}.wav`, 'audio/wav');
   }
 
   saveBank(): void {
@@ -350,6 +240,7 @@ export class Actions {
     const { store, lcd } = this.app;
     try {
       const bank = zipToBank(new Uint8Array(await file.arrayBuffer()));
+      this.app.renderer.adopt(bank.samples); // they come rendered
       if (store.samples.size > 0 && !confirm(`Load ${file.name}? It replaces the samples and programs in memory.`)) {
         return;
       }

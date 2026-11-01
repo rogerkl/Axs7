@@ -2,6 +2,9 @@
 //
 // The reader decodes the audio itself instead of using decodeAudioData, which resamples to the AudioContext's
 // rate: samples are kept at their own rate.
+//
+// An "axs7" chunk carries what this sampler knows about the sample, like that it came from the sampler. Other
+// programs skip chunks they don't know.
 
 export interface WavLoop {
   /** first sample in the loop */
@@ -9,6 +12,12 @@ export interface WavLoop {
   /** after the last sample in the loop (in the smpl chunk it is the last sample) */
   end: number;
   alternating: boolean;
+}
+
+/** What an axs7 chunk says */
+export interface WavMeta {
+  /** received from the sampler, to be sent back as it came */
+  fromSampler?: boolean;
 }
 
 export interface Wav {
@@ -19,19 +28,24 @@ export interface Wav {
   data: Float32Array;
   /** null without a smpl chunk, empty for a smpl chunk without loops (one shot) */
   loops: WavLoop[] | null;
+  meta: WavMeta;
 }
 
 /**
  * @param data mono samples, -1..1
  * @param sampleRate stored rounded to whole Hz, the exact rate is kept as the period in the smpl chunk
  * @param loops empty for a one shot sample
- * @returns 16 bit PCM wav
+ * @param meta written in an axs7 chunk if given
+ * @returns 16 bit PCM wav, scaled by 32768 so 12 bit values come back exact
  */
-export function encodeWav(data: ArrayLike<number>, sampleRate: number, loops: WavLoop[]): Uint8Array {
+export function encodeWav(data: ArrayLike<number>, sampleRate: number, loops: WavLoop[], meta?: WavMeta): Uint8Array {
   const dataSize = data.length * 2;
   const smplSize = 36 + 24 * loops.length;
   const dataPad = dataSize & 1;
-  const size = 12 + (8 + 16) + (8 + dataSize + dataPad) + (8 + smplSize);
+  const metaBytes = meta ? new TextEncoder().encode(JSON.stringify(meta)) : null;
+  const metaPad = metaBytes ? metaBytes.length & 1 : 0;
+  const size = 12 + (8 + 16) + (8 + dataSize + dataPad) + (8 + smplSize)
+    + (metaBytes ? 8 + metaBytes.length + metaPad : 0);
   const buffer = new ArrayBuffer(size);
   const view = new DataView(buffer);
   let pos = 0;
@@ -61,8 +75,7 @@ export function encodeWav(data: ArrayLike<number>, sampleRate: number, loops: Wa
   str('data');
   u32(dataSize);
   for (let i = 0; i < data.length; i++) {
-    const v = Math.max(-1, Math.min(1, data[i]));
-    view.setInt16(pos, Math.round(v * 32767), true);
+    view.setInt16(pos, Math.max(-32768, Math.min(32767, Math.round(data[i] * 32768))), true);
     pos += 2;
   }
   pos += dataPad;
@@ -85,6 +98,11 @@ export function encodeWav(data: ArrayLike<number>, sampleRate: number, loops: Wa
     u32(0); // fraction
     u32(0); // play count, 0 = forever
   });
+  if (metaBytes) {
+    str('axs7');
+    u32(metaBytes.length);
+    new Uint8Array(buffer, pos, metaBytes.length).set(metaBytes);
+  }
   return new Uint8Array(buffer);
 }
 
@@ -110,6 +128,7 @@ export function readWav(buffer: ArrayBuffer): Wav | null {
   let dataOffset = -1;
   let dataSize = 0;
   let loops: WavLoop[] | null = null;
+  let meta: WavMeta = {};
   let pos = 12;
   while (pos + 8 <= buffer.byteLength) {
     const id = tag(pos);
@@ -126,6 +145,12 @@ export function readWav(buffer: ArrayBuffer): Wav | null {
     } else if (id === 'data') {
       dataOffset = body;
       dataSize = Math.min(size, buffer.byteLength - body); // some writers leave the size wrong
+    } else if (id === 'axs7' && body + size <= buffer.byteLength) {
+      try {
+        meta = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, body, size))) as WavMeta;
+      } catch {
+        // not ours after all
+      }
     } else if (id === 'smpl' && size >= 36 && body + size <= buffer.byteLength) {
       const count = Math.min(view.getUint32(body + 28, true), Math.floor((size - 36) / 24));
       loops = [];
@@ -156,7 +181,7 @@ export function readWav(buffer: ArrayBuffer): Wav | null {
     }
     data[f] = sum / channels;
   }
-  return { sampleRate, channels, data, loops };
+  return { sampleRate, channels, data, loops, meta };
 }
 
 function sampleReader(view: DataView, format: number, bits: number): (offset: number) => number {

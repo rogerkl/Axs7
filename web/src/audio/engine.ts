@@ -25,6 +25,8 @@ export class AudioEngine {
 
   constructor(private store: Store) {
     store.on('samples', () => this.syncSamples());
+    // newly rendered audio replaces the old, notes play on if it is as long
+    store.on('audio', () => this.syncSamples());
     // a sample's sound (OUT and LFO) can change, cheap to send on any change of the sample
     store.on('sample', (id) => {
       const sample = id && store.samples.get(id);

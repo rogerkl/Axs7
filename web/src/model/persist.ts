@@ -15,6 +15,8 @@ const PROGRAMS_STORAGE = 'axs7.programs';
 interface ProgramsRecord {
   programs: Program[];
   programIndex: number;
+  /** the samples' ids in memory order, IndexedDB gives them back by id */
+  sampleOrder?: string[];
 }
 
 function request<T>(r: IDBRequest<T>): Promise<T> {
@@ -54,18 +56,22 @@ export class Persistence {
     const record = readPrograms()
       ?? await request(tx.objectStore(META).get(PROGRAMS_KEY) as IDBRequest<ProgramsRecord | undefined>);
     this.saved = new Set(samples.map((s) => s.id));
+    const order = new Map((record?.sampleOrder ?? []).map((id, i) => [id, i]));
+    samples.sort((a, b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity));
     return { samples, programs: record?.programs ?? [], programIndex: record?.programIndex ?? 0 };
   }
 
   /** Saves the store's changes from now on */
   attach(store: Store): void {
     store.on('samples', () => this.syncSamples(store));
-    store.on('sample', (id) => id && this.later(`sample:${id}`, () => {
-      const sample = store.samples.get(id);
-      return sample ? this.putSample(sample) : Promise.resolve();
-    }));
+    for (const event of ['sample', 'audio'] as const) {
+      store.on(event, (id) => id && this.later(`sample:${id}`, () => {
+        const sample = store.samples.get(id);
+        return sample ? this.putSample(sample) : Promise.resolve();
+      }));
+    }
     const programs = () => this.later('programs', () => this.putPrograms(store));
-    for (const event of ['programs', 'program', 'keygroups'] as const) {
+    for (const event of ['programs', 'program', 'keygroups', 'samples'] as const) {
       store.on(event, programs);
     }
     // saves waiting for changes to settle would be lost when the page closes
@@ -123,7 +129,8 @@ export class Persistence {
   }
 
   private async putPrograms(store: Store): Promise<void> {
-    const record: ProgramsRecord = { programs: store.programs, programIndex: store.programIndex };
+    const record: ProgramsRecord = { programs: store.programs, programIndex: store.programIndex,
+      sampleOrder: [...store.samples.keys()] };
     localStorage.setItem(PROGRAMS_STORAGE, JSON.stringify(record));
   }
 }

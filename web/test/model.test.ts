@@ -1,23 +1,25 @@
+import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { describe, expect, test } from 'vitest';
 import { BW16, MAX_SAMPLES, decodeHeader, encodeSamples, parseDump, samplerBandwidth } from '../src/protocol/akai';
 import { encodeWav, readWav } from '../src/protocol/wav';
 import { bankToZip, zipToBank } from '../src/model/bank';
-import {
-  dumpFromSample, resampleSample, sampleFromDump, sampleFromWav, samplerFit, trimSample,
-} from '../src/model/convert';
+import { dumpFromSample, sampleFromDump, sampleFromWav, samplerFit } from '../src/model/convert';
 import { defaultSound, newKeygroup, newProgram, normalizeProgram, voicesFor } from '../src/model/mapping';
 import { noteName, parseNote } from '../src/model/notes';
 import { cutoffHz, engineParams, lfoRate, releaseTime } from '../src/model/params';
 import { isPortion, movePoint, normalizeSample } from '../src/model/points';
-import { attackRoom, isTwelveBit, normalizeLevel, portionPeak, quantize12, to12BitCode } from '../src/model/edit';
+import { attackRoom, isTwelveBit, normalizeData, portionPeak, quantize12Data, to12BitCode } from '../src/model/edit';
+import { isEdited, plainRecipe } from '../src/model/recipe';
 import { Store } from '../src/model/store';
 import type { Sample } from '../src/model/types';
 import { fixture, testSine } from './helpers';
 
 const sample = (overrides: Partial<Sample> = {}): Sample => {
   const data = overrides.data ?? Float32Array.from(testSine());
-  return { id: 's1', name: 'SINE', rate: BW16.rate, data, start: 0, end: data.length, loopStart: 0, loopEnd: 5900,
-    loopMode: 'forward', reverse: false, sound: defaultSound(), ...overrides };
+  const rate = overrides.rate ?? BW16.rate;
+  return { id: 's1', name: 'SINE', source: data, sourceRate: rate, recipe: plainRecipe(), fromSampler: false, rate,
+    data, start: 0, end: data.length, loopStart: 0, loopEnd: 5900, loopMode: 'forward', reverse: false,
+    sound: defaultSound(), ...overrides };
 };
 
 describe('notes', () => {
@@ -150,7 +152,7 @@ describe('convert', () => {
   test('a sample at a sampler rate is sent as the Java version sends it', async () => {
     const noResample = () => Promise.reject(new Error('should not resample'));
     const { dump, notes } = await dumpFromSample(sample({ data: Float32Array.from(testSine()) }),
-      { slot: 0, normalize: false }, noResample);
+      { slot: 0 }, noResample);
     expect(notes).toEqual(['The sampler ends the sample at the loop end, it drops the rest']);
     // the float32 data encodes to the same codes as the Java doubles nearly everywhere
     const sent = parseDump(dump.bytes).codes!.subarray(0, 6000);
@@ -167,7 +169,7 @@ describe('convert', () => {
     };
     const s = sample({ rate: 44100, data: new Float32Array(44100), loopStart: 4410, loopEnd: 44100,
       loopMode: 'alternating' });
-    const { dump, notes } = await dumpFromSample(s, { slot: 3, normalize: true }, resample);
+    const { dump, notes } = await dumpFromSample(s, { slot: 3 }, resample);
     expect(calls).toEqual([[44100, BW16.rate]]);
     const h = decodeHeader(dump.bytes);
     expect(h).toMatchObject({ slot: 3, period: 25281, totalWords: MAX_SAMPLES, alternating: true });
@@ -176,7 +178,7 @@ describe('convert', () => {
     expect(notes[0]).toMatch(/Resampled from 44100/);
     expect(notes[1]).toMatch(/Truncated/);
 
-    const oneShot = await dumpFromSample(sample({ loopMode: 'off' }), { slot: 0, normalize: true }, resample);
+    const oneShot = await dumpFromSample(sample({ loopMode: 'off' }), { slot: 0 }, resample);
     expect(decodeHeader(oneShot.dump.bytes)).toMatchObject({ loopStart: 6000, loopEnd: 6000 });
   });
 
@@ -217,22 +219,28 @@ describe('sampler rates and resampling', () => {
     expect(samplerFit(cd, 22199.53)).toMatchObject({ fits: true });
   });
 
-  test('resampling moves the loop to the same time', async () => {
-    const s = sample({ rate: 44100, data: new Float32Array(44100), loopStart: 4410, loopEnd: 44100 });
-    const halve = async (data: Float32Array) => new Float32Array(data.length / 2);
-    expect(await resampleSample(s, 22050, halve)).toMatchObject({ rate: 22050, loopStart: 2205, loopEnd: 22050 });
-  });
-
-  test('replacing a sample\'s audio keeps its keygroups, and tells the engine and the views', () => {
+  test('edits go to the recipe and new audio comes as its own event, keygroups keep the sample', () => {
     const store = new Store();
     store.addSample(sample());
     const events: string[] = [];
     store.on('sample', (id) => events.push(`sample ${id}`));
+    store.on('audio', (id) => events.push(`audio ${id}`));
     store.on('samples', () => events.push('samples'));
-    store.replaceData('s1', { data: new Float32Array(10), rate: 22199.53, start: 0, end: 10, loopStart: 1, loopEnd: 9 });
-    expect(events).toEqual(['sample s1', 'samples']);
-    expect(store.samples.get('s1')).toMatchObject({ rate: 22199.53, loopStart: 1, loopEnd: 9, name: 'SINE' });
+    store.updateRecipe('s1', { normalize: true, attackMs: 20 });
+    expect(isEdited(store.samples.get('s1')!.recipe)).toBe(true);
+    store.setRendered('s1', { data: new Float32Array(10), rate: 22199.53, start: 0, end: 10, loopStart: 1, loopEnd: 9 });
+    expect(events).toEqual(['sample s1', 'audio s1']);
+    expect(store.samples.get('s1')).toMatchObject({ rate: 22199.53, loopStart: 1, loopEnd: 9, name: 'SINE',
+      sourceRate: BW16.rate });
+    expect(store.samples.get('s1')!.source.length).toBe(6000); // the original stays
     expect(store.program.keygroups[0].sampleId).toBe('s1');
+  });
+
+  test('a sample from the sampler takes no edits', () => {
+    const store = new Store();
+    store.addSample(sample({ fromSampler: true }));
+    store.updateRecipe('s1', { normalize: true });
+    expect(store.samples.get('s1')!.recipe).toEqual(plainRecipe());
   });
 });
 
@@ -260,19 +268,10 @@ describe('start and end points', () => {
     expect(isPortion(old)).toBe(false);
   });
 
-  test('trim keeps the part between START and END, with the loop in the same place', () => {
-    const data = Float32Array.from({ length: 1000 }, (_, i) => i);
-    const t = trimSample(sample({ data, start: 100, end: 900, loopStart: 300, loopEnd: 700 }));
-    expect(t).toMatchObject({ start: 0, end: 800, loopStart: 200, loopEnd: 600 });
-    expect(t.data.length).toBe(800);
-    expect(t.data[0]).toBe(100);
-    expect(t.data[t.loopStart]).toBe(300);
-  });
-
   test('only the part from START to END is sent, the loop counted from START', async () => {
     const data = Float32Array.from(testSine(BW16.rate, 6000));
     const { dump, notes } = await dumpFromSample(sample({ data, start: 1000, end: 5000, loopStart: 2000,
-      loopEnd: 4500 }), { slot: 0, normalize: false }, () => Promise.reject(new Error('no resampling')));
+      loopEnd: 4500 }), { slot: 0 }, () => Promise.reject(new Error('no resampling')));
     expect(decodeHeader(dump.bytes)).toMatchObject({ totalWords: 4000 + 200, loopStart: 1000, loopEnd: 3500 });
     expect(parseDump(dump.bytes).codes!.subarray(0, 4000)).toEqual(encodeSamples(data.subarray(1000, 5000)));
     expect(notes[0]).toMatch(/START to END/);
@@ -281,7 +280,7 @@ describe('start and end points', () => {
   test('a reversed sample is sent reversed, with its loop mirrored, to play forward on the sampler', async () => {
     const data = Float32Array.from({ length: 6000 }, (_, i) => Math.sin(i / 7) * (i / 6000));
     const s = sample({ data, start: 1000, end: 5000, loopStart: 2000, loopEnd: 3500, reverse: true });
-    const { dump, notes } = await dumpFromSample(s, { slot: 0, normalize: false }, () => Promise.reject(new Error()));
+    const { dump, notes } = await dumpFromSample(s, { slot: 0 }, () => Promise.reject(new Error()));
     // 4000 samples sent, the loop 2000-3500 counted back from END: 1500-3000
     expect(decodeHeader(dump.bytes)).toMatchObject({ totalWords: 4200, loopStart: 1500, loopEnd: 3000 });
     const sent = parseDump(dump.bytes).codes!.subarray(0, 4000);
@@ -294,35 +293,32 @@ describe('start and end points', () => {
   test('a drum trigger goes to the sampler as a one shot', async () => {
     const drum = sample({ loopMode: 'drum', loopStart: 1000, loopEnd: 5000 });
     expect(samplerFit(drum).used).toBe(6000);
-    const { dump } = await dumpFromSample(drum, { slot: 0, normalize: false }, () => Promise.reject(new Error()));
+    const { dump } = await dumpFromSample(drum, { slot: 0 }, () => Promise.reject(new Error()));
     expect(decodeHeader(dump.bytes)).toMatchObject({ loopStart: 6000, loopEnd: 6000 });
   });
 
-  test('the fit counts from START, resampling moves all points', async () => {
+  test('the fit counts from START', () => {
     const long = sample({ data: new Float32Array(60000), start: 20000, end: 60000, loopStart: 30000,
       loopEnd: 50000 });
     expect(samplerFit(long)).toMatchObject({ used: 30000, fits: true });
     expect(samplerFit({ ...long, start: 0 })).toMatchObject({ used: 50000, fits: false });
-    const half = await resampleSample(long, BW16.rate / 2, async (d) => new Float32Array(d.length / 2));
-    expect(half).toMatchObject({ start: 10000, end: 30000, loopStart: 15000, loopEnd: 25000 });
   });
 });
 
 describe('as sent: normalize, 12 bit, attack', () => {
   test('normalize scales by the peak between START and END', () => {
     const data = Float32Array.of(0.9, 0.1, -0.25, 0.2, 0.05, 0.8);
-    const s = sample({ data, start: 1, end: 5, loopStart: 1, loopEnd: 5 });
-    expect(portionPeak(s)).toBe(0.25);
-    const n = normalizeLevel(s);
-    expect(Array.from(n.data)).toEqual([1, 0.4000000059604645, -1, 0.800000011920929, 0.20000000298023224, 1]);
-    expect(n).toMatchObject({ start: 1, end: 5, loopStart: 1, loopEnd: 5 });
+    expect(portionPeak(data, 1, 5)).toBe(0.25);
+    const n = normalizeData(data, 1, 5);
+    expect(Array.from(n)).toEqual([1, 0.4000000059604645, -1, 0.800000011920929, 0.20000000298023224, 1]);
+    expect(data[0]).toBe(Math.fround(0.9)); // a new array, the original stays
   });
 
   test('12 bit is the values the sampler has, and is recognized', () => {
     const data = Float32Array.from(testSine(BW16.rate, 1000));
-    const q = quantize12(sample({ data, loopEnd: 900 }));
-    q.data.forEach((v, i) => expect(v).toBe((encodeSamples([data[i]])[0] - 2048) / 2048));
-    expect(isTwelveBit(q.data)).toBe(true);
+    const q = quantize12Data(data);
+    q.forEach((v, i) => expect(v).toBe((encodeSamples([data[i]])[0] - 2048) / 2048));
+    expect(isTwelveBit(q)).toBe(true);
     expect(isTwelveBit(data)).toBe(false);
     expect(to12BitCode(1)).toBe(4095);
     expect(to12BitCode(-1)).toBe(1);
@@ -331,7 +327,8 @@ describe('as sent: normalize, 12 bit, attack', () => {
   test('a sample received from the sampler goes back bit for bit', async () => {
     const received = parseDump(fixture('x7000-received.syx'));
     const s = sampleFromDump(received, 'BACK');
-    const { dump, notes } = await dumpFromSample(s, { slot: 0, normalize: true }, () => Promise.reject(new Error()));
+    expect(s.fromSampler).toBe(true);
+    const { dump, notes } = await dumpFromSample(s, { slot: 0 }, () => Promise.reject(new Error()));
     expect(notes).toContain('Already 12 bit, sent as it is');
     expect(parseDump(dump.bytes).codes!.subarray(0, received.codes!.length)).toEqual(received.codes);
   });
@@ -353,6 +350,21 @@ describe('wav', () => {
     expect(wav.loops).toEqual([{ start: 100, end: 900, alternating: false }]);
     expect(wav.data.length).toBe(1000);
     wav.data.forEach((v, i) => expect(Math.abs(v - data[i])).toBeLessThan(1 / 16000));
+  });
+
+  test('12 bit values come back exact, and the axs7 chunk says the sample is from the sampler', () => {
+    const data = quantize12Data(Float32Array.from(testSine(BW16.rate, 1000)));
+    const bytes = encodeWav(data, BW16.rate, [{ start: 100, end: 900, alternating: false }], { fromSampler: true });
+    const wav = readWav(bytes.buffer as ArrayBuffer)!;
+    expect(wav.data).toEqual(data);
+    expect(wav.meta).toEqual({ fromSampler: true });
+    expect(wav.loops).toEqual([{ start: 100, end: 900, alternating: false }]);
+    expect(sampleFromWav(wav, 'BACK').fromSampler).toBe(true);
+    // odd lengths are padded, the chunks after still read
+    const odd = readWav(encodeWav(Float32Array.of(0.5), 8000, [], { fromSampler: true }).buffer as ArrayBuffer)!;
+    expect(odd.meta.fromSampler).toBe(true);
+    expect(readWav(encodeWav(data, BW16.rate, []).buffer as ArrayBuffer)!.meta).toEqual({});
+    expect(isTwelveBit(readWav(encodeWav(Float32Array.of(2047 / 2048, -1), 8000, []).buffer as ArrayBuffer)!.data)).toBe(true);
   });
 
   test('reads 24 bit stereo and 32 bit float', () => {
@@ -392,6 +404,38 @@ describe('bank', () => {
     expect(bank.samples[1].sound).toEqual(samples[1].sound);
     expect(bank.samples.map((s) => s.reverse)).toEqual([false, true]);
     expect(bank.samples[0].data.length).toBe(6000);
+  });
+
+  test('an edited sample keeps its original and recipe, one from the sampler is marked', () => {
+    const source = Float32Array.from(testSine(44100, 8000));
+    const edited = sample({ id: 'e', source, sourceRate: 44100, rate: BW16.rate, data: quantize12Data(source.slice(0, 7000)),
+      end: 7000, loopEnd: 6000, recipe: { ...plainRecipe(), resampleTo: BW16.rate, twelveBit: true, attackMs: 12 } });
+    const received = sample({ id: 'r', fromSampler: true, data: quantize12Data(source) });
+    const bank = zipToBank(bankToZip({ samples: [edited, received], programs: [newProgram('P')], programIndex: 0 }));
+    const [e, r] = bank.samples;
+    expect(e.recipe).toEqual(edited.recipe);
+    expect(e).toMatchObject({ sourceRate: 44100, rate: BW16.rate, fromSampler: false, end: 7000 });
+    expect(e.source.length).toBe(8000);
+    expect(e.data).toEqual(edited.data); // 12 bit, exact
+    expect(r.fromSampler).toBe(true);
+    expect(r.source).toBe(r.data); // no original of its own, the audio is it
+  });
+
+  test('version 2 banks: the audio is the original', () => {
+    const zip = bankToZip({ samples: [sample()], programs: [], programIndex: 0 });
+    const files = unzipSync(zip);
+    const json = JSON.parse(strFromU8(files['bank.json']));
+    json.version = 2;
+    for (const entry of json.samples) {
+      delete entry.original;
+      delete entry.sourceRate;
+      delete entry.recipe;
+      delete entry.fromSampler;
+    }
+    files['bank.json'] = strToU8(JSON.stringify(json));
+    const [s] = zipToBank(zipSync(files)).samples;
+    expect(s.source).toBe(s.data);
+    expect(s).toMatchObject({ sourceRate: BW16.rate, fromSampler: false, recipe: plainRecipe() });
   });
 
   test('rejects what is not a bank', () => {
