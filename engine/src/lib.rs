@@ -181,6 +181,20 @@ pub unsafe extern "C" fn dsp_crossfade_loop(data: *mut f32, len: usize, loop_sta
         as u32
 }
 
+/// Fades in what is played first, see `dsp::fade_in`
+///
+/// @param shape 0 linear, 1 curve
+/// @returns the length used
+///
+/// # Safety
+/// `data` and `len` from `alloc_f32`
+#[no_mangle]
+pub unsafe extern "C" fn dsp_fade_in(data: *mut f32, len: usize, at: u32, length: u32, shape: u32, backwards: u32)
+    -> u32 {
+    let data = core::slice::from_raw_parts_mut(data, len);
+    dsp::fade_in(data, at as usize, length as usize, dsp::AttackShape::from_u32(shape), backwards != 0) as u32
+}
+
 /// @returns the rendered block, valid until the next call
 ///
 /// # Safety

@@ -38,6 +38,8 @@
   --wave-loop: rgba(58, 146, 220, 0.28);
   --wave-marker: var(--blue-hi);
   --wave-xfade: rgba(240, 168, 67, 0.45);
+  --wave-attack: rgba(110, 200, 255, 0.45);
+  --wave-attack-line: #7cc8ff;
   --wave-dropped: rgba(0, 0, 0, 0.45);
   --wave-over: rgba(255, 90, 74, 0.16);
   --wave-limit: #ff6b5e;
@@ -1045,6 +1047,44 @@ button.soft.danger {
   text-align: center;
   font-size: 8px;
   color: #8a857b;
+}
+
+.side-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* On a screen tall enough, the panel and the keyboard stay in place like on the instrument, and the editor between
+   them scrolls */
+@media (min-width: 901px) and (min-height: 640px) {
+  #app {
+    height: 100vh;
+    padding: 12px 16px;
+  }
+
+  .chassis {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .bay {
+    flex: 1;
+    min-height: 160px;
+    overflow: auto;
+  }
+}
+
+/* a short screen keeps more room for the editor */
+@media (min-width: 901px) and (max-height: 820px) {
+  .keys {
+    height: 110px;
+  }
+
+  .brand-row {
+    margin-bottom: 6px;
+  }
 }
 
 /* ---------------------------------------------------------------- narrow screens */

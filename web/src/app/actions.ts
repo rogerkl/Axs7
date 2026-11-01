@@ -2,7 +2,8 @@
 
 import { decodeAudioFile, resampleInBrowser } from '../audio/decode';
 import { getDsp } from '../audio/dsp';
-import type { FadeShape } from '../audio/dsp';
+import type { AttackShape, FadeShape } from '../audio/dsp';
+import { normalizeLevel, quantize12 } from '../model/edit';
 import { bankToZip, zipToBank } from '../model/bank';
 import {
   dumpFromSample, resampleSample, sampleData, sampleFromDump, sampleFromWav, trimSample, wavLoops,
@@ -27,7 +28,8 @@ export class Actions {
   /** when the ACKs scheduled by the last receive have gone out */
   private acksUntil = 0;
   /** the sample as it was before the last edit (resample or crossfade), for undo */
-  lastEdit: { id: string; what: 'RESAMPLE' | 'CROSSFADE' | 'TRIM'; before: SampleData } | null = null;
+  lastEdit: { id: string; what: 'RESAMPLE' | 'CROSSFADE' | 'TRIM' | 'NORMALIZE' | '12 BIT' | 'ATTACK';
+    before: SampleData; } | null = null;
   onBusy: () => void = () => {};
 
   constructor(private app: App) {}
@@ -144,7 +146,42 @@ export class Actions {
     this.app.lcd.flash(`TRIMMED TO ${(sample.data.length / sample.rate).toFixed(2)}S`);
   }
 
-  /** Undoes the last resample, crossfade or trim */
+  /** Applies an edit to a sample, so UNDO can bring it back */
+  private apply(sample: Sample, what: NonNullable<Actions['lastEdit']>['what'], after: SampleData, message: string): void {
+    this.lastEdit = { id: sample.id, what, before: sampleData(sample) };
+    this.app.store.replaceData(sample.id, after);
+    this.app.lcd.flash(message);
+  }
+
+  /** Scales the part between START and END to full level, as sending with NORMALIZE does */
+  normalize(sample: Sample): void {
+    this.apply(sample, 'NORMALIZE', normalizeLevel(sample), 'NORMALIZED');
+  }
+
+  /** Makes the sample 12 bit, to hear and edit it as the sampler will have it */
+  to12Bit(sample: Sample): void {
+    this.apply(sample, '12 BIT', quantize12(sample), 'NOW 12 BIT');
+  }
+
+  /**
+   * Renders an attack into the sample, the X7000 has no attack setting: fades in what is played first, from START,
+   * or from END when reversed.
+   *
+   * @param length in samples
+   */
+  async attack(sample: Sample, length: number, shape: AttackShape): Promise<void> {
+    try {
+      const dsp = await getDsp();
+      const r = dsp.fadeIn(sample.data, sample.reverse ? sample.end - 1 : sample.start, length, shape, sample.reverse);
+      this.apply(sample, 'ATTACK', { ...sampleData(sample), data: r.data },
+        `ATTACK ${Math.round((r.length / sample.rate) * 1000)}MS`);
+    } catch (e) {
+      this.app.midi.logLine(`Could not render the attack of ${sample.name}: ${errorText(e)}`, 'error');
+      this.app.lcd.flash('ATTACK FAILED');
+    }
+  }
+
+  /** Undoes the last edit of a sample */
   undoEdit(): void {
     const undo = this.lastEdit;
     if (undo && this.app.store.samples.has(undo.id)) {

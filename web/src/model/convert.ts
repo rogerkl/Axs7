@@ -5,6 +5,7 @@ import {
 } from '../protocol/akai';
 import type { Dump, FillerOptions, ParsedDump } from '../protocol/akai';
 import type { Wav, WavLoop } from '../protocol/wav';
+import { isTwelveBit } from './edit';
 import { defaultSound, newId } from './mapping';
 import { isLooped } from './types';
 import type { Sample } from './types';
@@ -175,8 +176,15 @@ export async function dumpFromSample(sample: Sample, options: SendOptions, resam
     }
   }
   const slice = data.subarray(0, n);
-  const max = peak(slice);
-  const codes = encodeSamples(slice, options.normalize && max > 0 ? 1 / max : 1);
+  let codes: Uint16Array;
+  if (ratio === 1 && isTwelveBit(slice)) {
+    // made 12 bit, or received from the sampler: its own values, not normalized again
+    codes = Uint16Array.from(slice, (v) => Math.round(v * 2048) + 2048);
+    notes.push('Already 12 bit, sent as it is');
+  } else {
+    const max = peak(slice);
+    codes = encodeSamples(slice, options.normalize && max > 0 ? 1 / max : 1);
+  }
   const dump = buildDump({
     slot: options.slot, sampleRate: bw.rate, numSamples: n, loopStart, loopEnd,
     alternating: sample.loopMode === 'alternating',

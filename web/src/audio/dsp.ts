@@ -7,9 +7,11 @@ interface DspExports {
   free_f32(ptr: number, len: number): void;
   dsp_crossfade_loop(ptr: number, len: number, loopStart: number, loopEnd: number, length: number, shape: number)
     : number;
+  dsp_fade_in(ptr: number, len: number, at: number, length: number, shape: number, backwards: number): number;
 }
 
 export type FadeShape = 'linear' | 'equal';
+export type AttackShape = 'linear' | 'curve';
 
 /** The longest crossfade a forward loop has room for, as dsp::max_crossfade */
 export function maxCrossfade(len: number, loopStart: number, loopEnd: number): number {
@@ -55,6 +57,18 @@ export class Dsp {
     : { data: Float32Array; length: number } {
     const r = this.edit(data, (ptr) => this.ex.dsp_crossfade_loop(ptr, data.length, loopStart, loopEnd, length,
       shape === 'equal' ? 1 : 0));
+    return { data: r.data, length: r.result };
+  }
+
+  /**
+   * Renders an attack: fades in the `length` samples played first, from `at` on, or back from `at` when reversed.
+   *
+   * @returns the faded copy of the data, and the length used
+   */
+  fadeIn(data: Float32Array, at: number, length: number, shape: AttackShape, backwards: boolean)
+    : { data: Float32Array; length: number } {
+    const r = this.edit(data, (ptr) => this.ex.dsp_fade_in(ptr, data.length, at, length, shape === 'curve' ? 1 : 0,
+      backwards ? 1 : 0));
     return { data: r.data, length: r.result };
   }
 

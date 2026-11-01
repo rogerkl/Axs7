@@ -19,6 +19,9 @@ export interface Settings {
   /** crossfade loop length in ms, and its shape */
   xfadeMs: number;
   xfadeShape: 'linear' | 'equal';
+  /** rendered attack length in ms, and its shape */
+  attackMs: number;
+  attackShape: 'linear' | 'curve';
   ackIntervalMs: number;
   lookaheadMs: number;
   fillerPerBlock: number;
@@ -32,7 +35,7 @@ const VERSION = 2;
 
 const DEFAULTS: Settings = {
   version: VERSION, midiIn: null, midiOut: null, channel: 0, slot: 0, slotCount: 6, normalize: true,
-  loadRate: 'sampler', xfadeMs: 50, xfadeShape: 'linear', ackIntervalMs: 50, lookaheadMs: 1500, fillerPerBlock: 0, volume: 0.8, polyphony: 16,
+  loadRate: 'sampler', xfadeMs: 50, xfadeShape: 'linear', attackMs: 20, attackShape: 'linear', ackIntervalMs: 50, lookaheadMs: 1500, fillerPerBlock: 0, volume: 0.8, polyphony: 16,
   view: 'samples',
 };
 

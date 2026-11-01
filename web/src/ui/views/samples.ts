@@ -5,6 +5,7 @@ import { newKeygroup } from '../../model/mapping';
 import { BANDWIDTHS, MAX_SAMPLES, nearestBandwidth, samplerBandwidth } from '../../protocol/akai';
 import { crossfadeRoom } from '../../audio/dsp';
 import { samplerFit } from '../../model/convert';
+import { attackRoom, isTwelveBit, portionPeak } from '../../model/edit';
 import { isLooped } from '../../model/types';
 import type { LoopMode, Sample } from '../../model/types';
 import { h, pickFiles } from '../dom';
@@ -52,6 +53,8 @@ export function samplesView(app: App): View {
     h('button', { class: 'soft', onClick: async () => actions.loadFiles(await pickFiles('.wav,audio/*', true)) },
       'LOAD WAV'), loadRate.el);
   const detail = h('div', { class: 'detail' });
+  /** under the list: what goes to the sampler, for the selected sample */
+  const side = h('div', { class: 'side-groups' });
   const wave = new Waveform();
   let cells: ParamCell[] = [];
   /** listeners of the detail that is shown, removed when it is rebuilt */
@@ -149,7 +152,7 @@ export function samplesView(app: App): View {
       },
       format: (v) => `${v}MS`,
       parse: (text) => Number(text.replace(/ms$/i, '')) || null,
-      detail: () => `${length()} SAMPLES`,
+      detail: () => `${length()} SMP`,
     }, 'wide');
     const shapeCell = choiceCell('samples.xfadeShape', 'SHAPE', ['linear', 'equal'] as const, ['LIN', 'EQP'],
       () => settings.xfadeShape, (v) => {
@@ -178,6 +181,84 @@ export function samplesView(app: App): View {
     });
     return h('div', { class: 'sampler-group', role: 'group', 'aria-label': 'Crossfade loop' },
       h('span', { class: 'group-title' }, 'CROSSFADE'), lengthCell.el, shapeCell.el, apply, note);
+  }
+
+  /** An attack rendered into the sample, the X7000 has no attack setting: what is played first fades in */
+  function attackGroup(s: Sample): HTMLElement {
+    const { settings } = app;
+    const sample = () => store.samples.get(s.id) ?? s;
+    const room = () => attackRoom(sample());
+    const ms = (samples: number) => Math.round((samples / s.rate) * 1000);
+    const length = () => Math.min(room(), Math.max(1, Math.round((settings.attackMs / 1000) * s.rate)));
+    const note = h('span', { class: 'info' });
+    const apply = h('button', { class: 'soft', onClick: () => actions.attack(sample(), length(), settings.attackShape) },
+      'APPLY');
+    const lengthCell = new ParamCell({
+      key: 'samples.attackLength', label: 'LENGTH', min: 1, coarse: 10,
+      get max() {
+        return Math.max(1, ms(room()));
+      },
+      get: () => Math.min(settings.attackMs, Math.max(1, ms(room()))),
+      set: (v) => {
+        settings.attackMs = v;
+        app.saveSettings();
+        update();
+      },
+      format: (v) => `${v}MS`,
+      parse: (text) => Number(text.replace(/ms$/i, '')) || null,
+      detail: () => `${length()} SMP`,
+    }, 'wide');
+    const shapeCell = choiceCell('samples.attackShape', 'SHAPE', ['linear', 'curve'] as const, ['LIN', 'CURVE'],
+      () => settings.attackShape, (v) => {
+        settings.attackShape = v;
+        app.saveSettings();
+        update();
+      });
+    shapeCell.el.title = 'LIN rises evenly, CURVE starts slower, like an exponential attack';
+    const update = () => {
+      const now = sample();
+      apply.disabled = room() === 0;
+      note.textContent = room() === 0
+        ? `MOVE THE LOOP ${now.reverse ? 'END EARLIER' : 'START LATER'}, THE ATTACK HAS TO END BEFORE THE LOOP`
+        : `THE FIRST ${ms(length())}MS PLAYED FADE IN FROM SILENCE${now.reverse ? ', BACK FROM END' : ''}`;
+      wave.setAttack(room() > 0 ? length() : 0, settings.attackShape === 'curve');
+    };
+    update();
+    detailRefresh.push(() => {
+      lengthCell.refresh(); // the room changes with the points
+      shapeCell.refresh();
+      update();
+    });
+    return h('div', { class: 'sampler-group', role: 'group', 'aria-label': 'Attack' },
+      h('span', { class: 'group-title' }, 'ATTACK'), lengthCell.el, shapeCell.el, apply, note);
+  }
+
+  /**
+   * What sending does to a sample, done here to hear and edit it that way: normalized, and 12 bit. A 12 bit sample
+   * is sent as it is.
+   */
+  function asSentGroup(s: Sample): HTMLElement {
+    const sample = () => store.samples.get(s.id) ?? s;
+    const status = h('span', { class: 'info' });
+    const normalize = h('button', { class: 'soft', onClick: () => actions.normalize(sample()),
+      title: 'Scale the part between START and END to full level, as sending with NORMALIZE does' }, 'NORMALIZE');
+    const twelve = h('button', { class: 'soft', onClick: () => actions.to12Bit(sample()),
+      title: 'Make the sample 12 bit, as the sampler will have it. Do it last: a 12 bit sample is sent as it is.' },
+    '12 BIT');
+    const update = () => {
+      const now = sample();
+      const level = portionPeak(now);
+      const twelveBit = isTwelveBit(now.data.subarray(now.start, now.end));
+      normalize.disabled = level === 0 || level > 0.999;
+      twelve.disabled = twelveBit;
+      const db = 20 * Math.log10(level);
+      status.textContent = `PEAK ${level === 0 ? '-∞' : db > -0.05 ? '0.0' : db.toFixed(1)} DB · `
+        + (twelveBit ? '12 BIT, SENT AS IT IS' : 'MADE 12 BIT WHEN SENT');
+    };
+    update();
+    detailRefresh.push(update);
+    return h('div', { class: 'sampler-group', role: 'group', 'aria-label': 'As sent' },
+      h('span', { class: 'group-title' }, 'AS SENT'), normalize, twelve, status);
   }
 
   wave.onPoint = (which, value) => {
@@ -226,6 +307,7 @@ export function samplesView(app: App): View {
     detailOff = [];
     detailRefresh = [];
     wave.setCrossfade(0);
+    wave.setAttack(0);
     wave.setLimit(null);
     wave.setHeads([]);
     const s = store.selectedSample;
@@ -236,6 +318,7 @@ export function samplesView(app: App): View {
         h('p', {}, 'Load WAV files (several at once, the loop in a WAV file is kept), or receive a sample from the '
           + 'sampler. Memory is only limited by the browser.'),
         samplerGroup(false)));
+      side.replaceChildren();
       return;
     }
     const id = s.id;
@@ -319,9 +402,10 @@ export function samplesView(app: App): View {
             store.removeSample(id);
           }
         } }, 'DELETE')),
+      attackGroup(s),
       crossfade,
-      resampleGroup(s),
-      samplerGroup(true));
+      resampleGroup(s));
+    side.replaceChildren(asSentGroup(s), samplerGroup(true));
   }
 
   function refresh(id?: string): void {
@@ -360,7 +444,7 @@ export function samplesView(app: App): View {
   ];
   detail.dataset.sample = store.selectedSampleId ?? '';
   return {
-    el: h('div', { class: 'view view-samples' }, h('div', { class: 'detail' }, loadRow, list), detail),
+    el: h('div', { class: 'view view-samples' }, h('div', { class: 'detail' }, loadRow, list, side), detail),
     dispose: () => [...off, ...detailOff].forEach((f) => f()),
   };
 }

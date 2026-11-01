@@ -20,6 +20,40 @@ impl FadeShape {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttackShape {
+    Linear,
+    /// starts slower, like an exponential attack
+    Curve,
+}
+
+impl AttackShape {
+    pub fn from_u32(value: u32) -> AttackShape {
+        if value == 1 {
+            AttackShape::Curve
+        } else {
+            AttackShape::Linear
+        }
+    }
+}
+
+/// Renders an attack into a sample, which the X7000 has no setting for: the `length` samples played first fade in
+/// from silence. Playing forward they start at `at`, backwards they end at `at` (the last sample of the part played).
+///
+/// @returns the length used, shortened to fit the sample
+pub fn fade_in(data: &mut [f32], at: usize, length: usize, shape: AttackShape, backwards: bool) -> usize {
+    let length = if backwards { length.min(at + 1) } else { length.min(data.len().saturating_sub(at)) };
+    for i in 0..length {
+        let t = i as f32 / length as f32;
+        let gain = match shape {
+            AttackShape::Linear => t,
+            AttackShape::Curve => t * t,
+        };
+        data[if backwards { at - i } else { at + i }] *= gain;
+    }
+    length
+}
+
 /// The longest crossfade a forward loop has room for: it takes the samples before the loop start, and fades
 /// within the loop.
 pub fn max_crossfade(len: usize, loop_start: usize, loop_end: usize) -> usize {
@@ -94,6 +128,19 @@ mod tests {
         // the middle of the fade: linear dips about 3 dB, equal power doesn't
         assert!(rms(&linear[1700..1800]) < 0.8 * before);
         assert!((rms(&data[1700..1800]) / before - 1.0).abs() < 0.2);
+    }
+
+    #[test]
+    fn an_attack_fades_in_what_is_played_first() {
+        let mut data = vec![1.0; 10];
+        assert_eq!(fade_in(&mut data, 2, 4, AttackShape::Linear, false), 4);
+        assert_eq!(data, [1.0, 1.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0, 1.0, 1.0]);
+        let mut back = vec![1.0; 10];
+        fade_in(&mut back, 7, 4, AttackShape::Curve, true);
+        assert_eq!(back, [1.0, 1.0, 1.0, 1.0, 0.5625, 0.25, 0.0625, 0.0, 1.0, 1.0]);
+        let mut short = vec![1.0; 4];
+        assert_eq!(fade_in(&mut short, 2, 10, AttackShape::Linear, false), 2, "to the end of the sample");
+        assert_eq!(fade_in(&mut short, 1, 10, AttackShape::Linear, true), 2, "back to its start");
     }
 
     #[test]

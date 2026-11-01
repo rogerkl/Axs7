@@ -30,6 +30,11 @@ from the on-screen keyboard, the computer keyboard or a MIDI keyboard (the X7000
   the same pitch, UNDO RESAMPLE brings back the previous version. RATE ON LOAD converts files to the nearest
   sampler rate when they are loaded (SAMPLER, the default), or keeps their own rate (KEEP). A WAV file at a sampler rate (whole Hz in the file, like 39555) gets
   the exact rate.
+- **AS SENT**: what sending does, done on the sample to hear and edit it that way: NORMALIZE (the part between START
+  and END to full level) and 12 BIT (the values the sampler keeps). A 12 bit sample, made so or received from the
+  sampler, is sent as it is, so a received sample goes back bit for bit.
+- **Attack**: the X7000 has no attack setting, so ATTACK renders one into the sample: what is played first fades in
+  from silence, LIN or CURVE, from START (from END when reversed), ending before the loop.
 - **Crossfade loop**: fades the end of a forward loop into what comes before the loop start, so the jump back to
   the start doesn't click (the Java tool's X-fade). LENGTH in ms, SHAPE linear (for a steady sound) or equal power
   (keeps the level when the two sides differ, like noise). The two regions are shown on the waveform, and UNDO

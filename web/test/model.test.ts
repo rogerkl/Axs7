@@ -9,6 +9,7 @@ import { defaultSound, newKeygroup, newProgram, normalizeProgram, voicesFor } fr
 import { noteName, parseNote } from '../src/model/notes';
 import { cutoffHz, engineParams, lfoRate, releaseTime } from '../src/model/params';
 import { isPortion, movePoint, normalizeSample } from '../src/model/points';
+import { attackRoom, isTwelveBit, normalizeLevel, portionPeak, quantize12, to12BitCode } from '../src/model/edit';
 import { Store } from '../src/model/store';
 import type { Sample } from '../src/model/types';
 import { fixture, testSine } from './helpers';
@@ -304,6 +305,43 @@ describe('start and end points', () => {
     expect(samplerFit({ ...long, start: 0 })).toMatchObject({ used: 50000, fits: false });
     const half = await resampleSample(long, BW16.rate / 2, async (d) => new Float32Array(d.length / 2));
     expect(half).toMatchObject({ start: 10000, end: 30000, loopStart: 15000, loopEnd: 25000 });
+  });
+});
+
+describe('as sent: normalize, 12 bit, attack', () => {
+  test('normalize scales by the peak between START and END', () => {
+    const data = Float32Array.of(0.9, 0.1, -0.25, 0.2, 0.05, 0.8);
+    const s = sample({ data, start: 1, end: 5, loopStart: 1, loopEnd: 5 });
+    expect(portionPeak(s)).toBe(0.25);
+    const n = normalizeLevel(s);
+    expect(Array.from(n.data)).toEqual([1, 0.4000000059604645, -1, 0.800000011920929, 0.20000000298023224, 1]);
+    expect(n).toMatchObject({ start: 1, end: 5, loopStart: 1, loopEnd: 5 });
+  });
+
+  test('12 bit is the values the sampler has, and is recognized', () => {
+    const data = Float32Array.from(testSine(BW16.rate, 1000));
+    const q = quantize12(sample({ data, loopEnd: 900 }));
+    q.data.forEach((v, i) => expect(v).toBe((encodeSamples([data[i]])[0] - 2048) / 2048));
+    expect(isTwelveBit(q.data)).toBe(true);
+    expect(isTwelveBit(data)).toBe(false);
+    expect(to12BitCode(1)).toBe(4095);
+    expect(to12BitCode(-1)).toBe(1);
+  });
+
+  test('a sample received from the sampler goes back bit for bit', async () => {
+    const received = parseDump(fixture('x7000-received.syx'));
+    const s = sampleFromDump(received, 'BACK');
+    const { dump, notes } = await dumpFromSample(s, { slot: 0, normalize: true }, () => Promise.reject(new Error()));
+    expect(notes).toContain('Already 12 bit, sent as it is');
+    expect(parseDump(dump.bytes).codes!.subarray(0, received.codes!.length)).toEqual(received.codes);
+  });
+
+  test('the attack has to end before the loop', () => {
+    const s = sample({ data: new Float32Array(1000), start: 100, end: 900, loopStart: 300, loopEnd: 700 });
+    expect(attackRoom(s)).toBe(200);
+    expect(attackRoom({ ...s, reverse: true })).toBe(200);
+    expect(attackRoom({ ...s, loopMode: 'off' })).toBe(800);
+    expect(attackRoom({ ...s, loopStart: 100 })).toBe(0);
   });
 });
 

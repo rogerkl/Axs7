@@ -37,6 +37,15 @@ describe('crossfade loop in Rust', () => {
     expect(crossfadeRoom({ data, loopStart: 300, loopEnd: 1000, reverse: true })).toBe(0);
   });
 
+  test('an attack fades in what is played first, forward from START or back from END', () => {
+    const data = new Float32Array(10).fill(1);
+    const forward = dsp.fadeIn(data, 2, 4, 'linear', false);
+    expect(Array.from(forward.data)).toEqual([1, 1, 0, 0.25, 0.5, 0.75, 1, 1, 1, 1]);
+    const back = dsp.fadeIn(data, 9, 2, 'curve', true);
+    expect(Array.from(back.data)).toEqual([1, 1, 1, 1, 1, 1, 1, 1, 0.25, 0]);
+    expect(Array.from(data)).toEqual(new Array(10).fill(1)); // the original is left as it was
+  });
+
   test('memory is given back', () => {
     const big = new Float32Array(1_000_000);
     dsp.crossfadeLoop(big, 1000, 900_000, 500, 'linear');

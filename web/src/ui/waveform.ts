@@ -29,6 +29,9 @@ export class Waveform {
   private limit: number | null = null;
   /** samples of crossfade to show, 0 for none */
   private crossfade = 0;
+  /** samples of rendered attack to show, 0 for none, and its shape */
+  private attack = 0;
+  private attackCurve = false;
   private heads: number[] = [];
   private headsFrame = 0;
   private dragging: PointName | 'pan' | null = null;
@@ -115,6 +118,15 @@ export class Waveform {
   setCrossfade(length: number): void {
     if (length !== this.crossfade) {
       this.crossfade = length;
+      this.draw();
+    }
+  }
+
+  /** Shows an attack to be rendered: what is played first, fading in, its curve over the wave */
+  setAttack(length: number, curve = false): void {
+    if (length !== this.attack || curve !== this.attackCurve) {
+      this.attack = length;
+      this.attackCurve = curve;
       this.draw();
     }
   }
@@ -335,7 +347,36 @@ export class Waveform {
       }
       ctx.globalAlpha = 1;
     }
+    if (this.attack > 0) {
+      // from silence where playing starts to full level
+      const [silent, full] = s.reverse ? [s.end, s.end - this.attack] : [s.start, s.start + this.attack];
+      const ramp = ctx.createLinearGradient(x(silent), 0, x(full), 0);
+      ramp.addColorStop(0, color('--wave-attack'));
+      ramp.addColorStop(1, 'transparent');
+      band(Math.min(silent, full), Math.max(silent, full), ramp);
+    }
     this.drawWave(ctx, x, w, height, color('--wave'), dpr);
+    if (this.attack > 0) {
+      // the attack's level, over and under the wave: from silence where playing starts to full
+      const at = (i: number) => (s.reverse ? s.end - 1 - i : s.start + i);
+      ctx.strokeStyle = color('--wave-attack-line');
+      ctx.lineWidth = 1.5 * dpr;
+      for (const sign of [1, -1]) {
+        ctx.beginPath();
+        for (let k = 0; k <= 32; k++) {
+          const t = k / 32;
+          const gain = this.attackCurve ? t * t : t;
+          const px = x(at(Math.round(t * this.attack)));
+          const py = ((1 - sign * gain) * height) / 2;
+          if (k === 0) {
+            ctx.moveTo(px, py);
+          } else {
+            ctx.lineTo(px, py);
+          }
+        }
+        ctx.stroke();
+      }
+    }
     // what isn't used or kept
     band(0, s.start, color('--wave-unused'));
     band(s.end, s.data.length, color('--wave-unused'));
