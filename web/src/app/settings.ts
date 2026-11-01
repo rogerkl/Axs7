@@ -1,0 +1,42 @@
+// Settings kept in the browser between visits
+
+export type ViewName = 'samples' | 'keygroups' | 'filter' | 'amp' | 'midi' | 'bank';
+
+export interface Settings {
+  midiIn: string | null;
+  midiOut: string | null;
+  /** keyboard channel, 0 for omni */
+  channel: number;
+  /** sampler slot for transfers, 0-5 */
+  slot: number;
+  normalize: boolean;
+  ackIntervalMs: number;
+  lookaheadMs: number;
+  fillerPerBlock: number;
+  volume: number;
+  polyphony: number;
+  view: ViewName;
+}
+
+const KEY = 'axs7.settings';
+
+const DEFAULTS: Settings = {
+  midiIn: null, midiOut: null, channel: 0, slot: 0, normalize: true, ackIntervalMs: 50, lookaheadMs: 1500,
+  fillerPerBlock: 0, volume: 0.8, polyphony: 16, view: 'samples',
+};
+
+export function loadSettings(): Settings {
+  try {
+    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) ?? '{}') };
+  } catch {
+    return { ...DEFAULTS };
+  }
+}
+
+export function saveSettings(settings: Settings): void {
+  try {
+    localStorage.setItem(KEY, JSON.stringify(settings));
+  } catch {
+    // not available, the settings just aren't kept
+  }
+}
