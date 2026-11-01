@@ -7,7 +7,7 @@ import { dumpFromSample, sampleFromDump, sampleFromWav, samplerFit } from '../sr
 import { defaultSound, newKeygroup, newProgram, normalizeProgram, voicesFor } from '../src/model/mapping';
 import { noteName, parseNote } from '../src/model/notes';
 import { cutoffHz, engineParams, lfoRate, releaseTime } from '../src/model/params';
-import { isPortion, movePoint, normalizeSample } from '../src/model/points';
+import { isPortion, movePoint, normalizeSample, usedStart } from '../src/model/points';
 import { attackRoom, isTwelveBit, normalizeData, portionPeak, quantize12Data, to12BitCode } from '../src/model/edit';
 import { isEdited, plainRecipe } from '../src/model/recipe';
 import { Store } from '../src/model/store';
@@ -247,15 +247,17 @@ describe('sampler rates and resampling', () => {
 describe('start and end points', () => {
   const s = () => sample({ data: new Float32Array(1000), start: 100, end: 900, loopStart: 300, loopEnd: 700 });
 
-  test('loop points stop at START and END', () => {
-    expect(movePoint(s(), 'loopStart', 50)).toMatchObject({ loopStart: 100 });
+  test('the loop stops at END, its end at START, its start may be before START', () => {
+    expect(movePoint(s(), 'loopStart', 50)).toMatchObject({ start: 100, loopStart: 50 });
+    expect(movePoint(s(), 'loopStart', -5)).toMatchObject({ loopStart: 0 });
     expect(movePoint(s(), 'loopEnd', 950)).toMatchObject({ loopEnd: 900 });
     expect(movePoint(s(), 'loopStart', 800)).toMatchObject({ loopStart: 698, loopEnd: 700 });
+    expect(movePoint({ ...s(), start: 500 }, 'loopEnd', 300)).toMatchObject({ loopStart: 300, loopEnd: 502 });
   });
 
-  test('START and END push the loop along', () => {
-    expect(movePoint(s(), 'start', 400)).toEqual({ start: 400, end: 900, loopStart: 400, loopEnd: 700 });
-    expect(movePoint(s(), 'start', 800)).toEqual({ start: 800, end: 900, loopStart: 800, loopEnd: 802 });
+  test('START goes into the loop as on the X7000, past its end it pushes it; END pushes the loop back', () => {
+    expect(movePoint(s(), 'start', 400)).toEqual({ start: 400, end: 900, loopStart: 300, loopEnd: 700 });
+    expect(movePoint(s(), 'start', 800)).toEqual({ start: 800, end: 900, loopStart: 300, loopEnd: 802 });
     expect(movePoint(s(), 'end', 200)).toEqual({ start: 100, end: 200, loopStart: 198, loopEnd: 200 });
     expect(movePoint(s(), 'end', 5000)).toMatchObject({ end: 1000 });
     expect(movePoint(s(), 'start', -5)).toMatchObject({ start: 0 });
@@ -288,6 +290,27 @@ describe('start and end points', () => {
     expect(notes).toContain('Sent reversed, leave SCAN DIRECTION at F on the sampler');
     // the sampler keeps it from END back to the loop start
     expect(samplerFit(s)).toMatchObject({ used: 3000, limitAt: 5000 - MAX_SAMPLES });
+  });
+
+  test('START after the loop start, as on the X7000: what is sent starts at the loop start', async () => {
+    // a sample received from the sampler, then START set as it was there
+    const data = quantize12Data(Float32Array.from({ length: 32752 }, (_, i) => Math.sin(i / 9) * 0.8));
+    let x = sample({ data, loopMode: 'alternating', end: 32752, loopStart: 9523, loopEnd: 32752 });
+    x = { ...x, ...movePoint(x, 'start', 32552) };
+    expect(x).toMatchObject({ start: 32552, end: 32752, loopStart: 9523, loopEnd: 32752 });
+    expect(usedStart(x)).toBe(9523);
+    expect(usedStart({ ...x, loopMode: 'off' })).toBe(32552); // a one shot plays from START only
+    expect(samplerFit(x)).toMatchObject({ used: 32752 - 9523, fits: true, limitAt: 9523 + MAX_SAMPLES });
+    const noResample = () => Promise.reject(new Error('no resampling'));
+    const { dump, notes } = await dumpFromSample(x, { slot: 0 }, noResample);
+    expect(decodeHeader(dump.bytes)).toMatchObject({ loopStart: 0, loopEnd: 32752 - 9523, alternating: true });
+    expect(parseDump(dump.bytes).codes!.subarray(0, 32752 - 9523))
+      .toEqual(Uint16Array.from(data.subarray(9523), (v) => Math.round(v * 2048) + 2048));
+    expect(notes).toContain('A dump has no START: set START to 23029 on the sampler to play from where it starts here');
+    // reversed, playing starts at END, and so does the sampler
+    const back = await dumpFromSample({ ...x, reverse: true }, { slot: 0 }, noResample);
+    expect(decodeHeader(back.dump.bytes)).toMatchObject({ loopStart: 0, loopEnd: 32752 - 9523 });
+    expect(back.notes.some((n) => n.includes('no START'))).toBe(false);
   });
 
   test('a drum trigger goes to the sampler as a one shot', async () => {

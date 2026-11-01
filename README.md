@@ -20,8 +20,11 @@ Samples are loaded or received into memory and played from the on-screen keyboar
   direction and sound can still be set). It is marked FROM THE SAMPLER, and stays so in its WAV files (an `axs7`
   chunk, which other programs skip) and banks, so loading it again keeps it unedited.
 - **START and END**: the part of a sample that is used, to take a portion out of a long one. Playing starts at
-  START, a one shot ends at END, the loop stays between them (moving START or END pushes it along), and only that
-  part is sent to the sampler, which has no start point of its own.
+  START, a one shot ends at END, the loop ends at END at the latest (moving END pushes it back). As on the X7000,
+  START may be inside the loop, after the loop start: a sample can play its end once and then loop back to a loop
+  start long before it (START past the loop end pushes the loop end along). Only the part that plays is sent to the
+  sampler: START to END, or from the loop start when it is before START. A dump has no START, so the sampler starts
+  at what is sent first; the MIDI log then says what to set START to on the sampler.
 - **Waveform**: START and END (tags S, E) and the loop (LS, LE) are dragged on it, and a grabbed point's parameter
   is selected, so the knob or the arrow keys then move it a sample at a time. The mouse wheel zooms around the
   pointer (in to single samples), dragging or shift + wheel pans, a double click zooms in, and buttons zoom to each

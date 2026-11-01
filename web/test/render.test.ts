@@ -54,6 +54,15 @@ describe('rendering a sample from its original', () => {
     expect(short.data[1500]).toBeCloseTo(source[1500] * gain, 6);
   });
 
+  test('normalize takes in a loop that goes back before START', async () => {
+    const data = new Float32Array(10000).fill(0.1);
+    data[2000] = 0.5;
+    const r = await renderSample(loaded({ normalize: true }, { source: data, data, start: 8000, end: 9000,
+      loopStart: 1000, loopEnd: 9000, loopMode: 'alternating' }), noResample, dsp);
+    expect(r.data[2000]).toBeCloseTo(1, 6); // not clipped
+    expect(r.data[8500]).toBeCloseTo(0.2, 6);
+  });
+
   test('12 bit comes last, it is what the sampler gets', async () => {
     const r = await renderSample(loaded({ normalize: true, twelveBit: true, attackMs: 10 }), noResample, dsp);
     expect(isTwelveBit(r.data)).toBe(true);

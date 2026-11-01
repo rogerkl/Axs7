@@ -12,7 +12,7 @@ import { isLooped } from '../../model/types';
 import type { LoopMode, Sample } from '../../model/types';
 import { h, pickFiles } from '../dom';
 import { ParamCell, choiceCell, dataEntry } from '../param';
-import { isPortion, movePoint } from '../../model/points';
+import { isPortion, movePoint, usedStart } from '../../model/points';
 import type { PointName } from '../../model/points';
 import { slotCell } from '../slot';
 import { Waveform } from '../waveform';
@@ -21,9 +21,9 @@ import { Waveform } from '../waveform';
 const LOOP_MODES = ['off', 'forward', 'alternating', 'drum'] as const satisfies readonly LoopMode[];
 const LOOP_NAMES = ['ONE', 'LOOP', 'ALT', 'DRUM'];
 
-/** How long the part between START and END is */
+/** How long the part that plays is: START to END, from a loop start before START */
 function duration(s: Sample): string {
-  return `${((s.end - s.start) / s.rate).toFixed(2)}S`;
+  return `${((s.end - usedStart(s)) / s.rate).toFixed(2)}S`;
 }
 
 const khz = (rate: number) => `${(rate / 1000).toFixed(1)}K`;
@@ -128,8 +128,10 @@ export function samplesView(app: App): View {
       const now = sample();
       const length = fadeSamples(now, now.recipe.attackMs, room());
       note.textContent = now.recipe.attackMs === 0 ? 'OFF: THE SAMPLE STARTS AS IT IS'
-        : room() === 0 ? `MOVE THE LOOP ${now.reverse ? 'END EARLIER' : 'START LATER'}, THE ATTACK HAS TO END BEFORE `
-          + 'THE LOOP'
+        : room() === 0 && !now.reverse && isLooped(now.loopMode) && now.loopStart <= now.start
+          ? 'START IS IN THE LOOP: NO ROOM FOR AN ATTACK'
+          : room() === 0 ? `MOVE THE LOOP ${now.reverse ? 'END EARLIER' : 'START LATER'}, THE ATTACK HAS TO END `
+            + 'BEFORE THE LOOP'
           : `THE FIRST ${msOf(now, length)}MS PLAYED FADE IN FROM SILENCE${now.reverse ? ', BACK FROM END' : ''}`;
       wave.setAttack(length, now.recipe.attackShape === 'curve');
     };
@@ -243,11 +245,11 @@ export function samplesView(app: App): View {
     }
     const update = () => {
       const now = sample();
-      const level = portionPeak(now.data, now.start, now.end);
+      const level = portionPeak(now.data, usedStart(now), now.end);
       const db = 20 * Math.log10(level);
       status.textContent = `PEAK ${level === 0 ? '-∞' : db > -0.05 ? '0.0' : db.toFixed(1)} DB · `
         + (now.fromSampler ? 'FROM THE SAMPLER, SENT BACK AS IT CAME'
-          : isTwelveBit(now.data.subarray(now.start, now.end)) ? '12 BIT, SENT AS IT IS' : 'MADE 12 BIT WHEN SENT');
+          : isTwelveBit(now.data.subarray(usedStart(now), now.end)) ? '12 BIT, SENT AS IT IS' : 'MADE 12 BIT WHEN SENT');
     };
     update();
     detailRefresh.push(() => {

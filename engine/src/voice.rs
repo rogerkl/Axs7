@@ -166,13 +166,21 @@ impl Voice {
         let start = note.start.min(end.saturating_sub(1));
         let loop_end = note.loop_end.min(end);
         let loop_start = note.loop_start.min(loop_end);
+        // a loop needs two samples to go back and forth between
+        self.loop_mode = if !note.loop_mode.looping() || loop_end >= loop_start + 2 {
+            note.loop_mode
+        } else {
+            LoopMode::Off
+        };
         if note.reverse && end > 0 {
-            // positions counted back from the end, the loop mirrored
+            // positions counted back from the end, the loop mirrored. The loop start may be before START, as on the
+            // X7000: the loop is played as it is, START only ends a reversed sample without loop.
+            let first = if self.loop_mode.looping() { start.min(loop_start) } else { start };
             self.mirror = Some(end - 1);
-            self.len = end - start;
+            self.len = end - first;
             self.pos = 0.0;
             self.loop_start = end - loop_end;
-            self.loop_end = (end - loop_start).min(self.len);
+            self.loop_end = end - loop_start;
         } else {
             self.mirror = None;
             self.len = end;
@@ -180,12 +188,6 @@ impl Voice {
             self.loop_end = loop_end;
             self.loop_start = loop_start;
         }
-        // a loop needs two samples to go back and forth between
-        self.loop_mode = if !note.loop_mode.looping() || self.loop_end >= self.loop_start + 2 {
-            note.loop_mode
-        } else {
-            LoopMode::Off
-        };
         self.gain = note.gain;
         self.velocity = note.velocity.clamp(0.0, 1.0);
         self.filter.reset();
@@ -393,6 +395,24 @@ mod tests {
         assert_eq!(reads(&v, 0, 13), vec![s(9), s(8), s(7), s(6), s(5), s(4), s(3), s(5), s(4), s(3), s(5), s(4), s(3)]);
         let alt = reversed(10, 0, 10, 3, 7, LoopMode::Alternating);
         assert_eq!(reads(&alt, 3, 13), vec![s(6), s(5), s(4), s(3), s(4), s(5), s(6), s(5), s(4), s(3)]);
+    }
+
+    #[test]
+    fn start_may_be_inside_the_loop_as_on_the_x7000() {
+        let s = |i| Some(i);
+        // samples 0-9, START 6, alternating loop 2-10 (to END): 6 to 9 once, then back and forth between 9 and 2
+        let mut n = note(10, 2, 10, LoopMode::Alternating);
+        n.start = 6;
+        let mut v = Voice::default();
+        v.start(&n, 10, 1.0, 0);
+        assert_eq!(v.position(), Some(6));
+        assert_eq!(reads(&v, 6, 16), vec![s(6), s(7), s(8), s(9), s(8), s(7), s(6), s(5), s(4), s(3)]);
+        // reversed: from END back past START, to the loop start, then the loop backwards
+        let r = reversed(10, 6, 10, 2, 8, LoopMode::Forward);
+        assert_eq!(reads(&r, 0, 12), vec![s(9), s(8), s(7), s(6), s(5), s(4), s(3), s(2), s(7), s(6), s(5), s(4)]);
+        // without a loop, START ends it
+        let one_shot = reversed(10, 6, 10, 2, 8, LoopMode::Off);
+        assert_eq!(reads(&one_shot, 0, 5), vec![s(9), s(8), s(7), s(6), None]);
     }
 
     #[test]

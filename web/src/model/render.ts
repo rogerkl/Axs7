@@ -5,6 +5,7 @@ import { crossfadeRoom } from '../audio/dsp';
 import type { AttackShape, FadeShape } from '../audio/dsp';
 import type { Resampler } from './convert';
 import { attackRoom, normalizeData, quantize12Data } from './edit';
+import { usedStart } from './points';
 import { plainRecipe } from './recipe';
 import type { Sample } from './types';
 
@@ -41,7 +42,8 @@ export async function renderSample(s: Sample, resample: Resampler, dsp: RenderDs
   const points = { start: at(s.start), end: at(s.end), loopStart: at(s.loopStart), loopEnd: at(s.loopEnd) };
   const shaped = { ...s, ...points };
   if (r.normalize) {
-    data = normalizeData(data, points.start, points.end);
+    // all that plays, a loop before START too
+    data = normalizeData(data, usedStart(shaped), points.end);
   }
   if (r.crossfadeMs > 0 && s.loopMode === 'forward') {
     const length = Math.min(crossfadeRoom({ ...shaped, data }), Math.round((r.crossfadeMs / 1000) * rate));

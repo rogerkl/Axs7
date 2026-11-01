@@ -9,6 +9,7 @@ import { isTwelveBit } from './edit';
 import { defaultSound, newId } from './mapping';
 import { plainRecipe } from './recipe';
 import { isLooped } from './types';
+import { usedStart } from './points';
 import type { Sample } from './types';
 
 /**
@@ -80,12 +81,12 @@ export type Resampler = (data: Float32Array, fromRate: number, toRate: number) =
 export interface SamplerFit {
   /** the rate the sample goes to the sampler at: its own if it is one of the sampler's, else the nearest */
   sendRate: number;
-  /** how many of the sample's own samples the sampler takes, counted from where playing starts */
+  /** how many of the sample's own samples the sampler takes, counted from where what is sent begins */
   limit: number;
-  /** where the sampler's limit is in the sample: START + limit, or END - limit when reversed */
+  /** where the sampler's limit is in the sample: the start of what is sent + limit, or END - limit when reversed */
   limitAt: number;
-  /** how much of the sample the sampler keeps, from where playing starts to the loop end of a looped sample (the
-   * loop start when reversed), all of a one shot */
+  /** how much of the sample the sampler keeps: from START (or a loop start before it) to the loop end of a looped
+   * sample, from END to the loop start when reversed, all of a one shot */
   used: number;
   fits: boolean;
   /** the longest sample the sampler takes at the send rate */
@@ -93,16 +94,18 @@ export interface SamplerFit {
 }
 
 /**
- * Whether a sample fits on the sampler. Only the part between START and END is sent, and the sampler ends a loop at
- * its end. A reversed sample is sent reversed, so it starts at END and its loop ends at the loop start.
+ * Whether a sample fits on the sampler. Only the part from START (or a loop start before it) to END is sent, and the
+ * sampler ends a loop at its end. A reversed sample is sent reversed, so it starts at END and its loop ends at the
+ * loop start.
  */
 export function samplerFit(sample: Sample, sendRate = (samplerBandwidth(sample.rate)
   ?? nearestBandwidth(sample.rate)).rate): SamplerFit {
-  const { start, end, loopStart, loopEnd, reverse } = sample;
+  const { end, loopStart, loopEnd, reverse } = sample;
+  const from = usedStart(sample);
   // the tolerance keeps 32752 * r / r from flooring to 32751
   const limit = Math.floor((MAX_SAMPLES * sample.rate) / sendRate + 1e-6);
-  const used = !isLooped(sample.loopMode) ? end - start : reverse ? end - loopStart : loopEnd - start;
-  return { sendRate, limit, limitAt: reverse ? end - limit : start + limit, used, fits: used <= limit,
+  const used = !isLooped(sample.loopMode) ? end - from : reverse ? end - loopStart : loopEnd - from;
+  return { sendRate, limit, limitAt: reverse ? end - limit : from + limit, used, fits: used <= limit,
     maxSeconds: MAX_SAMPLES / sendRate };
 }
 
@@ -113,8 +116,8 @@ export interface SendOptions {
 }
 
 /**
- * Makes the dump to send a sample to the sampler: the part between START and END of the rendered audio (the sampler
- * has no start point of its own), resampled to the nearest of its rates if it isn't at one (it rounds other rates
+ * Makes the dump to send a sample to the sampler: the part between START and END of the rendered audio, from the
+ * loop start if a loop goes back before START (a dump has no START, the sampler's START is 0 after it), resampled to the nearest of its rates if it isn't at one (it rounds other rates
  * down and keeps the rest as a fine tune it applies in the wrong direction), truncated to its maximum length.
  * It is sent as it sounds: normalizing is the recipe's, not done again here.
  *
@@ -124,12 +127,16 @@ export async function dumpFromSample(sample: Sample, options: SendOptions, resam
   : Promise<{ dump: Dump; notes: string[] }> {
   const notes: string[] = [];
   const bw = nearestBandwidth(sample.rate);
-  let data = sample.data.subarray(sample.start, sample.end);
+  const from = usedStart(sample);
+  let data = sample.data.subarray(from, sample.end);
   // the loop counted from the start of what is sent
-  let [loopFrom, loopTo] = [sample.loopStart - sample.start, sample.loopEnd - sample.start];
+  let [loopFrom, loopTo] = [sample.loopStart - from, sample.loopEnd - from];
   let ratio = 1;
-  if (sample.start > 0 || sample.end < sample.data.length) {
-    notes.push(`Sending the part from START to END, ${((sample.end - sample.start) / sample.rate).toFixed(2)} s`);
+  if (from < sample.start) {
+    notes.push(`The loop starts before START: sending from the loop start to END, ${
+      ((sample.end - from) / sample.rate).toFixed(2)} s`);
+  } else if (from > 0 || sample.end < sample.data.length) {
+    notes.push(`Sending the part from START to END, ${((sample.end - from) / sample.rate).toFixed(2)} s`);
   }
   if (sample.reverse) {
     // the sampler's direction isn't in a dump: send it reversed, to play forward there as it sounds here
@@ -141,6 +148,11 @@ export async function dumpFromSample(sample: Sample, options: SendOptions, resam
     data = await resample(data, sample.rate, bw.rate);
     ratio = bw.rate / sample.rate;
     notes.push(`Resampled from ${Math.round(sample.rate)} to ${bw.rate} Hz (${bw.name})`);
+  }
+  if (from < sample.start && !sample.reverse) {
+    // reversed, playing starts at END, which is where the sampler starts it
+    notes.push(`A dump has no START: set START to ${Math.round((sample.start - from) * ratio)} on the sampler to `
+      + 'play from where it starts here');
   }
   let n = data.length;
   if (n > MAX_SAMPLES) {

@@ -6,6 +6,7 @@
 // can move without redrawing the wave.
 
 import { h } from './dom';
+import { usedStart } from '../model/points';
 import type { PointName } from '../model/points';
 import { isLooped } from '../model/types';
 import type { Sample } from '../model/types';
@@ -387,7 +388,7 @@ export class Waveform {
       }
     }
     // what isn't used or kept
-    band(0, s.start, color('--wave-unused'));
+    band(0, usedStart(s), color('--wave-unused')); // a loop before START plays
     band(s.end, s.data.length, color('--wave-unused'));
     if (looped) {
       // the sampler ends a looped sample at the loop end, a reversed one at the loop start
