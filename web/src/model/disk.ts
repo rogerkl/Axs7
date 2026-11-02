@@ -1,15 +1,17 @@
-// S700/X7000 disk images (.qd). A disk side holds one sample with its points, scan mode, rate and sound, and its
-// keygroups in the sampler's 32 programs. A disk holds the sampler's own 12 bit audio, so a loaded sample is marked as
-// from the sampler: it is kept and sent as it is.
+// S700/X7000 disk images (.qd), and loading the S612's. An S700 disk side holds one sample with its points, scan
+// mode, rate and sound, and its keygroups in the sampler's 32 programs. It holds the sampler's own 12 bit audio, so a
+// loaded sample is marked as from the sampler: it is kept and sent as it is.
 //
 // A reversed sample is stored as it plays, the S700 only shows that it is reversed. Loading reverses it back, so it
 // shows as reversed here too.
 
 import { BANDWIDTHS, MAX_SAMPLES, encodeSamples, nearestBandwidth, samplerBandwidth } from '../protocol/akai';
+import { S612_RATE, readS612Disk } from '../protocol/s612disk';
 import {
-  S700_NOT_IN_PROGRAM, S700_PROGRAMS, S700_SCAN, bandwidthRate, buildS700Block, readS700Disk, writeS700Disk,
+  NotS700DiskError, S700_NOT_IN_PROGRAM, S700_PROGRAMS, S700_SCAN, bandwidthRate, buildS700Block, readS700Disk,
+  writeS700Disk,
 } from '../protocol/s700disk';
-import type { S700KeyRange, S700SampleParams } from '../protocol/s700disk';
+import type { S700Disk, S700KeyRange, S700SampleParams } from '../protocol/s700disk';
 import type { Resampler } from './convert';
 import { isTwelveBit } from './edit';
 import { defaultSound, newId } from './mapping';
@@ -22,8 +24,13 @@ import type { Keygroup, LoopMode, Program, Sample, Sound } from './types';
 export type KeyRange = Omit<Keygroup, 'id' | 'sampleId'>;
 
 export interface DiskSample {
+  /** S700 for the S700's and X7000's disks */
+  format: 'S700' | 'S612';
   sample: Sample;
-  /** the sample's keygroup in each of the sampler's programs, null where it isn't in the program */
+  /**
+   * The sample's keygroup in each of the sampler's programs, null where it isn't in the program. An S612 disk has no
+   * program data: its sample goes in a program of its own, as on the X7000, with S612_KEYGROUP.
+   */
   programs: (KeyRange | null)[];
   /** what wasn't as it should be, for the log */
   notes: string[];
@@ -34,13 +41,25 @@ const SCAN_MODES = new Map<number, LoopMode>([[S700_SCAN.oneShot, 'off'], [S700_
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
+/** Where the X7000 puts an S612 disk's sample */
+export const S612_KEYGROUP: KeyRange = { low: 36, high: 96, root: 60, semitones: 0, cents: 0, fixedPitch: false };
+
 /**
- * The sample on an S700 or X7000 disk image
+ * The sample on an S700, X7000 or S612 disk image
  *
  * @throws Error if it isn't one
  */
 export function sampleFromDisk(image: Uint8Array, name: string): DiskSample {
-  const { params: p, samples, crcOk, skipped } = readS700Disk(image);
+  let disk: S700Disk;
+  try {
+    disk = readS700Disk(image);
+  } catch (e) {
+    if (e instanceof NotS700DiskError) {
+      return sampleFromS612Disk(image, name);
+    }
+    throw e;
+  }
+  const { params: p, samples, crcOk, skipped } = disk;
   const notes: string[] = [];
   if (!crcOk) {
     notes.push('The disk is damaged (CRC error), the sample may have clicks or noise');
@@ -81,7 +100,30 @@ export function sampleFromDisk(image: Uint8Array, name: string): DiskSample {
     low: r.low, high: r.high, root: p.recordPitch, semitones: r.transpose,
     cents: Math.round((p.fineTune * 100) / 16), fixedPitch: r.constantPitch,
   }));
-  return { sample, programs, notes };
+  return { format: 'S700', sample, programs, notes };
+}
+
+/**
+ * An S612 disk's sample: its audio at the S612's rate. Its settings aren't known, so it is a one shot of the whole
+ * memory; as it isn't at one of the X7000's rates it is loaded as a file is, its edits up to the loader.
+ */
+function sampleFromS612Disk(image: Uint8Array, name: string): DiskSample {
+  const { samples, crcOk, skipped } = readS612Disk(image);
+  const notes = ['S612 disk: its start, end and loop aren\'t read (not known yet), it loads as a one shot of all of '
+    + 'its memory'];
+  if (!crcOk) {
+    notes.push('The disk is damaged (CRC error), the sample may have clicks or noise');
+  }
+  if (skipped > 0) {
+    notes.push('Passed over an older, damaged copy on the disk');
+  }
+  const data = Float32Array.from(samples, (v) => v / 2048);
+  const sample: Sample = {
+    id: newId(), name, source: data, sourceRate: S612_RATE, recipe: plainRecipe(), fromSampler: false,
+    rate: S612_RATE, data, start: 0, end: data.length, loopStart: 0, loopEnd: data.length, loopMode: 'off',
+    reverse: false, sound: defaultSound(),
+  };
+  return { format: 'S612', sample, programs: [], notes };
 }
 
 export interface DiskImage {

@@ -6,7 +6,8 @@ import { crc16, findBlocks, isQdImage, mfmBytes, mfmCells, qdCells } from '../sr
 import {
   S700_BLOCK_LENGTH, S700_FORMAT, bandwidthRate, buildS700Block, readS700Disk, readS700Params, writeS700Disk,
 } from '../src/protocol/s700disk';
-import { diskFromSample, sampleFromDisk } from '../src/model/disk';
+import { S612_KEYGROUP, diskFromSample, sampleFromDisk } from '../src/model/disk';
+import { S612_BLOCK_LENGTH, readS612Disk } from '../src/protocol/s612disk';
 import { defaultSound, newKeygroup, newProgram } from '../src/model/mapping';
 import { plainRecipe } from '../src/model/recipe';
 import { Store } from '../src/model/store';
@@ -177,6 +178,59 @@ describe('samples from disks', () => {
       bytes: [0, 0, 0, 0, 0, 0, 0, 60, 60, 255] })), 'REV');
     expect(sample).toMatchObject({ reverse: true, start: 2752, end: 32652, loopStart: 2752, loopEnd: 12752 });
     expect(sample.data[32751]).toBe(ramp[0] / 2048);
+  });
+});
+
+/** An S612 block as on its disks: settings bytes (as on a factory disk), then 16 bit words with 12 bits on top */
+function s612Block(samples: ArrayLike<number>, badCrc = false): Uint8Array {
+  const b = new Uint8Array(S612_BLOCK_LENGTH);
+  b.fill(0x16, 0, 7);
+  b[7] = 0xa5;
+  b.set([0x3b, 0xf0, 0xc4, 0x0e, 0x02, 0x08, 0x18, 0, 0, 0, 0, 0x82, 0xff, 0x7c, 0, 0, 4, 0, 0x84, 3], 8);
+  for (let i = 0; i < 0x7e00; i++) {
+    const word = ((((i < samples.length ? samples[i] : 0) + 2048) & 0xfff) << 4);
+    b.set([word & 0xff, word >> 8], 0x28 + 2 * i);
+  }
+  const crc = crc16(b, 7, S612_BLOCK_LENGTH - 2) ^ (badCrc ? 1 : 0);
+  b.set([crc & 0xff, crc >> 8], S612_BLOCK_LENGTH - 2);
+  return b;
+}
+
+describe('S612 disks', () => {
+  test('the audio at the S612\'s rate, a one shot of all its memory, as a file is loaded', () => {
+    const disk = readS612Disk(qdImage(s612Block(ramp)));
+    expect(disk.crcOk).toBe(true);
+    expect(disk.samples).toEqual(ramp.subarray(0, 0x7e00));
+    expect(disk.settings[4]).toBe(2);
+    const { format, sample, programs, notes } = sampleFromDisk(qdImage(s612Block(ramp)), 'VIBES');
+    expect(format).toBe('S612');
+    expect(sample).toMatchObject({ rate: 31250, sourceRate: 31250, fromSampler: false, start: 0, end: 32256,
+      loopMode: 'off', reverse: false });
+    expect(sample.data[7]).toBe(ramp[7] / 2048);
+    expect(programs).toEqual([]);
+    expect(notes[0]).toMatch(/^S612 disk: its start, end and loop aren't read/);
+  });
+
+  test('damaged blocks as on S700 disks; an S700 disk is still an S700 disk', () => {
+    const older = s612Block(new Int16Array(10), true);
+    expect(readS612Disk(qdImage(older, s612Block(ramp)))).toMatchObject({ crcOk: true, skipped: 1 });
+    expect(sampleFromDisk(qdImage(older), 'X').notes).toContain(
+      'The disk is damaged (CRC error), the sample may have clicks or noise');
+    expect(sampleFromDisk(qdImage(s700Block(ramp)), 'X').format).toBe('S700');
+    expect(() => sampleFromDisk(qdImage(), 'X')).toThrow(/No data/);
+  });
+
+  test('each in a program of its own, keys 36-96 as on the X7000, or the current program if it is empty', () => {
+    const store = new Store();
+    const first = sampleFromDisk(qdImage(s612Block(ramp)), 'Vibes').sample;
+    store.addSampleToOwnProgram(first, S612_KEYGROUP);
+    expect(store.programs).toHaveLength(1);
+    const second = { ...first, id: 'two', name: 'Marimba' };
+    store.addSampleToOwnProgram(second, S612_KEYGROUP);
+    expect(store.programs.map((p) => p.name)).toEqual(['PROGRAM 1', 'MARIMBA']);
+    expect(store.programIndex).toBe(1);
+    expect(store.program.keygroups).toMatchObject([{ sampleId: 'two', low: 36, high: 96, root: 60 }]);
+    expect(store.selectedSampleId).toBe('two');
   });
 });
 

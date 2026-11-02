@@ -84,8 +84,12 @@ Samples are loaded or received into memory and played from the on-screen keyboar
   sampler rate, 12 bit, with its START, END, loop, sound and keygroups. On the sampler the root and fine tune
   (in 1/16 semitones) are the sample's, so the first keygroup's are saved and the others' roots go in their
   transpose; what had to change is logged in the MIDI view. A reversed sample is stored as it plays, flagged as
-  reversed. Saved images are tested by loading them here; not yet on the sampler. The S612's disks are still to
-  come.
+  reversed. Saved images are tested by loading them here; not yet on the sampler.
+- **S612 disks** load too: the audio at the S612's 31250 Hz (its factory library plays as Cs 0.4 semitones sharp at
+  the 32 kHz usually given), loaded as a file is (normalized, at the nearest sampler rate with RATE ON LOAD =
+  SAMPLER). The S612 has no programs: as on the X7000, each goes in a program of its own, keys C1-C6. Its start,
+  end and loop aren't read yet (its 32 bytes of settings don't decode with confidence), so it loads as a one shot
+  of all of its memory.
 - **Banks**: the whole memory saved and loaded as a zip file: `bank.json` with the programs and each sample's
   settings and edits, each sample as a WAV file with its loop (as it sounds), and the original of an edited sample
   in `originals/`, so editing goes on from it after loading.
@@ -126,7 +130,7 @@ there at first and a release runs on its tag.
   (`dsp.rs`, the crossfade loop and the attack) runs in a second instance of the same module on the main thread
   (`web/src/audio/dsp.ts`).
 - `web/src/protocol`: the X7000 sample dump protocol, WAV files, and QuickDisk images (`qd.ts`: the track, MFM
-  and CRC; `s700disk.ts`: the S700 disk format).
+  and CRC; `s700disk.ts`: the S700 disk format; `s612disk.ts`: the S612's).
 - `web/src/midi`: Web MIDI ports and the transfers. A browser only delivers a sysex message when it is complete,
   and only sends complete ones, so a received dump arrives in one piece while ACKs are sent blind at a fixed pace,
   scheduled ahead with timestamps, and a dump is sent as one message without waiting for ACKs between blocks.

@@ -2,7 +2,7 @@
 
 import { decodeAudioFile, resampleInBrowser } from '../audio/decode';
 import { bankToZip, zipToBank } from '../model/bank';
-import { diskFromSample, sampleFromDisk } from '../model/disk';
+import { S612_KEYGROUP, diskFromSample, sampleFromDisk } from '../model/disk';
 import { dumpFromSample, sampleFromDump, sampleFromWav, wavLoops } from '../model/convert';
 import { defaultSound, newId } from '../model/mapping';
 import { plainRecipe } from '../model/recipe';
@@ -39,7 +39,7 @@ export class Actions {
    * from a sample that came from the sampler is marked as such again, and isn't edited.
    *
    * An S700/X7000 disk image (.qd) brings its sample as the sampler has it, with its sound, and its keygroups in the
-   * programs it was in on the sampler.
+   * programs it was in on the sampler. An S612 disk's sample loads as a file does, in a program of its own.
    */
   async loadFiles(files: File[]): Promise<void> {
     const { store, lcd, renderer } = this.app;
@@ -49,19 +49,21 @@ export class Actions {
       try {
         const buffer = await file.arrayBuffer();
         const bytes = new Uint8Array(buffer);
-        if (isQdImage(bytes)) {
-          const disk = sampleFromDisk(bytes, name);
-          for (const note of disk.notes) {
-            this.app.midi.logLine(`${file.name}: ${note}`, 'warn');
-          }
+        const disk = isQdImage(bytes) ? sampleFromDisk(bytes, name) : null;
+        for (const note of disk?.notes ?? []) {
+          this.app.midi.logLine(`${file.name}: ${note}`, 'warn');
+        }
+        if (disk?.format === 'S700') {
           renderer.adopt([disk.sample]); // as it is, nothing to render
           store.addSampleToPrograms(disk.sample, disk.programs);
           loaded++;
           continue;
         }
-        const wav = readWav(buffer);
+        const wav = disk ? null : readWav(buffer);
         let sample: Sample;
-        if (wav) {
+        if (disk) {
+          sample = disk.sample; // an S612's, at its own rate: loaded as a file is
+        } else if (wav) {
           sample = sampleFromWav(wav, name);
         } else {
           const { rate, data } = await decodeAudioFile(buffer);
@@ -77,7 +79,12 @@ export class Actions {
           Object.assign(sample, await renderer.render(sample));
         }
         renderer.adopt([sample]);
-        store.addSample(sample);
+        if (disk) {
+          // the S612 has no programs: the X7000 gives its sample a program of its own
+          store.addSampleToOwnProgram(sample, S612_KEYGROUP);
+        } else {
+          store.addSample(sample);
+        }
         loaded++;
       } catch (e) {
         this.app.midi.logLine(`Could not load ${file.name}: ${errorText(e)}`, 'error');

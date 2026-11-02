@@ -104,6 +104,27 @@ export class Store {
     this.emit('selection');
   }
 
+  /**
+   * Adds a sample in a program of its own, named after it (or the current program if it is empty), with one keygroup,
+   * and selects both. As the X7000 loads an S612 disk, which has no program data.
+   */
+  addSampleToOwnProgram(sample: Sample, keygroup: Omit<Keygroup, 'id' | 'sampleId'>): void {
+    this.samples.set(sample.id, normalizeSample(sample));
+    this.selectedSampleId = sample.id;
+    if (this.program.keygroups.length > 0) {
+      this.programs.push(newProgram(sample.name.toUpperCase()));
+      this.programIndex = this.programs.length - 1;
+    }
+    const added = newKeygroup(sample.id, keygroup);
+    this.program.keygroups.push(added);
+    this.selectedKeygroupId = added.id;
+    this.emit('samples');
+    this.emit('programs');
+    this.emit('keygroups');
+    this.emit('program');
+    this.emit('selection');
+  }
+
   updateSample(id: string, patch: SamplePatch): void {
     const sample = this.samples.get(id);
     if (sample) {

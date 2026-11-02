@@ -135,6 +135,9 @@ function readSamples(b: Uint8Array): Int16Array {
 
 const isS700Block = (b: Uint8Array) => String.fromCharCode(...b.subarray(8, 8 + S700_FORMAT.length)) === S700_FORMAT;
 
+/** A disk with blocks, but not the S700's: an S612 disk */
+export class NotS700DiskError extends Error {}
+
 /**
  * Reads the sample on an S700 or X7000 disk image: the first block with a good CRC, or the first block if none has
  * one.
@@ -146,8 +149,10 @@ export function readS700Disk(image: Uint8Array): S700Disk {
   const blocks = findBlocks(cells).map((at) => mfmBytes(cells, at, S700_BLOCK_LENGTH))
     .filter((b) => b.length === S700_BLOCK_LENGTH && isS700Block(b));
   if (blocks.length === 0) {
-    const any = findBlocks(cells).length > 0;
-    throw new Error(any ? 'Not an S700/X7000 disk (an S612 disk?)' : 'No data on the disk');
+    if (findBlocks(cells).length > 0) {
+      throw new NotS700DiskError('Not an S700/X7000 disk');
+    }
+    throw new Error('No data on the disk');
   }
   const good = blocks.findIndex((b) => crc16(b, 7) === 0);
   const block = blocks[Math.max(0, good)];
