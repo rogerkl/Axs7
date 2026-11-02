@@ -72,6 +72,38 @@ export class Store {
     }
   }
 
+  /**
+   * Adds a sample from the sampler's disk with its keygroups, in the programs it had on the sampler, by number (made
+   * as needed), and selects it. Without any it is added as addSample adds it.
+   *
+   * @param keygroups the sample's keygroup in each program, null where it isn't in the program
+   */
+  addSampleToPrograms(sample: Sample, keygroups: (Omit<Keygroup, 'id' | 'sampleId'> | null)[]): void {
+    if (!keygroups.some(Boolean)) {
+      this.addSample(sample);
+      return;
+    }
+    this.samples.set(sample.id, normalizeSample(sample));
+    this.selectedSampleId = sample.id;
+    keygroups.forEach((k, i) => {
+      if (k) {
+        while (this.programs.length <= i) {
+          this.programs.push(newProgram(`PROGRAM ${this.programs.length + 1}`));
+        }
+        const keygroup = newKeygroup(sample.id, k);
+        this.programs[i].keygroups.push(keygroup);
+        if (i === this.programIndex) {
+          this.selectedKeygroupId = keygroup.id;
+        }
+      }
+    });
+    this.emit('samples');
+    this.emit('programs');
+    this.emit('keygroups');
+    this.emit('program');
+    this.emit('selection');
+  }
+
   updateSample(id: string, patch: SamplePatch): void {
     const sample = this.samples.get(id);
     if (sample) {

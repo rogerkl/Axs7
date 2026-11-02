@@ -74,6 +74,12 @@ Samples are loaded or received into memory and played from the on-screen keyboar
   The sampler sends a sample from its START point to its END: what is before START isn't sent, even a loop point
   there (with START after the loop point, the sample plays fine on the sampler, but only START to END comes over).
   Set START to 0 on the sampler to receive all of a sample. The MIDI view logs each received dump's header.
+- **QuickDisk images**: S700/X7000 disk images (`.qd`, as the HxC floppy emulator and FlashFloppy on a Gotek use
+  them) load with LOAD FILE, several at once. A disk holds one sample with its parameters, as the S700's sample
+  parameter message has them: the sample comes with its points, scan mode, rate and sound (OUT and LFO), marked as
+  from the sampler, and with its keygroups in the programs it was in on the sampler, by number (root at its
+  recording pitch, transpose, fine tune, constant pitch). A disk with a damaged block loads with a warning, and an
+  older copy left on a disk is passed over. Saving disk images, and the S612's disks, are still to come.
 - **Banks**: the whole memory saved and loaded as a zip file: `bank.json` with the programs and each sample's
   settings and edits, each sample as a WAV file with its loop (as it sounds), and the original of an edited sample
   in `originals/`, so editing goes on from it after loading.
@@ -113,7 +119,8 @@ there at first and a release runs on its tag.
   Compiled to a wasm module without imports or wasm-bindgen, and run in an AudioWorklet. Sample editing in Rust
   (`dsp.rs`, the crossfade loop and the attack) runs in a second instance of the same module on the main thread
   (`web/src/audio/dsp.ts`).
-- `web/src/protocol`: the X7000 sample dump protocol and WAV files.
+- `web/src/protocol`: the X7000 sample dump protocol, WAV files, and QuickDisk images (`qd.ts`: the track, MFM
+  and CRC; `s700disk.ts`: the S700 disk format).
 - `web/src/midi`: Web MIDI ports and the transfers. A browser only delivers a sysex message when it is complete,
   and only sends complete ones, so a received dump arrives in one piece while ACKs are sent blind at a fixed pace,
   scheduled ahead with timestamps, and a dump is sent as one message without waiting for ACKs between blocks.

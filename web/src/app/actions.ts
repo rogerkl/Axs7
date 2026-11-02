@@ -2,12 +2,14 @@
 
 import { decodeAudioFile, resampleInBrowser } from '../audio/decode';
 import { bankToZip, zipToBank } from '../model/bank';
+import { sampleFromDisk } from '../model/disk';
 import { dumpFromSample, sampleFromDump, sampleFromWav, wavLoops } from '../model/convert';
 import { defaultSound, newId } from '../model/mapping';
 import { plainRecipe } from '../model/recipe';
 import type { Sample } from '../model/types';
 import { receiveDump, transmitDump } from '../midi/transfer';
 import { readWav, encodeWav } from '../protocol/wav';
+import { isQdImage } from '../protocol/qd';
 import { hex, nearestBandwidth, samplerBandwidth } from '../protocol/akai';
 import { download } from '../ui/dom';
 import type { App } from './app';
@@ -35,6 +37,9 @@ export class Actions {
    * Loads audio files as samples. The file is kept as the original; what is loaded starts out normalized, and at
    * the nearest of the sampler's rates with RATE ON LOAD = SAMPLER, as edits that can be changed. A wav file saved
    * from a sample that came from the sampler is marked as such again, and isn't edited.
+   *
+   * An S700/X7000 disk image (.qd) brings its sample as the sampler has it, with its sound, and its keygroups in the
+   * programs it was in on the sampler.
    */
   async loadFiles(files: File[]): Promise<void> {
     const { store, lcd, renderer } = this.app;
@@ -43,6 +48,17 @@ export class Actions {
       const name = store.uniqueSampleName(file.name.replace(/\.[^.]+$/, ''));
       try {
         const buffer = await file.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+        if (isQdImage(bytes)) {
+          const disk = sampleFromDisk(bytes, name);
+          for (const note of disk.notes) {
+            this.app.midi.logLine(`${file.name}: ${note}`, 'warn');
+          }
+          renderer.adopt([disk.sample]); // as it is, nothing to render
+          store.addSampleToPrograms(disk.sample, disk.programs);
+          loaded++;
+          continue;
+        }
         const wav = readWav(buffer);
         let sample: Sample;
         if (wav) {

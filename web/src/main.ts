@@ -158,8 +158,8 @@ async function main(): Promise<void> {
       store.addProgram();
       app.showView('program');
     }, { title: 'New program' }),
-    panelButton('LOAD WAV', async () => actions.loadFiles(await pickFiles('.wav,audio/*', true)),
-      { title: 'Load WAV or other audio files into memory' }),
+    panelButton('LOAD FILE', async () => actions.loadFiles(await pickFiles('.wav,.qd,audio/*', true)),
+      { title: 'Load WAV or other audio files into memory, or S700/X7000 QuickDisk images (.qd)' }),
     audition,
     panelButton('PANIC', () => player.allNotesOff(true), { title: 'Stop all sound' }),
   ];

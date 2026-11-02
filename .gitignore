@@ -7,3 +7,6 @@ dist/
 # reference material, not part of the project
 *.pdf
 *:Zone.Identifier
+
+# sample libraries to test with, not ours to publish
+/sounds/

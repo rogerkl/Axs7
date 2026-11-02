@@ -39,8 +39,8 @@ export function programView(app: App): View {
     : ParamCell {
     const ranges = {
       low: noteSpec, high: noteSpec, root: noteSpec,
-      semitones: { min: -48, max: 48, coarse: 12, format: (v: number) => (v > 0 ? `+${v}` : String(v)) },
-      cents: { min: -50, max: 50, coarse: 10, format: (v: number) => (v > 0 ? `+${v}` : String(v)) },
+      semitones: { min: -60, max: 60, coarse: 12, format: (v: number) => (v > 0 ? `+${v}` : String(v)) },
+      cents: { min: -100, max: 100, coarse: 10, format: (v: number) => (v > 0 ? `+${v}` : String(v)) },
     } as const;
     const cell = new ParamCell({
       key: `kg.${kg.id}.${field}`, label, ...ranges[field],

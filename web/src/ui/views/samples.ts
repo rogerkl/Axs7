@@ -56,8 +56,9 @@ export function samplesView(app: App): View {
   loadRate.el.title = 'KEEP loads files at their own rate, SAMPLER resamples them to the nearest of the sampler\'s '
     + 'rates';
   const loadRow = h('div', { class: 'row load-row' },
-    h('button', { class: 'soft', onClick: async () => actions.loadFiles(await pickFiles('.wav,audio/*', true)) },
-      'LOAD WAV'), loadRate.el);
+    h('button', { class: 'soft', title: 'WAV or other audio files, or S700/X7000 QuickDisk images (.qd)',
+      onClick: async () => actions.loadFiles(await pickFiles('.wav,.qd,audio/*', true)) }, 'LOAD WAV / QD'),
+    loadRate.el);
   const detail = h('div', { class: 'detail' });
   /** under the list: what goes to the sampler, for the selected sample */
   const side = h('div', { class: 'side-groups' });
@@ -314,8 +315,9 @@ export function samplesView(app: App): View {
     if (!s) {
       cells = [];
       detail.replaceChildren(wave.el, h('div', { class: 'empty-help' },
-        h('p', {}, 'Load WAV files (several at once, the loop in a WAV file is kept), or receive a sample from the '
-          + 'sampler. Memory is only limited by the browser.'),
+        h('p', {}, 'Load WAV files (several at once, the loop in a WAV file is kept), S700/X7000 QuickDisk images '
+          + '(.qd, with their sound and keygroups), or receive a sample from the sampler. Memory is only limited by '
+          + 'the browser.'),
         samplerGroup(false)));
       side.replaceChildren();
       return;
