@@ -148,6 +148,9 @@ there at first and a release runs on its tag.
 
 The protocol tests use a dump received from a real X7000 and check sent dumps byte for byte against the Java
 version's encoder. The transfer tests run against a simulated sampler that delivers sysex like Chrome does.
+The QuickDisk tests use a disk written by an S700 and one written by an S612, with their audio replaced by a test
+signal (`web/test/fixtures/make-fixtures.ts` makes them from sound libraries, which aren't in the repository). With
+the El Profesor de Danza S700 library in `sounds/`, they also read all 99 of its disks and save each one again.
 
 ## License
 

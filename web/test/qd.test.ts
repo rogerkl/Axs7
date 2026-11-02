@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { unzipSync } from 'fflate';
+import { gunzipSync, unzipSync } from 'fflate';
 import { describe, expect, test } from 'vitest';
 import { BANDWIDTHS, samplerBandwidth } from '../src/protocol/akai';
 import { crc16, findBlocks, isQdImage, mfmBytes, mfmCells, qdCells } from '../src/protocol/qd';
@@ -7,7 +7,7 @@ import {
   S700_BLOCK_LENGTH, S700_FORMAT, bandwidthRate, buildS700Block, readS700Disk, readS700Params, writeS700Disk,
 } from '../src/protocol/s700disk';
 import { S612_KEYGROUP, diskFromSample, sampleFromDisk } from '../src/model/disk';
-import { S612_BLOCK_LENGTH, readS612Disk } from '../src/protocol/s612disk';
+import { S612_BLOCK_LENGTH, S612_SAMPLES, readS612Disk } from '../src/protocol/s612disk';
 import { defaultSound, newKeygroup, newProgram } from '../src/model/mapping';
 import { plainRecipe } from '../src/model/recipe';
 import { Store } from '../src/model/store';
@@ -337,12 +337,75 @@ function same(a: ArrayLike<number>, b: ArrayLike<number>, length = Math.max(a.le
   return true;
 }
 
+/** Where the trailing sync bytes after an S700 block end: after them, the S700 leaves what was on the disk before */
+const S700_WRITTEN = 144453 + (4 + S700_BLOCK_LENGTH + 8) * 16;
+
+/** The disk loaded into memory, then saved from there */
+async function savedAgain(bytes: Uint8Array, name: string) {
+  const store = new Store();
+  const { sample, programs } = sampleFromDisk(bytes, name);
+  store.addSampleToPrograms(sample, programs);
+  return diskFromSample(store.samples.get(sample.id)!, store.programs, noResample);
+}
+
+// Disks the samplers wrote, with the audio replaced by the ramp (test/fixtures/make-fixtures.ts makes them from the
+// libraries in sounds/, which aren't in the repository)
+const fixture = (name: string) => gunzipSync(new Uint8Array(readFileSync(new URL(`fixtures/${name}`,
+  import.meta.url))));
+
+describe('disks as the samplers write them', () => {
+  const s700 = fixture('s700.qd.gz');
+  const s612 = fixture('s612.qd.gz');
+
+  test('an S700 disk', () => {
+    const disk = readS700Disk(s700);
+    expect(disk).toMatchObject({ crcOk: true, skipped: 0 });
+    expect(same(disk.samples, ramp, 32752)).toBe(true);
+    expect(disk.samples.subarray(32752).every((v) => v === 0)).toBe(true); // silent after the sampler's samples
+    const { format, sample, programs, notes } = sampleFromDisk(s700, 'CMI');
+    expect(format).toBe('S700');
+    expect(notes).toEqual([]);
+    expect(sample).toMatchObject({ rate: 15697.6, start: 0, end: 32752, loopStart: 32735, loopMode: 'forward' });
+    expect(sample.data[7]).toBe(ramp[7] / 2048);
+    expect(sample.sound).toMatchObject({ lfoSpeed: 50, lfoDepth: 0, lfoDelay: 64, filter: 88, release: 87, level: 90,
+      velLevel: 50 });
+    expect(programs[0]).toMatchObject({ low: 24, high: 99, root: 60, semitones: 0, cents: 0 });
+    expect(programs.filter(Boolean)).toHaveLength(1);
+  });
+
+  test('saved again, the S700 disk is the same: its parameters, its audio, and its track as the S700 wrote it',
+    async () => {
+      const saved = await savedAgain(s700, 'CMI');
+      expect(saved.notes).toEqual([]);
+      const again = readS700Disk(saved.bytes);
+      expect(again.params).toEqual(readS700Disk(s700).params);
+      expect(same(again.samples, ramp, 32752)).toBe(true);
+      expect(same(qdCells(saved.bytes), qdCells(s700), S700_WRITTEN)).toBe(true);
+    });
+
+  test('an S612 disk', () => {
+    const disk = readS612Disk(s612);
+    expect(disk).toMatchObject({ crcOk: true, skipped: 0 });
+    expect(same(disk.samples, ramp, S612_SAMPLES)).toBe(true);
+    // the settings start where they do on every factory disk: their first two words add up to FEFFh
+    const word = (at: number) => disk.settings[at] | (disk.settings[at + 1] << 8);
+    expect(word(0) + word(2)).toBe(0xfeff);
+    const { format, sample, programs } = sampleFromDisk(s612, 'TROMBONE');
+    expect(format).toBe('S612');
+    expect(sample).toMatchObject({ rate: 31250, start: 0, end: S612_SAMPLES, loopMode: 'off' });
+    expect(sample.data[7]).toBe(ramp[7] / 2048);
+    expect(programs).toEqual([]);
+  });
+});
+
 // The El Profesor de Danza library for the S700 (99 disks), if it is in sounds/ (not in the repository)
 const LIBRARY = new URL('../../sounds/Akai S700 - El Profesor de Danza Library [for FlashFloppy and HxC].zip',
   import.meta.url);
+const HAVE_LIBRARY = existsSync(LIBRARY);
 
-describe.skipIf(!existsSync(LIBRARY))('a real S700 library', () => {
-  const disks = Object.entries(unzipSync(new Uint8Array(readFileSync(LIBRARY))))
+describe.skipIf(!HAVE_LIBRARY)('a real S700 library', () => {
+  // a skipped describe still runs, to collect its tests: the library is only read if it is there
+  const disks = !HAVE_LIBRARY ? [] : Object.entries(unzipSync(new Uint8Array(readFileSync(LIBRARY))))
     .filter(([name]) => name.endsWith('.qd'))
     .map(([name, bytes]) => ({ name: name.replace(/^.*\/|\.qd$/g, ''), disk: readS700Disk(bytes), bytes }));
 
@@ -353,24 +416,10 @@ describe.skipIf(!existsSync(LIBRARY))('a real S700 library', () => {
     expect(new Set(disks.map((d) => d.disk.params.bandwidth))).toEqual(new Set([60]));
   });
 
-  test('the first disk', () => {
-    const { sample, programs, notes } = sampleFromDisk(disks.find((d) => d.name === '01 CMI voice 1')!.bytes, 'CMI');
-    expect(notes).toEqual([]);
-    expect(sample).toMatchObject({ rate: 15697.6, start: 0, end: 32752, loopStart: 32735, loopMode: 'forward' });
-    expect(sample.sound).toMatchObject({ lfoSpeed: 50, lfoDepth: 0, lfoDelay: 64, filter: 88, release: 87, level: 90,
-      velLevel: 50 });
-    expect(programs[0]).toMatchObject({ low: 24, high: 99, root: 60, semitones: 0, cents: 0 });
-    expect(programs.filter(Boolean)).toHaveLength(1);
-  });
-
   test('saved again, every disk is the same: its parameters, its audio, and its track as the S700 wrote it', async () => {
-    const upTo = 144453 + (4 + S700_BLOCK_LENGTH + 8) * 16; // the trailing sync bytes, then junk the S700 left
     const sameTrack: string[] = [];
     for (const d of disks) {
-      const store = new Store();
-      const { sample, programs } = sampleFromDisk(d.bytes, d.name);
-      store.addSampleToPrograms(sample, programs);
-      const saved = await diskFromSample(store.samples.get(sample.id)!, store.programs, noResample);
+      const saved = await savedAgain(d.bytes, d.name);
       expect(saved.notes).toEqual([]);
       const again = readS700Disk(saved.bytes);
       expect(again.params).toEqual(d.disk.params);
@@ -381,7 +430,7 @@ describe.skipIf(!existsSync(LIBRARY))('a real S700 library', () => {
       const [at] = findBlocks(cells);
       if (at === 144517 && d.disk.crcOk && !d.disk.skipped) {
         const ours = qdCells(writeS700Disk(mfmBytes(cells, at, S700_BLOCK_LENGTH)));
-        expect(same(cells, ours, upTo), d.name).toBe(true);
+        expect(same(cells, ours, S700_WRITTEN), d.name).toBe(true);
         sameTrack.push(d.name);
       }
     }
