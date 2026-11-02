@@ -79,7 +79,13 @@ Samples are loaded or received into memory and played from the on-screen keyboar
   parameter message has them: the sample comes with its points, scan mode, rate and sound (OUT and LFO), marked as
   from the sampler, and with its keygroups in the programs it was in on the sampler, by number (root at its
   recording pitch, transpose, fine tune, constant pitch). A disk with a damaged block loads with a warning, and an
-  older copy left on a disk is passed over. Saving disk images, and the S612's disks, are still to come.
+  older copy left on a disk is passed over. SAVE QD (SAMPLE view) saves a sample as a disk image, laid out on the
+  track as the S700 writes a disk (the 96 regular disks of a real library come out cell for cell): at the nearest
+  sampler rate, 12 bit, with its START, END, loop, sound and keygroups. On the sampler the root and fine tune
+  (in 1/16 semitones) are the sample's, so the first keygroup's are saved and the others' roots go in their
+  transpose; what had to change is logged in the MIDI view. A reversed sample is stored as it plays, flagged as
+  reversed. Saved images are tested by loading them here; not yet on the sampler. The S612's disks are still to
+  come.
 - **Banks**: the whole memory saved and loaded as a zip file: `bank.json` with the programs and each sample's
   settings and edits, each sample as a WAV file with its loop (as it sounds), and the original of an edited sample
   in `originals/`, so editing goes on from it after loading.

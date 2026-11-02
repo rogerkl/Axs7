@@ -3,9 +3,14 @@ import { unzipSync } from 'fflate';
 import { describe, expect, test } from 'vitest';
 import { BANDWIDTHS, samplerBandwidth } from '../src/protocol/akai';
 import { crc16, findBlocks, isQdImage, mfmBytes, mfmCells, qdCells } from '../src/protocol/qd';
-import { S700_BLOCK_LENGTH, S700_FORMAT, bandwidthRate, readS700Disk } from '../src/protocol/s700disk';
-import { sampleFromDisk } from '../src/model/disk';
+import {
+  S700_BLOCK_LENGTH, S700_FORMAT, bandwidthRate, buildS700Block, readS700Disk, readS700Params, writeS700Disk,
+} from '../src/protocol/s700disk';
+import { diskFromSample, sampleFromDisk } from '../src/model/disk';
+import { defaultSound, newKeygroup, newProgram } from '../src/model/mapping';
+import { plainRecipe } from '../src/model/recipe';
 import { Store } from '../src/model/store';
+import type { Keygroup, Sample } from '../src/model/types';
 
 interface BlockParams {
   programs?: [number, number, number, number][];
@@ -161,14 +166,122 @@ describe('samples from disks', () => {
   });
 
   test('damage and odd values are noted', () => {
-    const odd = sampleFromDisk(qdImage(s700Block(ramp, { scan: 3, bytes: [0, 0, 0, 0, 0, 0, 0, 60, 60, 255] }, true)),
-      'ODD');
+    const odd = sampleFromDisk(qdImage(s700Block(ramp, { scan: 3 }, true)), 'ODD');
     expect(odd.notes).toEqual(['The disk is damaged (CRC error), the sample may have clicks or noise',
-      'Unknown scan mode 3, played as one shot', 'Reversed on the sampler: it is stored as it plays, so it plays the '
-        + 'same here']);
+      'Unknown scan mode 3, played as one shot']);
     expect(odd.sample.loopMode).toBe('off');
   });
+
+  test('a reversed sample is stored as it plays: it is reversed back, its points mirrored', () => {
+    const { sample } = sampleFromDisk(qdImage(s700Block(ramp, { start: 100, end: 30000, loop: 20000,
+      bytes: [0, 0, 0, 0, 0, 0, 0, 60, 60, 255] })), 'REV');
+    expect(sample).toMatchObject({ reverse: true, start: 2752, end: 32652, loopStart: 2752, loopEnd: 12752 });
+    expect(sample.data[32751]).toBe(ramp[0] / 2048);
+  });
 });
+
+/** Resamples by picking samples, so where each lands is known */
+const pick = async (data: Float32Array, from: number, to: number) =>
+  Float32Array.from({ length: Math.round((data.length * to) / from) },
+    (_, i) => data[Math.min(data.length - 1, Math.round((i * from) / to))]);
+const noResample = () => Promise.reject(new Error('should not resample'));
+
+/** A sample as loaded from a file */
+const fileSample = (overrides: Partial<Sample> = {}): Sample => {
+  const data = overrides.data ?? Float32Array.from({ length: 44100 }, (_, i) => Math.sin(i / 20) * 0.5);
+  const rate = overrides.rate ?? 44100;
+  return { id: 'f', name: 'F', source: data, sourceRate: rate, recipe: plainRecipe(), fromSampler: false, rate, data,
+    start: 0, end: data.length, loopStart: 0, loopEnd: data.length, loopMode: 'off', reverse: false,
+    sound: defaultSound(), ...overrides };
+};
+const programsWith = (...keygroups: (Partial<Keygroup> | null)[]) => keygroups.map((k, i) => {
+  const p = newProgram(`P${i + 1}`);
+  if (k) {
+    p.keygroups.push(newKeygroup('f', k));
+  }
+  return p;
+});
+
+describe('saving disks', () => {
+  test('the block is built as the S700 builds it, and goes on a track as the S700 writes one', () => {
+    const block = s700Block(ramp, { programs: [[36, 59, 0x7f & -12, 0xbc], [60, 96, 0x80 | 5, 0x3c]], scan: 4,
+      start: 100, end: 20000, loop: 5000, bytes: [1, 2, 3, 4, 5, 6, 0xfc, 57, 70, 255, 7, 8, 9] });
+    expect(buildS700Block(readS700Params(block), ramp)).toEqual(block);
+    const image = writeS700Disk(block);
+    expect(image.length).toBe(204800);
+    const cells = qdCells(image);
+    expect(findBlocks(cells)).toEqual([144517]); // where the S700 puts it
+    expect(mfmBytes(cells, 144517, S700_BLOCK_LENGTH)).toEqual(block);
+  });
+
+  test('a sample from a file: at the sampler\'s rate, 12 bit, its points moved, its keygroups', async () => {
+    const data = Float32Array.from({ length: 30000 }, (_, i) => Math.sin(i / 20) * 0.5);
+    const sample = fileSample({ data, loopMode: 'forward', start: 441, loopStart: 22050, loopEnd: 30000,
+      sound: { ...defaultSound(), filter: 70, lfoDepth: 12 } });
+    const programs = programsWith({ low: 36, high: 59, root: 48, semitones: 0, cents: 25 }, null,
+      { low: 60, high: 127, root: 62, semitones: -12, cents: 25 }, { low: 0, high: 127, fixedPitch: true, semitones: 7, cents: 25 });
+    const { bytes, notes } = await diskFromSample(sample, programs, pick);
+    expect(notes).toEqual(['Resampled from 44100 to 39555.4 Hz (16khz)']);
+    const disk = readS700Disk(bytes);
+    expect(disk.crcOk).toBe(true);
+    expect(disk.params).toMatchObject({ scanMode: 2, bandwidth: 76, start: 396, end: 26908, loop: 19778,
+      recordPitch: 48, fineTune: 4, filter: 70, lfoDepth: 12, loudness: 80 });
+    // the sampler's root is the first keygroup's, 48: the other's root 62 goes in its transpose (48 - 62 - 12),
+    // constant pitch keeps its own
+    expect(disk.params.programs.slice(0, 4)).toEqual([
+      { low: 36, high: 59, transpose: 0, constantPitch: false, audioTrigger: null },
+      { low: 24, high: 0, transpose: 0, constantPitch: false, audioTrigger: null },
+      { low: 60, high: 99, transpose: -26, constantPitch: false, audioTrigger: null },
+      { low: 0, high: 99, transpose: 7, constantPitch: true, audioTrigger: null }]);
+    // loaded again it plays the same, each key at the same pitch
+    const back = sampleFromDisk(bytes, 'F');
+    expect(back.programs[2]).toMatchObject({ root: 48, semitones: -26, cents: 25 });
+    expect(back.sample.data[1000]).toBeCloseTo(Math.sin(Math.round((1000 * 44100) / 39555.4) / 20) * 0.5, 2);
+  });
+
+  test('saved and loaded again, a sample from the sampler is the same, reversed too', async () => {
+    for (const reversed of [0, 255]) {
+      const image = qdImage(s700Block(ramp, { programs: [[24, 99, 0, 0xbc]], start: 100, end: 30000, loop: 20000,
+        bytes: [50, 10, 64, 88, 87, 90, 3, 62, 60, reversed, 57, 50, 3] }));
+      const store = new Store();
+      const { sample, programs } = sampleFromDisk(image, 'X');
+      store.addSampleToPrograms(sample, programs);
+      const saved = await diskFromSample(store.samples.get(sample.id)!, store.programs, noResample);
+      expect(saved.notes).toEqual([]);
+      const again = readS700Disk(saved.bytes);
+      expect(again.params).toEqual(readS700Disk(image).params);
+      expect(again.samples.subarray(0, 32752)).toEqual(ramp.subarray(0, 32752));
+    }
+  });
+
+  test('too long: from START, truncated; what the sampler can\'t have is noted', async () => {
+    const data = Float32Array.from({ length: 50000 }, (_, i) => ((i % 100) - 50) / 64);
+    const sample = fileSample({ data, rate: 39555.4, start: 10000, end: 50000, loopStart: 12000, loopEnd: 45000,
+      loopMode: 'forward' });
+    const programs = [...programsWith({ low: 100, high: 120 }), ...new Array(32).fill(null).map(() => newProgram('X'))];
+    programs[32].keygroups.push(newKeygroup('f'));
+    const { bytes, notes } = await diskFromSample(sample, programs, noResample);
+    expect(notes).toEqual(['Too long for the sampler: saved from START to END',
+      'Truncated from 40000 to 32752 samples, 0.83 s',
+      'The sampler has 32 programs, only those are saved',
+      'Program 1: the key range is above the sampler\'s keys, left out']);
+    const disk = readS700Disk(bytes);
+    expect(disk.params).toMatchObject({ start: 0, end: 32752, loop: 2000 });
+    expect(disk.samples[0]).toBe(Math.trunc(data[10000] * 2047 + 2048) - 2048);
+    const nowhere = await diskFromSample(fileSample({ rate: 39555.4, data: new Float32Array(10000) }), [], noResample);
+    expect(nowhere.notes).toEqual(['In no program: the sampler plays it from no key until it gets a key range']);
+  });
+});
+
+/** Typed arrays compared without toEqual, which goes value by value and is slow for a whole disk */
+function same(a: ArrayLike<number>, b: ArrayLike<number>, length = Math.max(a.length, b.length)): boolean {
+  for (let i = 0; i < length; i++) {
+    if (a[i] !== b[i]) {
+      return false;
+    }
+  }
+  return true;
+}
 
 // The El Profesor de Danza library for the S700 (99 disks), if it is in sounds/ (not in the repository)
 const LIBRARY = new URL('../../sounds/Akai S700 - El Profesor de Danza Library [for FlashFloppy and HxC].zip',
@@ -195,6 +308,31 @@ describe.skipIf(!existsSync(LIBRARY))('a real S700 library', () => {
     expect(programs[0]).toMatchObject({ low: 24, high: 99, root: 60, semitones: 0, cents: 0 });
     expect(programs.filter(Boolean)).toHaveLength(1);
   });
+
+  test('saved again, every disk is the same: its parameters, its audio, and its track as the S700 wrote it', async () => {
+    const upTo = 144453 + (4 + S700_BLOCK_LENGTH + 8) * 16; // the trailing sync bytes, then junk the S700 left
+    const sameTrack: string[] = [];
+    for (const d of disks) {
+      const store = new Store();
+      const { sample, programs } = sampleFromDisk(d.bytes, d.name);
+      store.addSampleToPrograms(sample, programs);
+      const saved = await diskFromSample(store.samples.get(sample.id)!, store.programs, noResample);
+      expect(saved.notes).toEqual([]);
+      const again = readS700Disk(saved.bytes);
+      expect(again.params).toEqual(d.disk.params);
+      expect(same(again.samples, d.disk.samples, 32752), d.name).toBe(true);
+      // the original block on our track: cell for cell as on the real disk, for the disks written as most are
+      // (one is from another drive, one damaged, one with an older copy where the block goes)
+      const cells = qdCells(d.bytes);
+      const [at] = findBlocks(cells);
+      if (at === 144517 && d.disk.crcOk && !d.disk.skipped) {
+        const ours = qdCells(writeS700Disk(mfmBytes(cells, at, S700_BLOCK_LENGTH)));
+        expect(same(cells, ours, upTo), d.name).toBe(true);
+        sameTrack.push(d.name);
+      }
+    }
+    expect(sameTrack).toHaveLength(96);
+  }, 60000);
 
   test('the low nibbles: the even sample\'s in the low half of the byte follows the wave', () => {
     // with the halves swapped, each sample is further from what its neighbours predict

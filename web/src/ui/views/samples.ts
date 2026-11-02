@@ -413,6 +413,9 @@ export function samplesView(app: App): View {
         reset,
         h('button', { class: 'soft', onClick: () => actions.saveWav(sample()),
           title: 'The sample as it sounds, with its loop' }, 'SAVE WAV'),
+        h('button', { class: 'soft', onClick: () => actions.saveDisk(sample()),
+          title: 'An S700/X7000 disk image (.qd) of the sample, with its sound and keygroups, for a Gotek or HxC' },
+        'SAVE QD'),
         h('button', { class: 'soft danger', onClick: () => {
           if (confirm(`Delete ${sample().name}?`)) {
             store.removeSample(id);

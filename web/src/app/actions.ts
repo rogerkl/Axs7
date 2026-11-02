@@ -2,7 +2,7 @@
 
 import { decodeAudioFile, resampleInBrowser } from '../audio/decode';
 import { bankToZip, zipToBank } from '../model/bank';
-import { sampleFromDisk } from '../model/disk';
+import { diskFromSample, sampleFromDisk } from '../model/disk';
 import { dumpFromSample, sampleFromDump, sampleFromWav, wavLoops } from '../model/convert';
 import { defaultSound, newId } from '../model/mapping';
 import { plainRecipe } from '../model/recipe';
@@ -247,6 +247,25 @@ export class Actions {
   saveWav(sample: Sample): void {
     download(encodeWav(sample.data, sample.rate, wavLoops(sample), sample.fromSampler ? { fromSampler: true } : undefined),
       `${sample.name}.wav`, 'audio/wav');
+  }
+
+  /**
+   * The sample as an S700/X7000 disk image (.qd), for a Gotek with FlashFloppy or an HxC: as the sampler will have
+   * it, with its sound and its keygroups in the programs. What had to be changed is logged in the MIDI view.
+   */
+  async saveDisk(sample: Sample): Promise<void> {
+    const { store, lcd, midi } = this.app;
+    try {
+      const { bytes, notes } = await diskFromSample(sample, store.programs, resampleInBrowser);
+      for (const note of notes) {
+        midi.logLine(`${sample.name}.qd: ${note}`);
+      }
+      download(bytes, `${sample.name}.qd`, 'application/octet-stream');
+      lcd.flash(`SAVED ${sample.name}`);
+    } catch (e) {
+      midi.logLine(`Could not save ${sample.name}.qd: ${errorText(e)}`, 'error');
+      lcd.flash('SAVE FAILED, SEE MIDI');
+    }
   }
 
   saveBank(): void {

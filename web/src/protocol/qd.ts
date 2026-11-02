@@ -105,6 +105,29 @@ export function findBlocks(cells: Uint8Array): number[] {
   return found;
 }
 
+/** The read/write window of a track, in bytes from its start: where the drive's head is on the disk's spiral */
+export interface QdWindow {
+  start: number;
+  end: number;
+}
+
+/** An image with one track of cells, padded to `size` bytes with the fill pattern (a 1 cell in every four) */
+export function qdImage(cells: Uint8Array, window: QdWindow, size: number): Uint8Array {
+  const trackBytes = Math.ceil(cells.length / 8);
+  const image = new Uint8Array(Math.max(size, 0x400 + trackBytes)).fill(0x11, 0x400);
+  image.set([0x51, 0x44], 3); // "QD", the rest of the header 0
+  const view = new DataView(image.buffer);
+  view.setUint32(TRACK_TABLE, 0x400, true);
+  view.setUint32(TRACK_TABLE + 4, trackBytes, true);
+  view.setUint32(TRACK_TABLE + 8, window.start, true);
+  view.setUint32(TRACK_TABLE + 12, window.end, true);
+  image.fill(0, 0x400, 0x400 + trackBytes);
+  for (let i = 0; i < cells.length; i++) {
+    image[0x400 + (i >> 3)] |= cells[i] << (i & 7);
+  }
+  return image;
+}
+
 /** CRC-16/ARC: polynomial 8005h reflected, from 0 */
 export function crc16(bytes: ArrayLike<number>, from = 0, to = bytes.length): number {
   let crc = 0;

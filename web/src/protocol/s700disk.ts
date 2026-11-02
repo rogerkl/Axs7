@@ -15,7 +15,7 @@
 //            the high 8 bits: 32768 samples, 12 bit offset binary (800h is 0) as in a sample dump
 //   C0C2h    CRC-16 of the bytes from the marker on
 
-import { crc16, findBlocks, mfmBytes, qdCells } from './qd';
+import { QD_MARKER, QD_SYNC, crc16, findBlocks, mfmBytes, mfmCells, qdCells, qdImage } from './qd';
 
 export const S700_FORMAT = 'S700 FORMAT 0.00';
 export const S700_BLOCK_LENGTH = 0xc0c4;
@@ -79,6 +79,10 @@ export interface S700Disk {
   /** blocks on the track that were passed over: older, damaged copies left from saving again */
   skipped: number;
 }
+
+/** How the S700 leaves a program the sample isn't in */
+export const S700_NOT_IN_PROGRAM: S700KeyRange = { low: 24, high: 0, transpose: 0, constantPitch: false,
+  audioTrigger: null };
 
 /** The sample rate of a recording bandwidth code */
 export function bandwidthRate(bandwidth: number): number {
@@ -149,4 +153,75 @@ export function readS700Disk(image: Uint8Array): S700Disk {
   const block = blocks[Math.max(0, good)];
   return { params: readS700Params(block), samples: readSamples(block), crcOk: good >= 0,
     skipped: Math.max(0, good) };
+}
+
+/**
+ * The block the S700 saves, with its CRC
+ *
+ * @param samples 12 bit, -2048..2047, up to 32768 (the rest is silence)
+ */
+export function buildS700Block(params: S700SampleParams, samples: ArrayLike<number>): Uint8Array {
+  const b = new Uint8Array(S700_BLOCK_LENGTH);
+  b.fill(QD_SYNC, 0, 7);
+  b[7] = QD_MARKER;
+  b.set([...S700_FORMAT].map((c) => c.charCodeAt(0)), 8);
+  params.programs.slice(0, S700_PROGRAMS).forEach((r, p) => {
+    // an audio trigger that is off keeps note 60, as the S700 leaves it
+    b.set([r.low, r.high, (r.transpose & 0x7f) | (r.constantPitch ? 0x80 : 0),
+      r.audioTrigger === null ? 0x80 | 60 : r.audioTrigger & 0x7f], PROGRAMS_AT + p * 4);
+  });
+  const word = (at: number, v: number) => b.set([v & 0xff, (v >> 8) & 0xff], at);
+  const at = PARAMS_AT;
+  b[at] = params.scanMode;
+  word(at + 1, params.start);
+  word(at + 3, params.end - 1); // the S700 keeps these two too
+  word(at + 5, params.end);
+  word(at + 7, params.loop);
+  word(at + 9, params.end - 1 - params.loop);
+  b.set([params.lfoSpeed, params.lfoDepth, params.lfoDelay, params.filter, params.release, params.loudness,
+    params.fineTune & 0xff, params.recordPitch, params.bandwidth, params.reversed ? 0xff : 0, params.velFilter,
+    params.velLoudness, params.velRelease], at + 11);
+  for (let i = 0; i < S700_DISK_SAMPLES; i++) {
+    const v = Math.max(0, Math.min(4095, Math.round(i < samples.length ? samples[i] : 0) + 2048));
+    b[AUDIO_AT + 0x4000 + i] = v >> 4;
+    b[AUDIO_AT + (i >> 1)] |= i & 1 ? (v & 0x0f) << 4 : v & 0x0f;
+  }
+  word(S700_BLOCK_LENGTH - 2, crc16(b, 7, S700_BLOCK_LENGTH - 2));
+  return b;
+}
+
+// Where an S700 puts things on a disk side, in cells from the start of the track, as on real disks
+const TRACK_BYTES = 203417;
+const IMAGE_BYTES = 204800;
+const WINDOW = { start: 12713, end: 177989 };
+/** the fill (a 1 cell in every four) ends, MFM 0 bits from the next cell */
+const ZEROS_FROM = 134273;
+/** a marked F0h byte, ten sync bytes, the marker and the block from here, then eight sync bytes and 0 bits */
+const BLOCK_FROM = 144453;
+/** the fill again */
+const FILL_FROM = 1177776;
+
+/** A disk image with the block on its track, laid out as the S700 writes a disk */
+export function writeS700Disk(block: Uint8Array): Uint8Array {
+  const cells = new Uint8Array(TRACK_BYTES * 8);
+  const fill = (from: number, to: number) => {
+    for (let i = from; i < to; i++) {
+      cells[i] = i % 4 === 0 ? 1 : 0;
+    }
+  };
+  // MFM 0 bits: a clock cell each
+  const zeros = (from: number, to: number) => {
+    for (let i = from; i < to; i += 2) {
+      cells[i] = 1;
+    }
+  };
+  fill(0, ZEROS_FROM - 1);
+  zeros(ZEROS_FROM, BLOCK_FROM);
+  const data = mfmCells([0xf0, QD_SYNC, QD_SYNC, QD_SYNC, ...block, ...new Array<number>(8).fill(QD_SYNC)]);
+  cells.set(data, BLOCK_FROM);
+  // the mark: a clock cell before the F0h byte's first 1 bit, where MFM has none, so data can't look like it
+  cells[BLOCK_FROM + 8] = 1;
+  zeros(BLOCK_FROM + data.length, FILL_FROM);
+  fill(FILL_FROM, cells.length);
+  return qdImage(cells, WINDOW, IMAGE_BYTES);
 }
