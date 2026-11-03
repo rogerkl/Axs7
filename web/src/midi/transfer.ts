@@ -8,6 +8,8 @@
 
 import { ACK, MAX_BLOCKS, hex, parseDump, requestMessage, wireSeconds } from '../protocol/akai';
 import type { Dump, ParsedDump } from '../protocol/akai';
+import { S700_IDS, SPRM_LENGTH, isAkai, isSampleParams, parseSampleParams, sampleParamsRequest } from '../protocol/sprm';
+import type { SampleParams } from '../protocol/sprm';
 import type { Log, MidiLink } from './link';
 
 export interface AckTiming {
@@ -210,4 +212,90 @@ export function transmitDump(link: MidiLink, dump: Dump, options: TransmitOption
     }, 100);
     signal?.addEventListener('abort', () => finish(true));
   });
+}
+
+export interface ParamsReply extends SampleParams {
+  /** the channel and identifier of the request that was answered */
+  askedChannel: number;
+  askedId: number;
+  raw: Uint8Array;
+}
+
+export interface ParamsResult {
+  reply: ParamsReply | null;
+  /** other Akai messages that came while asking */
+  other: Uint8Array[];
+  requests: number;
+}
+
+export interface ParamsOptions {
+  /** the channel to ask on first, 0-15 */
+  channel?: number;
+  /** the identifier to try first */
+  id?: number;
+  /** how long to wait for a reply to each request: the reply takes 102 ms to send */
+  waitMs?: number;
+  signal?: AbortSignal;
+  onRequest?: (channel: number, id: number) => void;
+}
+
+/**
+ * Asks the sampler for a slot's parameters, on each MIDI channel in turn from `channel`, with each reading of the
+ * S700's identifier, until a request is answered. A reply that comes later than `waitMs` is taken as the answer to the
+ * next request.
+ */
+export async function requestSampleParams(link: MidiLink, slot: number, options: ParamsOptions = {}):
+  Promise<ParamsResult> {
+  const { channel = 0, id = S700_IDS[0], waitMs = 600, signal, onRequest } = options;
+  const output = link.output;
+  if (!output || !link.input) {
+    throw new TransferError('No MIDI input and output selected');
+  }
+  const replies: Uint8Array[] = [];
+  const other: Uint8Array[] = [];
+  let wake: (() => void) | null = null;
+  const unlisten = link.listen((data) => {
+    if (isSampleParams(data) && data.length >= SPRM_LENGTH - 1) {
+      replies.push(data.slice());
+      wake?.();
+    } else if (isAkai(data)) {
+      other.push(data.slice());
+    }
+  });
+  const wait = () => new Promise<void>((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      wake = null;
+      resolve();
+    };
+    const timer = setTimeout(done, waitMs);
+    signal?.addEventListener('abort', done);
+    wake = done;
+  });
+  try {
+    let requests = 0;
+    for (const askedId of [id, ...S700_IDS.filter((i) => i !== id)]) {
+      for (let k = 0; k < 16; k++) {
+        if (signal?.aborted) {
+          throw new DOMException('Cancelled', 'AbortError');
+        }
+        const askedChannel = (channel + k) % 16;
+        onRequest?.(askedChannel, askedId);
+        output.send(sampleParamsRequest(askedChannel, slot, askedId));
+        requests++;
+        await wait();
+        if (replies.length) {
+          return { reply: { ...parseSampleParams(replies[0]), askedChannel, askedId, raw: replies[0] }, other,
+            requests };
+        }
+      }
+    }
+    if (signal?.aborted) {
+      throw new DOMException('Cancelled', 'AbortError');
+    }
+    return { reply: null, other, requests };
+  } finally {
+    unlisten();
+  }
 }

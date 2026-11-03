@@ -7,10 +7,14 @@ import { dumpFromSample, sampleFromDump, sampleFromWav, wavLoops } from '../mode
 import { defaultSound, newId } from '../model/mapping';
 import { plainRecipe } from '../model/recipe';
 import type { Sample } from '../model/types';
-import { receiveDump, transmitDump } from '../midi/transfer';
+import { receiveDump, requestSampleParams, transmitDump } from '../midi/transfer';
+import type { ParamsReply } from '../midi/transfer';
 import { readWav, encodeWav } from '../protocol/wav';
 import { isQdImage } from '../protocol/qd';
 import { hex, nearestBandwidth, samplerBandwidth } from '../protocol/akai';
+import { S700_SCAN, bandwidthRate } from '../protocol/s700disk';
+import { sampleParamsRequest } from '../protocol/sprm';
+import { noteName } from '../model/notes';
 import { download } from '../ui/dom';
 import type { App } from './app';
 
@@ -20,7 +24,7 @@ const AUDITION_KEY = 200;
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export class Actions {
-  busy: 'receive' | 'send' | null = null;
+  busy: 'receive' | 'send' | 'params' | null = null;
   private abort: AbortController | null = null;
   /** when the ACKs scheduled by the last receive have gone out */
   private acksUntil = 0;
@@ -183,6 +187,64 @@ export class Actions {
     }
   }
 
+  /**
+   * Asks the sampler for the slot's parameters with the S700's Akai exclusive request, and logs the reply: to find out
+   * whether the X7000 answers it, on which channel, and what it sends
+   */
+  async requestParams(): Promise<void> {
+    if (this.busy === 'params') {
+      this.cancel();
+      return;
+    }
+    if (this.busy || !this.midiReady()) {
+      return;
+    }
+    const { lcd, settings, midi } = this.app;
+    const slot = settings.slot;
+    this.setBusy('params');
+    this.abort = new AbortController();
+    try {
+      await this.waitForAcks();
+      midi.logLine(`Asking for the parameters of slot ${slot + 1}: `
+        + `${hex(sampleParamsRequest(settings.paramsChannel, slot, settings.paramsId))}, on channel `
+        + `${settings.paramsChannel + 1} first, then the others`);
+      const r = await requestSampleParams(midi.link!, slot, {
+        channel: settings.paramsChannel,
+        id: settings.paramsId,
+        signal: this.abort.signal,
+        onRequest: (channel, id) => lcd.hold(`PARAMETERS? CH ${channel + 1} ${hex([id])}H`),
+      });
+      for (const m of r.other) {
+        midi.logLine(`Akai message: ${hex(m.subarray(0, 16))}${m.length > 16 ? ` … (${m.length} bytes)` : ''}`);
+      }
+      lcd.release();
+      if (!r.reply) {
+        midi.logLine(`No reply to ${r.requests} requests: every channel, identifiers 41h and 65h. Is the sampler's `
+          + 'MIDI OUT connected to the input?', 'warn');
+        lcd.flash('NO REPLY, SEE MIDI');
+        return;
+      }
+      settings.paramsChannel = r.reply.askedChannel;
+      settings.paramsId = r.reply.askedId;
+      this.app.saveSettings();
+      for (const line of paramsLines(r.reply)) {
+        midi.logLine(line, r.reply.checksumOk ? 'info' : 'warn');
+      }
+      lcd.flash(`PARAMETERS OF SLOT ${r.reply.slot + 1}`);
+    } catch (e) {
+      lcd.release();
+      if ((e as Error).name === 'AbortError') {
+        lcd.flash('CANCELLED');
+      } else {
+        midi.logLine(`Request failed: ${errorText(e)}`, 'error');
+        lcd.flash('REQUEST FAILED, SEE MIDI');
+      }
+    } finally {
+      this.abort = null;
+      this.setBusy(null);
+    }
+  }
+
   async send(): Promise<void> {
     if (this.busy === 'send') {
       this.cancel();
@@ -308,4 +370,28 @@ export class Actions {
       lcd.flash('MEMORY CLEARED');
     }
   }
+}
+
+const SCAN_NAMES = new Map<number, string>([[S700_SCAN.oneShot, 'ONE SHOT'], [S700_SCAN.looping, 'LOOP'],
+  [S700_SCAN.alternating, 'ALT'], [S700_SCAN.drum, 'DRUM']]);
+
+/** The parameters the sampler sent, for the log */
+function paramsLines(r: ParamsReply): string[] {
+  const p = r.params;
+  const programs = p.programs.flatMap((k, i) => (k.low <= k.high
+    ? [`P${i + 1} ${noteName(k.low)}-${noteName(k.high)}${k.transpose ? ` ${k.transpose > 0 ? '+' : ''}${k.transpose}` : ''}`
+      + `${k.constantPitch ? ' FIXED' : ''}${k.audioTrigger === null ? '' : ` TRIGGER ${noteName(k.audioTrigger)}`}`]
+    : []));
+  return [
+    `Parameters of slot ${r.slot + 1}: asked on channel ${r.askedChannel + 1} with identifier ${hex([r.askedId])}h, `
+      + `the reply on channel ${r.channel + 1} with ${hex([r.id])}h${r.checksumOk ? '' : ', CHECKSUM ERROR'}`,
+    `START ${p.start}, END ${p.end}, LOOP ${p.loop}, SCAN ${SCAN_NAMES.get(p.scanMode) ?? `? (${p.scanMode})`}`
+      + `${p.reversed ? ', REVERSED' : ''}`,
+    `Rate ${bandwidthRate(p.bandwidth).toFixed(1)} Hz (code ${p.bandwidth}), root ${noteName(p.recordPitch)}, `
+      + `fine tune ${p.fineTune}/16 semitone`,
+    `LFO speed ${p.lfoSpeed} depth ${p.lfoDepth} delay ${p.lfoDelay}, filter ${p.filter}, release ${p.release}, `
+      + `level ${p.loudness}, velocity to filter ${p.velFilter}, level ${p.velLoudness}, release ${p.velRelease}`,
+    programs.length ? `Programs: ${programs.join(', ')}` : 'In no program',
+    `Bytes: ${hex(r.bytes)}`,
+  ];
 }

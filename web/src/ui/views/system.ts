@@ -7,7 +7,7 @@ import { ParamCell } from '../param';
 import { slotCell } from '../slot';
 
 export function midiView(app: App): View {
-  const { midi, settings, player } = app;
+  const { midi, settings, player, actions } = app;
   const ports = h('div', { class: 'row' });
   const logEl = h('pre', { class: 'log', 'aria-label': 'MIDI log' });
   const save = () => app.saveSettings();
@@ -22,6 +22,11 @@ export function midiView(app: App): View {
     slot.cell,
     new ParamCell({ key: 'midi.slotCount', label: 'SLOTS', min: 1, max: MAX_SLOTS, coarse: 2,
       get: () => settings.slotCount, set: (v) => app.setSlotCount(v), detail: () => 'ON SAMPLER' }),
+    new ParamCell({ key: 'midi.paramsChannel', label: 'SYSEX CHAN', min: 1, max: 16, coarse: 4,
+      get: () => settings.paramsChannel + 1, set: (v) => {
+        settings.paramsChannel = v - 1;
+        save();
+      }, detail: () => 'PARAMETERS' }),
     new ParamCell({ key: 'midi.ack', label: 'ACK MS', min: 20, max: 300, coarse: 10, get: () => settings.ackIntervalMs,
       set: (v) => {
         settings.ackIntervalMs = v;
@@ -58,6 +63,7 @@ export function midiView(app: App): View {
         select('INPUT', link.inputs(), link.input, (id) => midi.select(id, link.output?.id ?? null)),
         select('OUTPUT', link.outputs(), link.output, (id) => midi.select(link.input?.id ?? null, id)));
     }
+    cells.forEach((c) => c.refresh()); // a request for parameters keeps the channel that answered
     logEl.textContent = midi.log.slice(-60).join('\n');
     logEl.scrollTop = logEl.scrollHeight;
   }
@@ -71,6 +77,11 @@ export function midiView(app: App): View {
   return {
     el: h('div', { class: 'view view-midi' }, ports,
       h('div', { class: 'params' }, ...cells.map((c) => c.el)),
+      h('div', { class: 'row' },
+        h('button', { class: 'soft', onClick: () => actions.requestParams() }, 'REQUEST PARAMETERS'),
+        h('span', { class: 'info' }, 'Asks for the slot\'s START, END, scan mode, sound and key ranges, which a '
+          + 'sample dump doesn\'t carry, and logs them. A try of the S700\'s message on the X7000: it asks on SYSEX '
+          + 'CHAN first, then on the other channels, and keeps the one that is answered.')),
       h('p', { class: 'info' }, 'SLOTS is how many sample slots the sampler has: 6 on a standard X7000, more '
         + 'with a memory expansion. The same input plays the programs (also from the sampler\'s own keyboard) and '
         + 'receives sample dumps. Use Chrome or Edge, from localhost or https. Filler adds pauses between blocks '

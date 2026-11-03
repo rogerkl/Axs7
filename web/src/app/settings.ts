@@ -15,6 +15,10 @@ export interface Settings {
   slotCount: number;
   /** keep a loaded file's rate, or resample it to the nearest of the sampler's rates */
   loadRate: 'keep' | 'sampler';
+  /** the channel the sampler answered a request for parameters on (Akai exclusive), 0-15 */
+  paramsChannel: number;
+  /** the S700 identifier it answered to */
+  paramsId: number;
   ackIntervalMs: number;
   lookaheadMs: number;
   fillerPerBlock: number;
@@ -28,7 +32,7 @@ const VERSION = 2;
 
 const DEFAULTS: Settings = {
   version: VERSION, midiIn: null, midiOut: null, channel: 0, slot: 0, slotCount: 6,
-  loadRate: 'sampler', ackIntervalMs: 50, lookaheadMs: 1500, fillerPerBlock: 0, volume: 0.8, polyphony: 16,
+  loadRate: 'sampler', paramsChannel: 0, paramsId: 0x41, ackIntervalMs: 50, lookaheadMs: 1500, fillerPerBlock: 0, volume: 0.8, polyphony: 16,
   view: 'samples',
 };
 

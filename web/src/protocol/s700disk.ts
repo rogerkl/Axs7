@@ -22,8 +22,11 @@ export const S700_BLOCK_LENGTH = 0xc0c4;
 export const S700_PROGRAMS = 32;
 export const S700_DISK_SAMPLES = 0x8000;
 const PROGRAMS_AT = 0x28;
-const PARAMS_AT = 0xa8;
 const AUDIO_AT = 0xc2;
+/** The parameters' bytes, as on a disk from 28h: 4 for each program, then the scan mode on */
+export const S700_PARAM_BYTES = AUDIO_AT - PROGRAMS_AT;
+/** Where the scan mode is in the parameters' bytes, after the programs */
+const PARAMS_AT = S700_PROGRAMS * 4;
 
 /** The S700's scan modes (RPMODE) */
 export const S700_SCAN = { oneShot: 1, looping: 2, alternating: 4, drum: 9 } as const;
@@ -91,12 +94,17 @@ export function bandwidthRate(bandwidth: number): number {
 
 const signed = (v: number, bits: number) => (v & (1 << (bits - 1)) ? v - (1 << bits) : v);
 
-/** Reads the parameters in a block: bytes and little-endian words */
-export function readS700Params(b: Uint8Array): S700SampleParams {
+/** Reads the parameters in a block */
+export function readS700Params(block: Uint8Array): S700SampleParams {
+  return readS700ParamBytes(block.subarray(PROGRAMS_AT));
+}
+
+/** Reads the parameters' bytes (S700_PARAM_BYTES of them): bytes and little-endian words */
+export function readS700ParamBytes(b: Uint8Array): S700SampleParams {
   const word = (i: number) => b[i] | (b[i + 1] << 8);
   const programs: S700KeyRange[] = [];
   for (let p = 0; p < S700_PROGRAMS; p++) {
-    const [low, high, transpose, trigger] = b.subarray(PROGRAMS_AT + p * 4, PROGRAMS_AT + p * 4 + 4);
+    const [low, high, transpose, trigger] = b.subarray(p * 4, p * 4 + 4);
     programs.push({ low, high, transpose: signed(transpose & 0x7f, 7), constantPitch: (transpose & 0x80) !== 0,
       audioTrigger: trigger & 0x80 ? null : trigger & 0x7f });
   }
@@ -170,10 +178,24 @@ export function buildS700Block(params: S700SampleParams, samples: ArrayLike<numb
   b.fill(QD_SYNC, 0, 7);
   b[7] = QD_MARKER;
   b.set([...S700_FORMAT].map((c) => c.charCodeAt(0)), 8);
+  b.set(s700ParamBytes(params), PROGRAMS_AT);
+  for (let i = 0; i < S700_DISK_SAMPLES; i++) {
+    const v = Math.max(0, Math.min(4095, Math.round(i < samples.length ? samples[i] : 0) + 2048));
+    b[AUDIO_AT + 0x4000 + i] = v >> 4;
+    b[AUDIO_AT + (i >> 1)] |= i & 1 ? (v & 0x0f) << 4 : v & 0x0f;
+  }
+  const crc = crc16(b, 7, S700_BLOCK_LENGTH - 2);
+  b.set([crc & 0xff, crc >> 8], S700_BLOCK_LENGTH - 2);
+  return b;
+}
+
+/** The parameters' bytes (S700_PARAM_BYTES), as the S700 keeps them */
+export function s700ParamBytes(params: S700SampleParams): Uint8Array {
+  const b = new Uint8Array(S700_PARAM_BYTES);
   params.programs.slice(0, S700_PROGRAMS).forEach((r, p) => {
     // an audio trigger that is off keeps note 60, as the S700 leaves it
     b.set([r.low, r.high, (r.transpose & 0x7f) | (r.constantPitch ? 0x80 : 0),
-      r.audioTrigger === null ? 0x80 | 60 : r.audioTrigger & 0x7f], PROGRAMS_AT + p * 4);
+      r.audioTrigger === null ? 0x80 | 60 : r.audioTrigger & 0x7f], p * 4);
   });
   const word = (at: number, v: number) => b.set([v & 0xff, (v >> 8) & 0xff], at);
   const at = PARAMS_AT;
@@ -186,12 +208,6 @@ export function buildS700Block(params: S700SampleParams, samples: ArrayLike<numb
   b.set([params.lfoSpeed, params.lfoDepth, params.lfoDelay, params.filter, params.release, params.loudness,
     params.fineTune & 0xff, params.recordPitch, params.bandwidth, params.reversed ? 0xff : 0, params.velFilter,
     params.velLoudness, params.velRelease], at + 11);
-  for (let i = 0; i < S700_DISK_SAMPLES; i++) {
-    const v = Math.max(0, Math.min(4095, Math.round(i < samples.length ? samples[i] : 0) + 2048));
-    b[AUDIO_AT + 0x4000 + i] = v >> 4;
-    b[AUDIO_AT + (i >> 1)] |= i & 1 ? (v & 0x0f) << 4 : v & 0x0f;
-  }
-  word(S700_BLOCK_LENGTH - 2, crc16(b, 7, S700_BLOCK_LENGTH - 2));
   return b;
 }
 
