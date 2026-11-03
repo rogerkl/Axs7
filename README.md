@@ -12,9 +12,16 @@ Samples are loaded or received into memory and played from the on-screen keyboar
   from a slot on the sampler. Not limited like the sampler's memory, and kept in the browser between visits
   (samples in IndexedDB, banks in localStorage).
 - **WAV files**: SAVE WAV saves a sample as it sounds, with its loop in the `smpl` chunk for other programs, and in
-  an `axs7` chunk (other programs skip it) its START, END, loop, scan mode, direction and sound, and its keygroups
-  in the current bank's programs. Loading such a file brings all of it back as it was, without the edits a loaded
-  file gets (normalizing, resampling), its keygroups in the current bank's programs by number, as a disk's are.
+  an `axs7` chunk (other programs skip it) its START, END, loop, scan mode, direction and sound, its slot and its
+  keygroups in the current bank. Loading such a file brings all of it back as it was, without the edits a loaded
+  file gets (normalizing, resampling).
+- **Loading into a bank**, as the sampler loads a disk: a loaded file goes in a slot of the current bank, LOAD SLOT
+  (SAMPLE view): FILE the slot it was saved from (a WAV file saved here knows it; a disk doesn't, as far as the
+  library's disks tell) or else the first free one, a slot number (more files at once go in the slots after it),
+  or OFF. Its keygroups go in the programs LOAD PROG says: ALL (the sampler's Pall), one program (only if the file
+  has the sample in it: a sample in P1 and P3 loaded with P2 changes no program), or NONE (P**). As on the
+  sampler the key ranges are the slot's: the programs not loaded keep the slot's, now for the new sample. The MIDI
+  view logs where each file went.
 - **Edits that lose nothing**: a sample keeps its original as loaded, and its edits (RESAMPLE, NORMALIZE, 12 BIT,
   ATTACK, CROSSFADE) are settings. Whenever one of them or a point changes, the sample is rendered again from the
   original, so normalizing after moving START, or going back to the original's rate, loses nothing. What plays,

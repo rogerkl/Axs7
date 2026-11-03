@@ -9,6 +9,20 @@ import type { Bank, Keygroup, Program, Recipe, Sample, Sound } from './types';
 /** A keygroup's settings, without its id and sample */
 type KeyRange = Omit<Keygroup, 'id' | 'sampleId'>;
 
+/** A keygroup in a program by number, from 0 */
+export interface ProgramKeygroup {
+  program: number;
+  range: KeyRange;
+}
+
+/** The programs a sample's keygroups are loaded into: all, one (from 0), or none */
+export type ProgramLoad = 'all' | number | 'none';
+
+/** The keygroups of a sample in each program (null where it isn't in it) as a list by program */
+export function byProgram(keygroups: (KeyRange | null)[]): ProgramKeygroup[] {
+  return keygroups.flatMap((range, program) => (range ? [{ program, range }] : []));
+}
+
 /**
  * samples, programs and keygroups: the lists changed (programs: also the banks, the current bank or program, and the
  * slots). sample: one sample's values changed (its id is passed). audio: one sample's rendered audio changed (its id
@@ -94,15 +108,15 @@ export class Store {
    * @param keygroups the sample's keygroup in each program, null where it isn't in the program
    */
   addSampleToPrograms(sample: Sample, keygroups: (KeyRange | null)[]): void {
-    this.addSampleWithKeygroups(sample, keygroups.flatMap((range, program) => (range ? [{ program, range }] : [])));
+    this.addSampleWithKeygroups(sample, byProgram(keygroups));
   }
 
   /**
-   * Adds a sample with keygroups in the current bank's programs by number, as many in a program as there are, and
-   * selects it. Without any it is added as addSample adds it.
+   * Adds a sample with keygroups in the current bank's programs by number, as many in a program as there are (only
+   * in one program, or none, if `load` says so), and selects it. Without any it is added as addSample adds it.
    */
-  addSampleWithKeygroups(sample: Sample, keygroups: { program: number; range: KeyRange }[]): void {
-    const placed = keygroups.filter((k) => k.program < BANK_PROGRAMS);
+  addSampleWithKeygroups(sample: Sample, keygroups: ProgramKeygroup[], load: ProgramLoad = 'all'): void {
+    const placed = keygroups.filter((k) => k.program < BANK_PROGRAMS && (load === 'all' || load === k.program));
     if (placed.length === 0) {
       this.addSample(sample);
       return;
@@ -120,28 +134,31 @@ export class Store {
   }
 
   /**
-   * Adds a sample received from a slot of the sampler, in that slot of the current bank. The bank is then as the
-   * sampler is: with the keygroups the sampler sent for the slot (the sample that was in the slot here leaves the
-   * bank's programs), or without them, the keygroups the slot's sample had here, now with this one.
+   * Adds a sample in a slot of a bank (the current one if not given), as the sampler loads one, and selects it. The
+   * key ranges in the programs are the slot's: in the programs loaded the sample gets the keygroups it comes with
+   * and the slot's sample before leaves them, in the others it plays where the slot's sample did. RECEIVE loads all
+   * programs, so the bank is then as the sampler is; the sampler's own load can do one program, or none.
    *
-   * @param keygroups from the sampler's parameters, null if it didn't send them
-   * @param bank the bank the receive began in, the current one if not given
+   * @param keygroups the keygroups it comes with, by program; null if none are known (they stay the slot's)
+   * @param load the programs loaded: 'all' (the sampler's Pall: in a program it has no keygroup in, it has none),
+   * one, from 0 (only if it has keygroups there), or 'none' (P**)
    */
-  addSampleToSlot(sample: Sample, slot: number, keygroups: (KeyRange | null)[] | null, bank = this.bank): void {
+  addSampleToSlot(sample: Sample, slot: number, keygroups: ProgramKeygroup[] | null, load: ProgramLoad = 'all',
+    bank = this.bank): void {
     const was = bank.slots[slot];
     this.samples.set(sample.id, normalizeSample(sample));
     this.selectedSampleId = sample.id;
-    const theirs = was ? bank.programs.flatMap((p) => p.keygroups.filter((k) => k.sampleId === was)) : [];
-    if (keygroups) {
-      for (const program of bank.programs) {
+    bank.programs.forEach((program, i) => {
+      const mine = keygroups?.filter((k) => k.program === i) ?? [];
+      if (keygroups && (load === 'all' || (load === i && mine.length > 0))) {
         program.keygroups = program.keygroups.filter((k) => !was || k.sampleId !== was);
+        program.keygroups.push(...mine.map((k) => newKeygroup(sample.id, k.range)));
+      } else if (was) {
+        for (const k of program.keygroups.filter((g) => g.sampleId === was)) {
+          k.sampleId = sample.id;
+        }
       }
-      this.placeInPrograms(sample.id, keygroups, bank);
-    } else if (theirs.length) {
-      theirs.forEach((k) => {
-        k.sampleId = sample.id;
-      });
-    }
+    });
     bank.slots[slot] = sample.id;
     // in no program: in the current one if it is empty, so it can be played, as addSample does
     const program = bank.programs[this.programIndex];
@@ -182,18 +199,6 @@ export class Store {
       bank.slots[slot] = sampleId;
       this.emit('programs');
     }
-  }
-
-  private placeInPrograms(sampleId: string, keygroups: (KeyRange | null)[], bank = this.bank): void {
-    keygroups.slice(0, BANK_PROGRAMS).forEach((k, i) => {
-      if (k) {
-        const keygroup = newKeygroup(sampleId, k);
-        bank.programs[i].keygroups.push(keygroup);
-        if (bank === this.bank && i === this.programIndex) {
-          this.selectedKeygroupId = keygroup.id;
-        }
-      }
-    });
   }
 
   private emitAll(): void {

@@ -4,7 +4,7 @@ import { BW16, MAX_SAMPLES, decodeHeader, encodeSamples, parseDump, samplerBandw
 import { encodeWav, readWav } from '../src/protocol/wav';
 import { memoryToZip, zipToMemory } from '../src/model/memory';
 import {
-  dumpFromSample, sampleFromDump, sampleFromWav, samplerFit, wavFromSample, wavKeygroups,
+  dumpFromSample, sampleFromDump, sampleFromWav, samplerFit, wavFromSample, wavKeygroups, wavSlot,
 } from '../src/model/convert';
 import { defaultSound, newBank, newKeygroup, newProgram, normalizeProgram, voicesFor } from '../src/model/mapping';
 import { noteName, parseNote } from '../src/model/notes';
@@ -12,7 +12,7 @@ import { cutoffHz, engineParams, lfoRate, releaseTime } from '../src/model/param
 import { isPortion, movePoint, normalizeSample, usedStart } from '../src/model/points';
 import { attackRoom, isTwelveBit, normalizeData, portionPeak, quantize12Data, to12BitCode } from '../src/model/edit';
 import { isEdited, plainRecipe } from '../src/model/recipe';
-import { Store } from '../src/model/store';
+import { Store, byProgram } from '../src/model/store';
 import type { Program, Sample } from '../src/model/types';
 import { fixture, testSine } from './helpers';
 
@@ -129,13 +129,13 @@ describe('store', () => {
     const store = new Store();
     const range = { low: 36, high: 59, root: 48, semitones: 0, cents: 0, fixedPitch: false };
     const ranges = (...at: number[]) => Array.from({ length: 32 }, (_, i) => (at.includes(i) ? range : null));
-    store.addSampleToSlot(sample({ id: 'a' }), 2, ranges(0, 3));
-    store.addSampleToSlot(sample({ id: 'b' }), 5, ranges(3));
+    store.addSampleToSlot(sample({ id: 'a' }), 2, byProgram(ranges(0, 3)));
+    store.addSampleToSlot(sample({ id: 'b' }), 5, byProgram(ranges(3)));
     expect(store.bank.slots.slice(0, 6)).toEqual([null, null, 'a', null, null, 'b']);
     const inPrograms = () => store.programs.slice(0, 4).map((p) => p.keygroups.map((k) => k.sampleId));
     expect(inPrograms()).toEqual([['a'], [], [], ['a', 'b']]);
     // slot 3 again: the sampler sent other key ranges for it
-    store.addSampleToSlot(sample({ id: 'c' }), 2, ranges(1));
+    store.addSampleToSlot(sample({ id: 'c' }), 2, byProgram(ranges(1)));
     expect(inPrograms()).toEqual([[], ['c'], [], ['b']]);
     expect(store.samples.has('a')).toBe(true);
     // without the sampler's parameters: the slot's keygroups, now with the new sample
@@ -148,13 +148,39 @@ describe('store', () => {
     expect([store.bank.slots[2], store.banks[0].slots[2]]).toEqual(['e', 'd']);
     expect(store.program.keygroups.map((k) => k.sampleId)).toEqual(['e']); // in no program: the empty current one
     // emptied, as an empty slot on the sampler: its sample out of the bank's programs, still in memory
-    store.addSampleToSlot(sample({ id: 'g' }), 7, ranges(5, 6));
+    store.addSampleToSlot(sample({ id: 'g' }), 7, byProgram(ranges(5, 6)));
     store.clearSlot(7);
     expect([store.bank.slots[7], store.programs[5].keygroups, store.samples.has('g')]).toEqual([null, [], true]);
     // into the bank a receive began in, though another is current now
-    store.addSampleToSlot(sample({ id: 'f' }), 4, ranges(0), store.banks[0]);
+    store.addSampleToSlot(sample({ id: 'f' }), 4, byProgram(ranges(0)), 'all', store.banks[0]);
     expect([store.banks[0].slots[4], store.banks[0].programs[0].keygroups.map((k) => k.sampleId)]).toEqual(['f', ['f']]);
     expect([store.bank.slots[4], store.programs[0].keygroups.map((k) => k.sampleId)]).toEqual([null, ['e']]);
+  });
+
+  test('loading into a slot, as the sampler loads a disk: all programs, one, or none', () => {
+    const store = new Store();
+    const range = (low: number) => ({ low, high: low + 11, root: 60, semitones: 0, cents: 0, fixedPitch: false });
+    const where = () => store.programs.slice(0, 4).map((p) => p.keygroups.map((k) => `${k.sampleId} ${k.low}`));
+    // the slot has a sample in P1 and P2
+    store.addSampleToSlot(sample({ id: 'old' }), 2, [{ program: 0, range: range(36) }, { program: 1, range: range(48) }]);
+    const file = [{ program: 0, range: range(60) }, { program: 2, range: range(72) }]; // in P1 and P3
+    // into P2, which the file hasn't: no program changes, the slot's key ranges play this sample
+    store.addSampleToSlot(sample({ id: 'a' }), 2, file, 1);
+    expect(where()).toEqual([['a 36'], ['a 48'], [], []]);
+    // into P3: only P3 from the file
+    store.addSampleToSlot(sample({ id: 'b' }), 2, file, 2);
+    expect(where()).toEqual([['b 36'], ['b 48'], ['b 72'], []]);
+    // all: as the file has them
+    store.addSampleToSlot(sample({ id: 'c' }), 2, file, 'all');
+    expect(where()).toEqual([['c 60'], [], ['c 72'], []]);
+    // none: the slot's
+    store.addSampleToSlot(sample({ id: 'd' }), 2, [{ program: 3, range: range(24) }], 'none');
+    expect(where()).toEqual([['d 60'], [], ['d 72'], []]);
+    expect(store.bank.slots[2]).toBe('d');
+    // in no slot, only one program
+    store.addSampleWithKeygroups(sample({ id: 'e' }), file, 2);
+    expect(where()[2]).toEqual(['d 72', 'e 72']);
+    expect(where()[0]).toEqual(['d 60']);
   });
 
   test('key range stays in order', () => {
@@ -444,7 +470,8 @@ describe('wav', () => {
     programs[0].keygroups.push(newKeygroup('s1', { low: 36, high: 47, root: 40, cents: -5 }));
     programs[2].keygroups.push(newKeygroup('s1', { low: 48, high: 59, fixedPitch: true, semitones: 7 }),
       newKeygroup('other', { low: 60 }), newKeygroup('s1', { low: 60, high: 72 }));
-    const wav = readWav(wavFromSample(s, programs).buffer as ArrayBuffer)!;
+    const wav = readWav(wavFromSample(s, programs, 4).buffer as ArrayBuffer)!;
+    expect(wavSlot(wav)).toBe(4);
     expect(wav.loops).toEqual([]); // a drum trigger has no loop for other programs
     const back = sampleFromWav(wav, 'KICK');
     expect(back).toMatchObject({ loopMode: 'drum', reverse: true, start: 120, end: 5800, loopStart: 300, loopEnd: 5000,
@@ -465,6 +492,7 @@ describe('wav', () => {
     const data = Float32Array.from(testSine(BW16.rate, 1000));
     const plain = readWav(encodeWav(data, BW16.rate, [{ start: 100, end: 900, alternating: true }]).buffer as ArrayBuffer)!;
     expect(wavKeygroups(plain)).toBeNull();
+    expect(wavSlot(plain)).toBeNull();
     expect(sampleFromWav(plain, 'X')).toMatchObject({ start: 0, end: 1000, loopMode: 'alternating', sound: defaultSound() });
     const odd = readWav(encodeWav(data, BW16.rate, [], { settings: {
       start: -5, end: 5000, loopStart: Number.NaN, loopEnd: 800, loopMode: 'sideways', reverse: 1 as unknown as boolean,

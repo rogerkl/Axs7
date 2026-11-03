@@ -4,8 +4,11 @@ import { decodeAudioFile, resampleInBrowser } from '../audio/decode';
 import { memoryToZip, zipToMemory } from '../model/memory';
 import { S612_KEYGROUP, diskFromSample, sampleFromDisk } from '../model/disk';
 import {
-  dumpFromSample, dumpWithParams, sampleFromDump, sampleFromWav, wavFromSample, wavKeygroups,
+  dumpFromSample, dumpWithParams, sampleFromDump, sampleFromWav, wavFromSample, wavKeygroups, wavSlot,
 } from '../model/convert';
+import { byProgram } from '../model/store';
+import type { ProgramKeygroup, ProgramLoad } from '../model/store';
+import { LOAD_ALL_PROGRAMS, LOAD_NO_PROGRAMS, LOAD_SLOT_FILE, LOAD_SLOT_OFF } from './settings';
 import { defaultSound, newId } from '../model/mapping';
 import { plainRecipe } from '../model/recipe';
 import type { Bank, Sample } from '../model/types';
@@ -54,10 +57,47 @@ export class Actions {
    *
    * An S700/X7000 disk image (.qd) brings its sample as the sampler has it, with its sound, and its keygroups in the
    * programs it was in on the sampler. An S612 disk's sample loads as a file does, in a program of its own.
+   *
+   * As the sampler loads a disk, a file goes in a slot of the current bank (LOAD SLOT): the slot it was saved from
+   * (a wav file saved here knows it, a disk doesn't) or else the first free one, or the slot set, the next files in
+   * the slots after it; or none. Its keygroups go in the programs LOAD PROG says: all, one, or none (store
+   * addSampleToSlot).
    */
   async loadFiles(files: File[]): Promise<void> {
-    const { store, lcd, renderer } = this.app;
+    const { store, lcd, renderer, settings } = this.app;
     let loaded = 0;
+    const load: ProgramLoad = settings.loadPrograms === LOAD_ALL_PROGRAMS ? 'all'
+      : settings.loadPrograms === LOAD_NO_PROGRAMS ? 'none' : settings.loadPrograms - 1;
+    /** where a file goes, null for no slot */
+    const slotFor = (fileSlot: number | null): number | null => {
+      if (settings.loadSlot === LOAD_SLOT_OFF) {
+        return null;
+      }
+      if (settings.loadSlot !== LOAD_SLOT_FILE) {
+        const slot = settings.loadSlot - 1 + loaded;
+        return slot < settings.slotCount ? slot : null;
+      }
+      if (fileSlot !== null && fileSlot < settings.slotCount) {
+        return fileSlot;
+      }
+      const free = store.bank.slots.slice(0, settings.slotCount).indexOf(null);
+      return free >= 0 ? free : null;
+    };
+    const place = (fileName: string, sample: Sample, keygroups: ProgramKeygroup[] | null, fileSlot: number | null) => {
+      const slot = slotFor(fileSlot);
+      if (slot !== null) {
+        store.addSampleToSlot(sample, slot, keygroups, load);
+      } else if (keygroups) {
+        store.addSampleWithKeygroups(sample, keygroups, load);
+      } else {
+        store.addSample(sample);
+      }
+      const programs = store.programs.flatMap((p, i) => (p.keygroups.some((k) => k.sampleId === sample.id)
+        ? [`P${i + 1}`] : []));
+      this.app.midi.logLine(`${fileName}: ${slot === null ? (settings.loadSlot === LOAD_SLOT_OFF ? 'in no slot'
+        : `no free slot in ${store.bank.name}, in no slot`) : `in slot ${slot + 1}`} of ${store.bank.name}, `
+        + (programs.length ? `in ${programs.join(' ')}` : 'in no program'));
+    };
     for (const file of files) {
       const name = store.uniqueSampleName(file.name.replace(/\.[^.]+$/, ''));
       try {
@@ -69,7 +109,7 @@ export class Actions {
         }
         if (disk?.format === 'S700') {
           renderer.adopt([disk.sample]); // as it is, nothing to render
-          store.addSampleToPrograms(disk.sample, disk.programs);
+          place(file.name, disk.sample, byProgram(disk.programs), null);
           loaded++;
           continue;
         }
@@ -94,15 +134,16 @@ export class Actions {
           Object.assign(sample, await renderer.render(sample));
         }
         renderer.adopt([sample]);
-        const keygroups = wav ? wavKeygroups(wav) : null;
         if (disk) {
           // the S612 has no programs: the X7000 gives its sample a program of its own
           store.addSampleToOwnProgram(sample, S612_KEYGROUP);
-        } else if (keygroups) {
-          // as it was in the programs (of the bank it was saved from), in the current bank's
-          store.addSampleWithKeygroups(sample, keygroups);
+          const slot = slotFor(null);
+          if (slot !== null) {
+            store.setSlot(slot, sample.id);
+          }
         } else {
-          store.addSample(sample);
+          // a wav file saved here: as it was in the programs (of the bank it was saved from), in the current bank's
+          place(file.name, sample, wav ? wavKeygroups(wav) : null, wav ? wavSlot(wav) : null);
         }
         loaded++;
       } catch (e) {
@@ -311,10 +352,10 @@ export class Actions {
         midi.logLine(`${name}: ${note}`, 'warn');
       }
       sample = got.sample;
-      store.addSampleToSlot(sample, slot, got.programs, bank);
+      store.addSampleToSlot(sample, slot, byProgram(got.programs), 'all', bank);
     } else {
       sample = sampleFromDump(r, name);
-      store.addSampleToSlot(sample, slot, null, bank);
+      store.addSampleToSlot(sample, slot, null, 'all', bank);
     }
     return { sample, ok: r.ok };
   }
@@ -694,7 +735,9 @@ export class Actions {
    * programs for this one, marked if it came from the sampler
    */
   saveWav(sample: Sample): void {
-    download(wavFromSample(sample, this.app.store.programs), `${sample.name}.wav`, 'audio/wav');
+    const { store } = this.app;
+    const slot = store.bank.slots.indexOf(sample.id);
+    download(wavFromSample(sample, store.programs, slot < 0 ? null : slot), `${sample.name}.wav`, 'audio/wav');
   }
 
   /**

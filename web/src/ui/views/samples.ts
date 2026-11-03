@@ -2,6 +2,7 @@
 // the sample is rendered from its original with them whenever they change.
 
 import type { App, View } from '../../app/app';
+import { LOAD_ALL_PROGRAMS, LOAD_NO_PROGRAMS, LOAD_SLOT_FILE, LOAD_SLOT_OFF } from '../../app/settings';
 import { newKeygroup } from '../../model/mapping';
 import { BANDWIDTHS, MAX_SAMPLES, nearestBandwidth, samplerBandwidth } from '../../protocol/akai';
 import { crossfadeRoom } from '../../audio/dsp';
@@ -55,10 +56,40 @@ export function samplesView(app: App): View {
     }, 'wide');
   loadRate.el.title = 'KEEP loads files at their own rate, SAMPLER resamples them to the nearest of the sampler\'s '
     + 'rates';
+  // as the sampler loads a disk: into a slot (SX, the one it was saved from) and all of its programs (Pall)
+  const loadSlot = new ParamCell({
+    key: 'samples.loadSlot', label: 'LOAD SLOT', min: LOAD_SLOT_OFF, coarse: 4,
+    get max() {
+      return app.settings.slotCount;
+    },
+    get: () => app.settings.loadSlot, set: (v) => {
+      app.settings.loadSlot = v;
+      app.saveSettings();
+    },
+    format: (v) => (v === LOAD_SLOT_OFF ? 'OFF' : v === LOAD_SLOT_FILE ? 'FILE' : String(v)),
+    parse: (t) => (/^off$/i.test(t) ? LOAD_SLOT_OFF : /^file$/i.test(t) ? LOAD_SLOT_FILE : Number(t)),
+    detail: (v) => (v === LOAD_SLOT_FILE ? 'OR FIRST FREE' : v === LOAD_SLOT_OFF ? '' : 'AND ON'),
+  }, 'wide');
+  loadSlot.el.title = 'The slot of the current bank a loaded file goes in, as on the sampler: FILE the one it was '
+    + 'saved from (a WAV file saved here knows it), else the first free one; a slot number (more files at once go '
+    + 'in the slots after it); OFF in none';
+  const loadPrograms = new ParamCell({
+    key: 'samples.loadPrograms', label: 'LOAD PROG', min: LOAD_ALL_PROGRAMS, max: LOAD_NO_PROGRAMS, coarse: 8,
+    get: () => app.settings.loadPrograms, set: (v) => {
+      app.settings.loadPrograms = v;
+      app.saveSettings();
+    },
+    format: (v) => (v === LOAD_ALL_PROGRAMS ? 'ALL' : v === LOAD_NO_PROGRAMS ? 'NONE' : `P${v}`),
+    parse: (t) => (/^all$/i.test(t) ? LOAD_ALL_PROGRAMS : /^none$/i.test(t) ? LOAD_NO_PROGRAMS
+      : Number(t.replace(/^p/i, ''))),
+  }, 'wide');
+  loadPrograms.el.title = 'The programs a loaded file\'s keygroups go in, as on the sampler: ALL (Pall), one program '
+    + '(only if the file has the sample in it), or NONE (P**). In a slot, the programs not loaded keep the slot\'s '
+    + 'key ranges, now for this sample';
   const loadRow = h('div', { class: 'row load-row' },
     h('button', { class: 'soft', title: 'WAV or other audio files, or S700/X7000 QuickDisk images (.qd)',
       onClick: async () => actions.loadFiles(await pickFiles('.wav,.qd,audio/*', true)) }, 'LOAD WAV / QD'),
-    loadRate.el);
+    loadRate.el, loadSlot.el, loadPrograms.el);
   const detail = h('div', { class: 'detail' });
   /** under the list: what goes to the sampler, for the selected sample */
   const side = h('div', { class: 'side-groups' });

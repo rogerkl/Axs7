@@ -33,6 +33,8 @@ export interface WavSettings {
   reverse: boolean;
   /** OUT and LFO, 0-99 */
   sound: Record<string, number>;
+  /** the slot it was in, in the bank it was saved from (0 is slot 1), if it was in one */
+  slot?: number;
   /** in the programs of the bank it was saved from, by number from 0 (P1 is 0) */
   keygroups: { program: number; low: number; high: number; root: number; semitones: number; cents: number;
     fixedPitch: boolean }[];

@@ -14,7 +14,8 @@ import { plainRecipe } from './recipe';
 import { samplerImage } from './s700';
 import { isLooped } from './types';
 import { usedStart } from './points';
-import type { Keygroup, LoopMode, Program, Sample, Sound } from './types';
+import type { ProgramKeygroup } from './store';
+import type { LoopMode, Program, Sample, Sound } from './types';
 
 /**
  * A received dump as a sample, marked as from the sampler: it is sent back as it came. The sampler ends a sample at
@@ -99,11 +100,10 @@ const LOOP_MODES: LoopMode[] = ['off', 'forward', 'alternating', 'drum'];
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
-/** A keygroup in a program by number, as a wav file saved here has them */
-export interface ProgramKeygroup {
-  /** P1 is 0 */
-  program: number;
-  range: Omit<Keygroup, 'id' | 'sampleId'>;
+/** The slot a wav file saved here was in, null if none (or for one from elsewhere) */
+export function wavSlot(wav: Wav): number | null {
+  const slot = wav.meta.settings?.slot;
+  return Number.isInteger(slot) && (slot as number) >= 0 && (slot as number) < 16 ? slot as number : null;
 }
 
 /** The keygroups in a wav file saved here, null for one from elsewhere (or before they were saved) */
@@ -123,14 +123,17 @@ export function wavKeygroups(wav: Wav): ProgramKeygroup[] | null {
 
 /**
  * A sample as a wav file: the audio as it plays, its loop in the smpl chunk for other programs, and in the axs7 chunk
- * its settings and its keygroups in the programs (of the current bank), so it loads here as it was
+ * its settings, its slot and its keygroups in the programs (of the current bank), so it loads here as it was
+ *
+ * @param slot the bank slot it is in, from 0, null if none
  */
-export function wavFromSample(sample: Sample, programs: Program[]): Uint8Array {
+export function wavFromSample(sample: Sample, programs: Program[], slot: number | null = null): Uint8Array {
   const keygroups = programs.flatMap((p, program) => p.keygroups.filter((k) => k.sampleId === sample.id)
     .map(({ low, high, root, semitones, cents, fixedPitch }) => ({ program, low, high, root, semitones, cents,
       fixedPitch })));
   const settings: WavSettings = { start: sample.start, end: sample.end, loopStart: sample.loopStart,
-    loopEnd: sample.loopEnd, loopMode: sample.loopMode, reverse: sample.reverse, sound: { ...sample.sound }, keygroups };
+    loopEnd: sample.loopEnd, loopMode: sample.loopMode, reverse: sample.reverse, sound: { ...sample.sound }, keygroups,
+    ...(slot === null ? {} : { slot }) };
   return encodeWav(sample.data, sample.rate, wavLoops(sample),
     { ...(sample.fromSampler ? { fromSampler: true } : {}), settings });
 }
