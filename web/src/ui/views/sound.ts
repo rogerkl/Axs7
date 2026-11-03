@@ -73,7 +73,8 @@ export function outView(app: App): View {
     ['release', 'RELEASE', (v) => formatSeconds(releaseTime(v))],
     ['velRelease', 'VEL RELEASE', percent],
   ], 'As on the X7000: the filter is a lowpass without resonance, velocity raises its cutoff. Release is for looping '
-    + 'and alternating samples, a one shot stops at key off and a drum trigger plays to its end. These settings are '
+    + 'and alternating samples, a one shot stops at key off and a drum trigger plays to its end. Velocity shortens the '
+    + 'release: with VEL RELEASE at 99 a hard note has none, a soft one all of it. These settings are '
     + 'the sample\'s, every program playing it sounds the same. They are not part of a sample dump.');
 }
 

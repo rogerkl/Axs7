@@ -251,10 +251,11 @@ impl Voice {
 
     /// Adds the voice's output to `out`
     pub fn render(&mut self, out: &mut [f32], data: &[f32], p: &Params, controls: &Controls, sample_rate: f32) {
-        // the X7000's release is for looping sounds, a one shot stops at key off
+        // the X7000's release is for looping sounds, a one shot stops at key off. Velocity shortens it, as on the
+        // sampler: with the most velocity to release a hard note has none, a soft one all of it.
         let release = if self.loop_mode.looping() {
             let vr = p[VEL_RELEASE].clamp(0.0, 1.0);
-            p[RELEASE] * (1.0 - vr + vr * self.velocity)
+            (p[RELEASE] * (1.0 - vr * self.velocity)).max(ONE_SHOT_RELEASE)
         } else {
             ONE_SHOT_RELEASE
         };

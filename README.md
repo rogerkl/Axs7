@@ -57,8 +57,9 @@ Samples are loaded or received into memory and played from the on-screen keyboar
   sent reversed, to sound the same on the sampler with its direction at F. The sampler's limit, what it drops and
   the crossfade go the other way too.
 - **OUT**, a sample's sound, as on the X7000: LEVEL, FILTER (a lowpass without resonance) and RELEASE (for looping
-  and alternating samples), each with how much velocity changes it (velocity raises the cutoff, softer notes get a
-  shorter release). No attack or filter envelope, like the X7000.
+  and alternating samples), each with how much velocity changes it (velocity raises the cutoff, harder notes get a
+  shorter release: with VEL RELEASE at 99 a hard note has none, a soft one all of it, as an X7000 does). No attack
+  or filter envelope, like the X7000.
 - **LFO**, a sample's vibrato: SPEED, DEPTH, DELAY. The modulation wheel adds vibrato too, and so does MIDI
   aftertouch (channel or polyphonic), as deep as the sample's PRESSURE (the X7000's pressure sens), at once without
   the delay. AFTERTOUCH IN shows what the keyboard sends (the X7000's own keyboard has no aftertouch).

@@ -433,7 +433,7 @@ mod tests {
     }
 
     #[test]
-    fn softer_notes_get_a_shorter_release_with_velocity_to_release() {
+    fn harder_notes_get_a_shorter_release_with_velocity_to_release() {
         let time_to_silence = |velocity: f32| {
             let mut engine = engine_with_sine(4000);
             let mut p = DEFAULT_PARAMS;
@@ -453,10 +453,11 @@ mod tests {
             }
             blocks as f32 * 128.0 / SR
         };
+        // as on the X7000 (release high, velocity to release 99): a hard note has no release, a soft one a long one
         let soft = time_to_silence(0.3);
         let hard = time_to_silence(1.0);
-        assert!((hard - 1.33).abs() < 0.1, "-80 dB of a 1 s release (-60 dB) is 1.33 s: {hard}");
-        assert!(soft < 0.5 * hard, "{soft} {hard}");
+        assert!((soft - 0.7 * 1.33).abs() < 0.1, "-80 dB of a 1 s release (-60 dB) is 1.33 s, 70 % of it: {soft}");
+        assert!(hard < 0.05, "{hard}");
     }
 
     #[test]
