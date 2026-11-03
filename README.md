@@ -81,8 +81,9 @@ Samples are loaded or received into memory and played from the on-screen keyboar
   sample can also be picked by hand in the BANK view. Programs from before banks go into banks 32 at a time.
   RECEIVE BANK (BANK view) receives every slot (SLOTS) into the bank, and SEND BANK sends the bank's samples to
   their slots (it asks first; slots without a sample here are left as they are on the sampler), each slot as
-  RECEIVE and SEND do it, with its parameters. An empty slot, where the X7000 has its test tone (START 0, END
-  360, LOOP 0, in no program), isn't received, and is emptied in the bank; RECEIVE of the one slot still gets it.
+  RECEIVE and SEND do it, with its parameters. A slot whose sample is in no program on the sampler isn't
+  received, and is emptied in the bank (an empty slot is so: the X7000 has a test tone there, in no program,
+  usually START 0 and END 360 but not always after switching on); RECEIVE of the one slot still gets it.
   A slot that fails is logged and passed over; pressing the button again, or RECEIVE or SEND, stops. Setting START
   and END on the sampler for the receive and back works on an X7000. With RECEIVE ALL each slot is a full dump,
   about 30 s, so 16 slots take some

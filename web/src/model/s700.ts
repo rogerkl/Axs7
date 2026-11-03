@@ -75,11 +75,12 @@ export function sampleFromS700Params(p: S700SampleParams, data: Float32Array, na
 }
 
 /**
- * A slot with nothing loaded: the X7000 has a test tone there, START 0, END 360, LOOP 0, in no program. Not worth
- * receiving, a sample of one's own won't be like it.
+ * A slot whose sample is in no program: no key plays it on the sampler, so it isn't worth receiving with the bank. A
+ * slot with nothing loaded is so: the X7000 has a test tone there (START 0, END 360, LOOP 0), in no program, but
+ * not always that short after it is switched on.
  */
-export function isEmptySlot(p: S700SampleParams): boolean {
-  return p.start === 0 && p.end === 360 && p.loop === 0 && p.programs.every((k) => k.low > k.high);
+export function inNoProgram(p: S700SampleParams): boolean {
+  return p.programs.every((k) => k.low > k.high);
 }
 
 /** The part of the sampler's memory a dump has: its START to its END when it sent it */
