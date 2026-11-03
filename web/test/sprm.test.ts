@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'vitest';
 import { MidiLink } from '../src/midi/link';
-import { requestSampleParams } from '../src/midi/transfer';
+import { requestSampleParams, setSampleParams } from '../src/midi/transfer';
 import { sampleFromDumpWithParams } from '../src/model/s700';
 import {
-  BANDWIDTHS, BLOCK_LENGTH, HEADER_LENGTH, SAMPLES_PER_BLOCK, buildDump, parseDump, to3Bytes,
+  BANDWIDTHS, BLOCK_LENGTH, HEADER_LENGTH, SAMPLES_PER_BLOCK, encodeBlock, encodeHeader, parseDump, to3Bytes,
 } from '../src/protocol/akai';
-import { SPRM_LENGTH, parseSampleParams, sampleParamsMessage, sampleParamsRequest } from '../src/protocol/sprm';
+import {
+  SPRM_LENGTH, bytesWithStart, parseSampleParams, sampleParamsBytesMessage, sampleParamsMessage, sampleParamsRequest,
+} from '../src/protocol/sprm';
 import { chromeRejects } from './helpers';
 
 /** A sample parameters message as the document numbers its bytes, built here without the code under test */
@@ -89,6 +91,16 @@ describe('sample parameters (Akai exclusive)', () => {
     expect(r.params.programs[2]).toEqual(inProgram);
     // the words the sampler keeps besides: END - START - 1, END - LOOP - 1
     expect([...sampleParamsMessage(0, 0, r.params)]).toEqual([...x7000Message()]);
+    expect([...sampleParamsBytesMessage(0, 0, r.bytes)]).toEqual([...x7000Message()]);
+  });
+
+  test('START changed, and the word kept with it: the rest as it was', () => {
+    const zero = bytesWithStart(X7000_BYTES, 0);
+    expect([...zero.subarray(130, 134)]).toEqual([0, 0, 0xef, 0x7f]); // 0, and END - 0 - 1 = 32751
+    expect(zero.filter((b, i) => b !== X7000_BYTES[i])).toHaveLength(4);
+    expect(parseSampleParams(sampleParamsBytesMessage(0, 0, zero)).params).toMatchObject({ start: 0, end: 32752,
+      loop: 9523 });
+    expect(bytesWithStart(zero, 32552)).toEqual(X7000_BYTES);
   });
 
   test('the message that sets them is the document\'s, and Chrome sends it', () => {
@@ -122,6 +134,28 @@ function fakeSampler(channel: number | null, id = 0x41) {
   return { link, sent };
 }
 
+/** A sampler with a slot's parameters on channel 0, 41h, that takes parameters sent to it, or not */
+function samplerWithParams(bytes: Uint8Array, takes = true) {
+  const link = new MidiLink({ inputs: new Map(), outputs: new Map() } as unknown as MIDIAccess, () => {});
+  const sent: Uint8Array[] = [];
+  let kept = bytes.slice();
+  const deliver = (data: Uint8Array) =>
+    (link as unknown as { onMessage: (e: unknown) => void }).onMessage({ data, timeStamp: performance.now() });
+  link.input = {} as MIDIInput;
+  link.output = {
+    send(data: Uint8Array) {
+      const m = Uint8Array.from(data);
+      sent.push(m);
+      if (m[1] === 0x47 && m[2] === 0 && m[4] === 0x41 && m[3] === 10 && takes) {
+        kept = parseSampleParams(m).bytes;
+      } else if (m[1] === 0x47 && m[2] === 0 && m[4] === 0x41 && m[3] === 4) {
+        setTimeout(() => deliver(sampleParamsBytesMessage(0, m[5], kept)), 5);
+      }
+    },
+  } as unknown as MIDIOutput;
+  return { link, sent, has: () => parseSampleParams(sampleParamsBytesMessage(0, 0, kept)).params };
+}
+
 describe('asking the sampler for parameters', () => {
   test('on each channel in turn from the one given, until one is answered', async () => {
     const { link, sent } = fakeSampler(2);
@@ -150,6 +184,16 @@ describe('asking the sampler for parameters', () => {
     expect(sent.map((s) => s[2])).toEqual([5, 4]);
   });
 
+  test('setting them, and seeing that the sampler took them', async () => {
+    for (const takes of [true, false]) {
+      const { link, sent, has } = samplerWithParams(X7000_BYTES, takes);
+      const now = await setSampleParams(link, 0, bytesWithStart(X7000_BYTES, 0), { channel: 0, id: 0x41 });
+      expect(sent.map((m) => m[3])).toEqual([10, 4]); // the parameters, then the request
+      expect(now!.params.start).toBe(takes ? 0 : 32552);
+      expect(has().start).toBe(takes ? 0 : 32552);
+    }
+  });
+
   test('no reply at all, or cancelled', async () => {
     const { link } = fakeSampler(null);
     const r = await requestSampleParams(link, 0, { waitMs: 2 });
@@ -167,10 +211,14 @@ describe('asking the sampler for parameters', () => {
  */
 function x7000Dump(numSamples: number) {
   const codes = Uint16Array.from({ length: numSamples }, (_, i) => (i * 7) % 4096);
-  const sent = buildDump({ slot: 0, sampleRate: 39555.4, numSamples, loopStart: 0, loopEnd: numSamples,
-    alternating: false }, codes).bytes;
-  const length = HEADER_LENGTH + Math.ceil(numSamples / SAMPLES_PER_BLOCK) * BLOCK_LENGTH;
-  const bytes = Uint8Array.of(...sent.subarray(0, length), 0xf7);
+  const blocks = Math.ceil(numSamples / SAMPLES_PER_BLOCK);
+  const bytes = new Uint8Array(HEADER_LENGTH + blocks * BLOCK_LENGTH + 1);
+  bytes.set(encodeHeader({ slot: 0, sampleRate: 39555.4, numSamples, loopStart: 0, loopEnd: numSamples,
+    alternating: false }));
+  for (let b = 0; b < blocks; b++) {
+    bytes.set(encodeBlock(b, codes, numSamples), HEADER_LENGTH + b * BLOCK_LENGTH);
+  }
+  bytes[bytes.length - 1] = 0xf7;
   to3Bytes(1815780, bytes, 6); // the period in x7000-received.syx
   to3Bytes(numSamples, bytes, 9);
   const r = parseDump(bytes);
@@ -188,7 +236,17 @@ describe('a sample received with its parameters', () => {
     expect(sample.data[1]).toBe((7 - 2048) / 2048);
     const range = { low: 24, high: 96, root: 60, semitones: -12, cents: 0, fixedPitch: false };
     expect(programs.slice(0, 4)).toEqual([range, null, range, null]);
-    expect(notes).toEqual([expect.stringMatching(/^LOOP 9523 is before START 32552.*START to 9523 or less/)]);
+    expect(notes).toEqual(['LOOP 9523 is before START 32552, and the dump has START to END only: the loop is lost, '
+      + 'it starts at START here.']);
+  });
+
+  test('START set to 0 for the dump: all of the sample, with its points as on the sampler', () => {
+    const params = parseSampleParams(x7000Message()).params;
+    const { sample, notes } = sampleFromDumpWithParams(x7000Dump(32752), params, 'SLOT 1');
+    expect(sample).toMatchObject({ start: 32552, end: 32752, loopStart: 9523, loopEnd: 32752,
+      loopMode: 'alternating' });
+    expect(sample.data).toHaveLength(32752);
+    expect(notes).toEqual([]);
   });
 
   test('START before the loop point: the points from START, the rate from the parameters', () => {

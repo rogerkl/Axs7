@@ -8,7 +8,9 @@
 
 import { ACK, MAX_BLOCKS, hex, parseDump, requestMessage, wireSeconds } from '../protocol/akai';
 import type { Dump, ParsedDump } from '../protocol/akai';
-import { S700_IDS, SPRM_LENGTH, isAkai, isSampleParams, parseSampleParams, sampleParamsRequest } from '../protocol/sprm';
+import {
+  S700_IDS, SPRM_LENGTH, isAkai, isSampleParams, parseSampleParams, sampleParamsBytesMessage, sampleParamsRequest,
+} from '../protocol/sprm';
 import type { SampleParams } from '../protocol/sprm';
 import type { Log, MidiLink } from './link';
 
@@ -300,4 +302,27 @@ export async function requestSampleParams(link: MidiLink, slot: number, options:
   } finally {
     unlisten();
   }
+}
+
+export interface SetParamsOptions {
+  /** the channel and identifier the sampler answered on */
+  channel: number;
+  id: number;
+  signal?: AbortSignal;
+}
+
+/**
+ * Sets a slot's parameters on the sampler (the bytes it keeps, as a reply has them), then asks for them again: the
+ * sampler doesn't answer the message itself.
+ *
+ * @returns the parameters the sampler has now, null if it didn't answer
+ */
+export async function setSampleParams(link: MidiLink, slot: number, bytes: Uint8Array, options: SetParamsOptions):
+  Promise<ParamsReply | null> {
+  const { channel, id, signal } = options;
+  if (!link.output || !link.input) {
+    throw new TransferError('No MIDI input and output selected');
+  }
+  link.output.send(sampleParamsBytesMessage(channel, slot, bytes, id));
+  return (await requestSampleParams(link, slot, { channel, id, search: false, signal })).reply;
 }

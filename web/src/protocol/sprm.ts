@@ -8,8 +8,10 @@
 //
 // The data are the bytes the S700 keeps: the programs' 4 bytes each, an undefined byte, then the scan mode on, as on
 // a disk without the undefined byte (see s700disk.ts). Each byte goes as two MIDI bytes (DB): its low 7 bits, then
-// its top bit. A word (DW) is its low byte then its high byte, each as a DB. A DB with 2 or more in its second byte
-// leaves the sampler's value as it is. The checksum is the XOR of the data bytes.
+// its top bit. A word (DW) is its low byte then its high byte, each as a DB. The checksum is the XOR of the data
+// bytes. The document has a DB with 2 or more in its second byte leave the sampler's value as it is, and a DW with
+// its second and third bytes so (the third is data); that isn't used here: to change one value, the slot's
+// parameters are sent back with that value changed.
 
 import { S700_PARAM_BYTES, readS700ParamBytes, s700ParamBytes } from './s700disk';
 import type { S700SampleParams } from './s700disk';
@@ -26,6 +28,9 @@ const DATA_AT = 7;
 /** the undefined byte after the programs, which a disk doesn't have */
 const UNDEFINED_AT = 32 * 4;
 const DATA_BYTES = S700_PARAM_BYTES + 1;
+/** START in the data, the word the sampler keeps with it (END - START - 1), then END + 1 */
+const START_AT = UNDEFINED_AT + 2;
+const END_AT = START_AT + 4;
 export const SPRM_LENGTH = DATA_AT + DATA_BYTES * 2 + 2;
 
 /** The request for a slot's parameters, channel 0-15, slot from 0 */
@@ -83,6 +88,15 @@ export function sampleParamsMessage(channel: number, slot: number, params: S700S
   const bytes = new Uint8Array(DATA_BYTES);
   bytes.set(kept.subarray(0, UNDEFINED_AT));
   bytes.set(kept.subarray(UNDEFINED_AT), UNDEFINED_AT + 1);
+  return sampleParamsBytesMessage(channel, slot, bytes, id);
+}
+
+/** The message with the bytes the sampler keeps for a slot, as a reply has them (SampleParams.bytes) */
+export function sampleParamsBytesMessage(channel: number, slot: number, bytes: Uint8Array,
+  id: number = S700_IDS[0]): Uint8Array {
+  if (bytes.length !== DATA_BYTES) {
+    throw new Error(`${bytes.length} bytes of sample parameters, not ${DATA_BYTES}`);
+  }
   const out = new Uint8Array(SPRM_LENGTH);
   out.set([0xf0, AKAI, channel & 0x0f, SPRM, id, slot & 0x7f, 0]);
   let checksum = 0;
@@ -92,5 +106,13 @@ export function sampleParamsMessage(channel: number, slot: number, params: S700S
   });
   out[SPRM_LENGTH - 2] = checksum;
   out[SPRM_LENGTH - 1] = 0xf7;
+  return out;
+}
+
+/** The bytes (SampleParams.bytes) with another START, and the word the sampler keeps with it: the rest as they are */
+export function bytesWithStart(bytes: Uint8Array, start: number): Uint8Array {
+  const out = bytes.slice();
+  const end = (bytes[END_AT] | (bytes[END_AT + 1] << 8)) - 1;
+  out.set([start & 0xff, start >> 8, (end - start) & 0xff, (end - start) >> 8], START_AT);
   return out;
 }

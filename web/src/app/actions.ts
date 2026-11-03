@@ -7,14 +7,15 @@ import { dumpFromSample, sampleFromDump, sampleFromWav, wavLoops } from '../mode
 import { defaultSound, newId } from '../model/mapping';
 import { plainRecipe } from '../model/recipe';
 import type { Sample } from '../model/types';
-import { receiveDump, requestSampleParams, transmitDump } from '../midi/transfer';
+import { receiveDump, requestSampleParams, setSampleParams, transmitDump } from '../midi/transfer';
+import type { ParamsReply } from '../midi/transfer';
 import { sampleFromDumpWithParams } from '../model/s700';
 import { readWav, encodeWav } from '../protocol/wav';
 import { isQdImage } from '../protocol/qd';
-import { hex, nearestBandwidth, samplerBandwidth } from '../protocol/akai';
+import { ABORT_DUMP, hex, nearestBandwidth, samplerBandwidth } from '../protocol/akai';
 import { S700_SCAN, bandwidthRate } from '../protocol/s700disk';
 import type { S700SampleParams } from '../protocol/s700disk';
-import { sampleParamsRequest } from '../protocol/sprm';
+import { bytesWithStart, sampleParamsRequest } from '../protocol/sprm';
 import { noteName } from '../model/notes';
 import { download } from '../ui/dom';
 import type { App } from './app';
@@ -23,6 +24,7 @@ import type { App } from './app';
 const AUDITION_KEY = 200;
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export class Actions {
   busy: 'receive' | 'send' | 'params' | null = null;
@@ -133,6 +135,10 @@ export class Actions {
    * Receives the slot's sample. The sampler is asked for the slot's parameters first, on the channel REQUEST
    * PARAMETERS found: with them the sample comes with its points, scan mode, rate and sound, and its keygroups in the
    * programs it is in on the sampler. Without a reply it comes as the dump has it.
+   *
+   * The sampler only sends START to END. With START 0 on (settings.wholeSample), START is set to 0 on the sampler for
+   * the dump, by sending the slot's parameters back with START changed, and the parameters as they were are sent
+   * again after it, also when it fails or is cancelled.
    */
   async receive(): Promise<void> {
     if (this.busy === 'receive') {
@@ -149,13 +155,25 @@ export class Actions {
     try {
       lcd.hold(`RECEIVING SLOT ${slot + 1}`);
       await this.waitForAcks();
-      const params = await this.slotParams(slot, this.abort.signal);
-      const r = await receiveDump(midi.link!, slot, {
-        ackIntervalMs: settings.ackIntervalMs,
-        lookaheadMs: settings.lookaheadMs,
-        signal: this.abort.signal,
-        onProgress: (p) => lcd.hold(`RECEIVING SLOT ${slot + 1} ${(p.elapsedMs / 1000).toFixed(0).padStart(2)}S`),
-      });
+      const reply = await this.slotParams(slot, this.abort.signal);
+      const params = reply?.params ?? null;
+      const putBack = reply && settings.wholeSample ? await this.startToZero(slot, reply) : null;
+      let r;
+      try {
+        this.abort.signal.throwIfAborted();
+        r = await receiveDump(midi.link!, slot, {
+          ackIntervalMs: settings.ackIntervalMs,
+          lookaheadMs: settings.lookaheadMs,
+          signal: this.abort.signal,
+          onProgress: (p) => lcd.hold(`RECEIVING SLOT ${slot + 1} ${(p.elapsedMs / 1000).toFixed(0).padStart(2)}S`),
+        });
+      } catch (e) {
+        if (putBack) {
+          this.acksUntil = (e as { timing?: { lastAckAt: number } }).timing?.lastAckAt ?? this.acksUntil;
+          await this.startBack(slot, putBack, true);
+        }
+        throw e;
+      }
       this.acksUntil = r.timing.lastAckAt;
       midi.logLine(`Received ${r.length} bytes from slot ${slot + 1} in ${r.timing.seconds.toFixed(1)} s: `
         + `${r.blocks ?? 0} of ${r.expectedBlocks ?? '?'} blocks, ${r.checksumErrors ?? 0} checksum errors`);
@@ -166,6 +184,9 @@ export class Actions {
       }
       for (const p of r.problems) {
         midi.logLine(p, 'warn');
+      }
+      if (putBack) {
+        await this.startBack(slot, putBack, !r.header || !r.blocks);
       }
       if (!r.header || !r.blocks) {
         lcd.release();
@@ -206,7 +227,7 @@ export class Actions {
   }
 
   /** The slot's parameters, asked for once on the channel that answered last, logged; null without a reply */
-  private async slotParams(slot: number, signal: AbortSignal): Promise<S700SampleParams | null> {
+  private async slotParams(slot: number, signal: AbortSignal): Promise<ParamsReply | null> {
     const { settings, midi } = this.app;
     const r = await requestSampleParams(midi.link!, slot, { channel: settings.paramsChannel, id: settings.paramsId,
       search: false, signal });
@@ -221,7 +242,72 @@ export class Actions {
     for (const line of paramsLines(r.reply.params)) {
       midi.logLine(line);
     }
-    return r.reply.params;
+    return r.reply;
+  }
+
+  /**
+   * Sets START to 0 on the sampler if it isn't, by sending the slot's parameters back with START changed, so a dump
+   * has all of the sample
+   *
+   * @returns the parameters to put back after the dump, null if nothing was changed
+   */
+  private async startToZero(slot: number, reply: ParamsReply): Promise<ParamsReply | null> {
+    const { settings, midi, lcd } = this.app;
+    const { start } = reply.params;
+    if (start === 0) {
+      return null;
+    }
+    if (!reply.checksumOk || reply.slot !== slot) {
+      midi.logLine('START isn\'t set to 0 for the receive: the parameters didn\'t come through right', 'warn');
+      return null;
+    }
+    lcd.hold('START 0 FOR RECEIVE');
+    midi.logLine(`START is ${start}, the sampler only sends START to END: setting START to 0 on slot ${slot + 1} `
+      + 'for the receive, then back');
+    // not cancelled while it is changed, so it is put back
+    const now = await setSampleParams(midi.link!, slot, bytesWithStart(reply.bytes, 0),
+      { channel: settings.paramsChannel, id: settings.paramsId });
+    if (now?.params.start === 0) {
+      midi.logLine('START is 0 on the sampler');
+    } else if (now?.params.start === start) {
+      midi.logLine(`The sampler kept START at ${start}: it didn't take the parameters`, 'warn');
+      return null;
+    } else {
+      midi.logLine(`No reply after setting START to 0: ${now ? `START is ${now.params.start}` : 'not known if it is'}`,
+        'warn');
+    }
+    lcd.hold(`RECEIVING SLOT ${slot + 1}`);
+    return reply;
+  }
+
+  /**
+   * Puts the parameters back as they were before START was set to 0, and asks for them to see that they are. After
+   * a dump that failed or was cancelled the sampler may still be sending: it is told to stop first.
+   */
+  private async startBack(slot: number, was: ParamsReply, failed: boolean): Promise<void> {
+    const { settings, midi, lcd } = this.app;
+    const { start } = was.params;
+    lcd.hold(`START BACK TO ${start}`);
+    try {
+      await this.waitForAcks();
+      if (failed) {
+        midi.link!.output?.send(ABORT_DUMP);
+        await sleep(300);
+      }
+      for (let tries = 0; tries < 3; tries++) {
+        const now = await setSampleParams(midi.link!, slot, was.bytes,
+          { channel: settings.paramsChannel, id: settings.paramsId });
+        if (now?.params.start === start) {
+          midi.logLine(`START is back at ${start} on the sampler`);
+          return;
+        }
+        await sleep(1000);
+      }
+      midi.logLine(`Couldn't see START back at ${start} on slot ${slot + 1}: check it on the sampler`, 'error');
+    } catch (e) {
+      midi.logLine(`Couldn't set START back to ${start} on slot ${slot + 1}: ${errorText(e)}. Check it on the `
+        + 'sampler', 'error');
+    }
   }
 
   /**

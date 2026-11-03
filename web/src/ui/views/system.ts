@@ -27,6 +27,12 @@ export function midiView(app: App): View {
         settings.paramsChannel = v - 1;
         save();
       }, detail: () => 'PARAMETERS' }),
+    new ParamCell({ key: 'midi.wholeSample', label: 'START 0', min: 0, max: 1, get: () => (settings.wholeSample ? 1 : 0),
+      set: (v) => {
+        settings.wholeSample = v === 1;
+        save();
+      }, format: (v) => (v ? 'ON' : 'OFF'), parse: (t) => (/^on$/i.test(t) ? 1 : /^off$/i.test(t) ? 0 : null),
+      detail: () => 'TO RECEIVE' }),
     new ParamCell({ key: 'midi.ack', label: 'ACK MS', min: 20, max: 300, coarse: 10, get: () => settings.ackIntervalMs,
       set: (v) => {
         settings.ackIntervalMs = v;
@@ -80,8 +86,9 @@ export function midiView(app: App): View {
       h('div', { class: 'row' },
         h('button', { class: 'soft', onClick: () => actions.requestParams() }, 'REQUEST PARAMETERS'),
         h('span', { class: 'info' }, 'RECEIVE asks for the slot\'s START, END, scan mode, rate, sound and key '
-          + 'ranges on SYSEX CHAN, as a sample dump doesn\'t carry them. This only asks and logs them: on SYSEX CHAN '
-          + 'first, then on the other channels, and keeps the one that is answered.')),
+          + 'ranges on SYSEX CHAN, as a sample dump doesn\'t carry them. With START 0 ON it sets START to 0 on the '
+          + 'sampler while receiving, as the sampler only sends START to END, then back. This only asks and logs '
+          + 'them: on SYSEX CHAN first, then on the other channels, and keeps the one that is answered.')),
       h('p', { class: 'info' }, 'SLOTS is how many sample slots the sampler has: 6 on a standard X7000, more '
         + 'with a memory expansion. The same input plays the programs (also from the sampler\'s own keyboard) and '
         + 'receives sample dumps. Use Chrome or Edge, from localhost or https. Filler adds pauses between blocks '

@@ -12,6 +12,8 @@ export const HEADER_LENGTH = 19;
 export const BLOCK_LENGTH = SAMPLES_PER_BLOCK * 2 + 2;
 export const BITS = 12;
 export const ACK = Uint8Array.of(0xf0, 0x7e, 0x7f, 0xf7);
+/** Abort sample dump (ASD): the sampler stops sending */
+export const ABORT_DUMP = Uint8Array.of(0xf0, 0x7e, 0x7d, 0xf7);
 /** 31250 baud, 10 bits per byte (start, 8 data, stop) */
 export const MIDI_BYTES_PER_SECOND = 3125;
 /**

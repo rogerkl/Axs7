@@ -72,9 +72,9 @@ Samples are loaded or received into memory and played from the on-screen keyboar
   receiving and sending slot 7 on an X7000 with 16). Samples are
   resampled to the nearest of the sampler's rates and limited to its 32752 samples when sent.
   The sampler sends a sample from its START point to its END: what is before START isn't sent, even a loop point
-  there (with START after the loop point, the sample plays fine on the sampler, but only START to END comes over,
-  and the log says the loop is lost). Set START to 0 on the sampler to receive all of a sample. The MIDI view logs
-  each received dump's header.
+  there (with START after the loop point, the sample plays fine on the sampler, but only START to END comes over).
+  So with START 0 ON (MIDI view, the default) RECEIVE sets START to 0 on the sampler for the dump and back after
+  it, see below. The MIDI view logs each received dump's header.
 - **Sample parameters**: RECEIVE first asks the sampler for the slot's parameters, with the S700's Akai exclusive
   messages (a request, RSPRM, answered with the parameters, SPRM; tried on an X7000). They are what a sample dump
   doesn't carry: START and END, the scan mode, the rate (a dump from the X7000 has no usable rate in its header),
@@ -83,6 +83,12 @@ Samples are loaded or received into memory and played from the on-screen keyboar
   sampler doesn't answer, the sample comes as the dump has it. REQUEST PARAMETERS in the MIDI view only asks and
   logs the reply, on SYSEX CHAN first, then on every other channel, and keeps the channel that answers for RECEIVE.
   An X7000 answered on channel 1 with identifier 41h (the document's "65", decimal).
+  With START 0 ON and START above 0, RECEIVE sends the slot's parameters back with START at 0, receives all of the
+  sample, then sends them back as they were and asks for them again to see that START is back; also when the dump
+  fails or is cancelled (the sampler is told to stop sending first). The sample then has all of the sampler's
+  memory, with START, END and the loop where they are on the sampler. If the sampler doesn't take the parameters,
+  only START to END comes over and the log says so (and that the loop is lost if it was before START). Not yet
+  tried on an X7000.
 - **QuickDisk images**: S700/X7000 disk images (`.qd`, as the HxC floppy emulator and FlashFloppy on a Gotek use
   them) load with LOAD FILE, several at once. A disk holds one sample with its parameters, as the S700's sample
   parameter message has them: the sample comes with its points, scan mode, rate and sound (OUT and LFO), marked as

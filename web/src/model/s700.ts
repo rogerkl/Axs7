@@ -72,23 +72,26 @@ export function sampleFromS700Params(p: S700SampleParams, data: Float32Array, na
 }
 
 /**
- * A sample received from the sampler with the parameters it sent for it. The sampler dumps its memory from START to
- * END, so the points are moved by START; a loop point before START can't be had. The rate is the parameters': the
- * X7000's dump header doesn't have it right.
+ * A sample received from the sampler with the parameters it sent for it (START as it is on the sampler). The sampler
+ * dumps its memory from START to END: if the dump has END samples, START was set to 0 for it, and the sample has all
+ * of it with its points. Otherwise the points are moved by START, and a loop point before START can't be had. The
+ * rate is the parameters': the X7000's dump header doesn't have it right.
  */
 export function sampleFromDumpWithParams(r: ParsedDump, p: S700SampleParams, name: string): SamplerSample {
   const data = (r.data ?? new Float32Array(0)).slice(0, MAX_SAMPLES);
   const notes: string[] = [];
-  const length = p.end - p.start;
+  const from = r.header?.totalWords === p.end ? 0 : p.start;
+  const length = p.end - from;
   if (data.length !== length) {
-    notes.push(`The dump has ${data.length} samples, START to END on the sampler is ${length}`);
+    notes.push(`The dump has ${data.length} samples, ${from === p.start ? 'START' : '0'} to END on the sampler is `
+      + `${length}`);
   }
   const loopMode = SCAN_MODES.get(p.scanMode);
-  if (p.loop < p.start && loopMode && isLooped(loopMode)) {
-    notes.push(`LOOP ${p.loop} is before START ${p.start}: the sampler only sends START to END, so the loop is `
-      + `lost and starts at START here. Set START to ${p.loop} or less on the sampler and receive again to keep it.`);
+  if (p.loop < from && loopMode && isLooped(loopMode)) {
+    notes.push(`LOOP ${p.loop} is before START ${p.start}, and the dump has START to END only: the loop is lost, `
+      + 'it starts at START here.');
   }
-  const moved = { ...p, start: 0, end: length, loop: Math.max(0, p.loop - p.start) };
+  const moved = { ...p, start: p.start - from, end: length, loop: Math.max(0, p.loop - from) };
   const got = sampleFromS700Params(moved, data, name);
   const header = r.header;
   if (header?.periodValid && Math.abs(header.sampleRate - got.sample.rate) > 1) {
