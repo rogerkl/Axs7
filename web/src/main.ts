@@ -100,14 +100,26 @@ async function main(): Promise<void> {
   try {
     const persistence = await Persistence.open((e) => midi.logLine(`Could not save to the browser: ${e}`, 'warn'));
     const saved = await persistence.load();
+    for (const problem of saved.problems) {
+      midi.logLine(problem, 'warn');
+    }
     if (saved.samples.length || saved.banks.length) {
       renderer.adopt(saved.samples); // stored as rendered
       store.replaceAll(saved.samples, saved.banks, saved.bankIndex, saved.programIndex);
     }
     persistence.attach(store);
   } catch (e) {
-    midi.logLine(`Memory isn't kept between visits: ${e}`, 'warn');
+    // not saved from here on, so what is kept isn't written over
+    const where = e instanceof Error ? (e.stack ?? '').split('\n').slice(0, 4).join(' / ') : '';
+    midi.logLine(`Memory isn't kept between visits: ${e}${where ? ` (${where})` : ''}`, 'warn');
   }
+  // leaving in the middle of a transfer would leave the sampler with START and END changed for it
+  addEventListener('beforeunload', (e) => {
+    if (actions.busy === 'receive' || actions.busy === 'receiveBank' || actions.busy === 'send'
+      || actions.busy === 'sendBank') {
+      e.preventDefault();
+    }
+  });
 
   // ---- display and data entry
   lcd.status = () => {

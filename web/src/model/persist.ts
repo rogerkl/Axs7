@@ -3,6 +3,7 @@
 // would be.
 
 import { BANK_PROGRAMS, banksFromPrograms, normalizeBank } from './mapping';
+import { normalizeSample } from './points';
 import type { Store } from './store';
 import type { Bank, Program, Sample } from './types';
 
@@ -12,6 +13,17 @@ const META = 'meta';
 /** where the programs were kept in IndexedDB before, still read if localStorage has none */
 const PROGRAMS_KEY = 'programs';
 const PROGRAMS_STORAGE = 'axs7.programs';
+/** a copy of banks that couldn't be read, before they are saved over */
+const UNREADABLE_STORAGE = 'axs7.programs.unreadable';
+
+export interface Loaded {
+  samples: Sample[];
+  banks: Bank[];
+  bankIndex: number;
+  programIndex: number;
+  /** what couldn't be read, for the log */
+  problems: string[];
+}
 
 interface ProgramsRecord {
   banks?: Bank[];
@@ -54,24 +66,56 @@ export class Persistence {
     return new Persistence(await request(open), onError);
   }
 
-  async load(): Promise<{ samples: Sample[]; banks: Bank[]; bankIndex: number; programIndex: number }> {
+  /**
+   * The memory as it was kept. What can't be read is passed over, said in `problems`, and left as it is: a sample
+   * stays in IndexedDB (saving doesn't remove it), the banks are copied to UNREADABLE_STORAGE before they would be
+   * saved over.
+   */
+  async load(): Promise<Loaded> {
     const tx = this.db.transaction([SAMPLES, META], 'readonly');
-    const samples = await request(tx.objectStore(SAMPLES).getAll() as IDBRequest<Sample[]>);
-    const record = readPrograms()
-      ?? await request(tx.objectStore(META).get(PROGRAMS_KEY) as IDBRequest<ProgramsRecord | undefined>);
+    const stored = await request(tx.objectStore(SAMPLES).getAll() as IDBRequest<Sample[]>);
+    const problems: string[] = [];
+    const json = localStorage.getItem(PROGRAMS_STORAGE);
+    let record: ProgramsRecord | undefined;
+    try {
+      record = json ? (JSON.parse(json) as ProgramsRecord) : undefined;
+    } catch (e) {
+      keepUnreadable(json!, `the banks (${errorText(e)})`, problems);
+    }
+    record ??= await request(tx.objectStore(META).get(PROGRAMS_KEY) as IDBRequest<ProgramsRecord | undefined>);
+    const samples: Sample[] = [];
+    for (const sample of stored) {
+      try {
+        if (!(sample?.data instanceof Float32Array)) {
+          throw new Error('it has no audio');
+        }
+        samples.push(normalizeSample(sample));
+      } catch (e) {
+        problems.push(`Sample ${sample?.name ?? sample?.id ?? '?'} can't be read (${errorText(e)}), it is left as it `
+          + 'is in the browser\'s storage');
+      }
+    }
+    // the ones not read aren't removed by syncSamples
     this.saved = new Set(samples.map((s) => s.id));
-    const order = new Map((record?.sampleOrder ?? []).map((id, i) => [id, i]));
+    const order = new Map((Array.isArray(record?.sampleOrder) ? record.sampleOrder : []).map((id, i) => [id, i]));
     samples.sort((a, b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity));
+    const index = (v: unknown) => (Number.isInteger(v) && (v as number) >= 0 ? v as number : 0);
     if (!record) {
-      return { samples, banks: [], bankIndex: 0, programIndex: 0 };
+      return { samples, banks: [], bankIndex: 0, programIndex: 0, problems };
     }
-    if (record.banks) {
-      return { samples, banks: record.banks.map(normalizeBank), bankIndex: record.bankIndex ?? 0,
-        programIndex: record.programIndex };
+    try {
+      if (record.banks) {
+        return { samples, banks: record.banks.map(normalizeBank), bankIndex: index(record.bankIndex),
+          programIndex: index(record.programIndex), problems };
+      }
+      // from before banks: 32 programs to a bank
+      const programIndex = index(record.programIndex);
+      return { samples, banks: banksFromPrograms(record.programs ?? []),
+        bankIndex: Math.floor(programIndex / BANK_PROGRAMS), programIndex: programIndex % BANK_PROGRAMS, problems };
+    } catch (e) {
+      keepUnreadable(json ?? JSON.stringify(record), `the banks (${errorText(e)})`, problems);
+      return { samples, banks: [], bankIndex: 0, programIndex: 0, problems };
     }
-    // from before banks: 32 programs to a bank
-    return { samples, banks: banksFromPrograms(record.programs ?? []),
-      bankIndex: Math.floor(record.programIndex / BANK_PROGRAMS), programIndex: record.programIndex % BANK_PROGRAMS };
   }
 
   /** Saves the store's changes from now on */
@@ -148,11 +192,15 @@ export class Persistence {
   }
 }
 
-function readPrograms(): ProgramsRecord | undefined {
+/** Keeps what can't be read where saving won't write over it */
+function keepUnreadable(json: string, what: string, problems: string[]): void {
   try {
-    const json = localStorage.getItem(PROGRAMS_STORAGE);
-    return json ? (JSON.parse(json) as ProgramsRecord) : undefined;
+    localStorage.setItem(UNREADABLE_STORAGE, json);
+    problems.push(`Can't read ${what}: started with an empty bank, what was kept is in localStorage as `
+      + UNREADABLE_STORAGE);
   } catch {
-    return undefined;
+    problems.push(`Can't read ${what}: started with an empty bank`);
   }
 }
+
+const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
