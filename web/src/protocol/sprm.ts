@@ -28,9 +28,11 @@ const DATA_AT = 7;
 /** the undefined byte after the programs, which a disk doesn't have */
 const UNDEFINED_AT = 32 * 4;
 const DATA_BYTES = S700_PARAM_BYTES + 1;
-/** START in the data, the word the sampler keeps with it (END - START - 1), then END + 1 */
+/** START in the data, the word the sampler keeps with it (END - START - 1), END + 1, LOOP, and the word kept with
+ * them (END - LOOP - 1) */
 const START_AT = UNDEFINED_AT + 2;
 const END_AT = START_AT + 4;
+const LOOP_AT = END_AT + 2;
 export const SPRM_LENGTH = DATA_AT + DATA_BYTES * 2 + 2;
 
 /** The request for a slot's parameters, channel 0-15, slot from 0 */
@@ -84,11 +86,16 @@ export function parseSampleParams(data: Uint8Array): SampleParams {
 /** The message with a slot's parameters, to set them on the sampler */
 export function sampleParamsMessage(channel: number, slot: number, params: S700SampleParams,
   id: number = S700_IDS[0]): Uint8Array {
+  return sampleParamsBytesMessage(channel, slot, sampleParamsBytes(params), id);
+}
+
+/** The bytes the sampler keeps for the parameters, as a message has them (SampleParams.bytes) */
+export function sampleParamsBytes(params: S700SampleParams): Uint8Array {
   const kept = s700ParamBytes(params);
   const bytes = new Uint8Array(DATA_BYTES);
   bytes.set(kept.subarray(0, UNDEFINED_AT));
   bytes.set(kept.subarray(UNDEFINED_AT), UNDEFINED_AT + 1);
-  return sampleParamsBytesMessage(channel, slot, bytes, id);
+  return bytes;
 }
 
 /** The message with the bytes the sampler keeps for a slot, as a reply has them (SampleParams.bytes) */
@@ -109,10 +116,40 @@ export function sampleParamsBytesMessage(channel: number, slot: number, bytes: U
   return out;
 }
 
-/** The bytes (SampleParams.bytes) with another START, and the word the sampler keeps with it: the rest as they are */
-export function bytesWithStart(bytes: Uint8Array, start: number): Uint8Array {
+/**
+ * The bytes (SampleParams.bytes) with another START and END (after the last sample, SEND), and the words the sampler
+ * keeps with them: the rest as they are
+ */
+export function bytesWithPoints(bytes: Uint8Array, start: number, end: number): Uint8Array {
   const out = bytes.slice();
-  const end = (bytes[END_AT] | (bytes[END_AT + 1] << 8)) - 1;
-  out.set([start & 0xff, start >> 8, (end - start) & 0xff, (end - start) >> 8], START_AT);
+  const word = (at: number, v: number) => out.set([v & 0xff, (v >> 8) & 0xff], at);
+  const loop = bytes[LOOP_AT] | (bytes[LOOP_AT + 1] << 8);
+  word(START_AT, start);
+  word(START_AT + 2, end - start - 1);
+  word(END_AT, end);
+  word(LOOP_AT + 2, end - loop - 1);
+  return out;
+}
+
+const PARAM_NAMES: [keyof S700SampleParams, string][] = [['start', 'START'], ['end', 'END'], ['loop', 'LOOP'],
+  ['scanMode', 'SCAN'], ['reversed', 'REVERSED'], ['bandwidth', 'RATE CODE'], ['recordPitch', 'ROOT'],
+  ['fineTune', 'FINE TUNE'], ['lfoSpeed', 'LFO SPEED'], ['lfoDepth', 'LFO DEPTH'], ['lfoDelay', 'LFO DELAY'],
+  ['filter', 'FILTER'], ['release', 'RELEASE'], ['loudness', 'LEVEL'], ['velFilter', 'VEL>FILTER'],
+  ['velLoudness', 'VEL>LEVEL'], ['velRelease', 'VEL>RELEASE']];
+
+/** How the parameters the sampler has differ from the ones it should have, for the log; empty if they don't */
+export function paramsDiffer(has: S700SampleParams, should: S700SampleParams): string[] {
+  const out = PARAM_NAMES.filter(([k]) => has[k] !== should[k]).map(([k, name]) => `${name} ${String(has[k])} `
+    + `(not ${String(should[k])})`);
+  const programs = should.programs.flatMap((r, i) => {
+    const h = has.programs[i];
+    const inIt = (k: typeof r) => k.low <= k.high;
+    const same = inIt(r) === inIt(h) && (!inIt(r) || (r.low === h.low && r.high === h.high
+      && r.transpose === h.transpose && r.constantPitch === h.constantPitch && r.audioTrigger === h.audioTrigger));
+    return same ? [] : [`P${i + 1}`];
+  });
+  if (programs.length) {
+    out.push(`key ranges in ${programs.join(' ')}`);
+  }
   return out;
 }

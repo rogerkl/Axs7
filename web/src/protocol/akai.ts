@@ -137,10 +137,13 @@ export function headerTotalWords(numSamples: number): number {
 
 /**
  * As the Java version: rounded down, so it usually sends one block less than the total words in the header
- * announce. The sampler accepts that, and the words it misses are past the sample's end anyway.
+ * announce. The sampler accepts that, and the words it misses are past the sample's end anyway. But at least the
+ * blocks the samples need: near the most the sampler takes the header can't announce 200 more, and the last block
+ * would be left out (the sampler sends 546 blocks for 32752 words).
  */
 export function blocksToSend(numSamples: number): number {
-  return Math.min(Math.floor(headerTotalWords(numSamples) / SAMPLES_PER_BLOCK), MAX_BLOCKS);
+  return Math.min(Math.max(Math.floor(headerTotalWords(numSamples) / SAMPLES_PER_BLOCK),
+    Math.ceil(numSamples / SAMPLES_PER_BLOCK)), MAX_BLOCKS);
 }
 
 export interface DumpHeader {

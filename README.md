@@ -22,9 +22,10 @@ Samples are loaded or received into memory and played from the on-screen keyboar
 - **START and END**: the part of a sample that is used, to take a portion out of a long one. Playing starts at
   START, a one shot ends at END, the loop ends at END at the latest (moving END pushes it back). As on the X7000,
   START may be inside the loop, after the loop start: a sample can play its end once and then loop back to a loop
-  start long before it (START past the loop end pushes the loop end along). Only the part that plays is sent to the
-  sampler: START to END, or from the loop start when it is before START. A dump has no START, so the sampler starts
-  at what is sent first; the MIDI log then says what to set START to on the sampler.
+  start long before it (START past the loop end pushes the loop end along). A sample goes to the sampler with its
+  START, END and loop when the sampler takes its parameters (see Sample parameters); else only the part that plays
+  is sent, START to END or from the loop start when it is before START, and the MIDI log says what to set START to
+  on the sampler, as a dump has no START.
 - **Waveform**: START and END (tags S, E) and the loop (LS, LE) are dragged on it, and a grabbed point's parameter
   is selected, so the knob or the arrow keys then move it a sample at a time. The mouse wheel zooms around the
   pointer (in to single samples), dragging or shift + wheel pans, a double click zooms in, and buttons zoom to each
@@ -73,22 +74,28 @@ Samples are loaded or received into memory and played from the on-screen keyboar
   resampled to the nearest of the sampler's rates and limited to its 32752 samples when sent.
   The sampler sends a sample from its START point to its END: what is before START isn't sent, even a loop point
   there (with START after the loop point, the sample plays fine on the sampler, but only START to END comes over).
-  So with START 0 ON (MIDI view, the default) RECEIVE sets START to 0 on the sampler for the dump and back after
-  it, see below. The MIDI view logs each received dump's header.
-- **Sample parameters**: RECEIVE first asks the sampler for the slot's parameters, with the S700's Akai exclusive
-  messages (a request, RSPRM, answered with the parameters, SPRM; tried on an X7000). They are what a sample dump
-  doesn't carry: START and END, the scan mode, the rate (a dump from the X7000 has no usable rate in its header),
-  the sound (OUT and LFO), and the sample's key range in each of the 32 programs. A received sample comes with them
-  as a disk's does, its keygroups in the programs it is in on the sampler, and the MIDI log shows them. If the
-  sampler doesn't answer, the sample comes as the dump has it. REQUEST PARAMETERS in the MIDI view only asks and
-  logs the reply, on SYSEX CHAN first, then on every other channel, and keeps the channel that answers for RECEIVE.
-  An X7000 answered on channel 1 with identifier 41h (the document's "65", decimal).
-  With START 0 ON and START above 0, RECEIVE sends the slot's parameters back with START at 0, receives all of the
-  sample, then sends them back as they were and asks for them again to see that START is back; also when the dump
-  fails or is cancelled (the sampler is told to stop sending first). The sample then has all of the sampler's
-  memory, with START, END and the loop where they are on the sampler. If the sampler doesn't take the parameters,
-  only START to END comes over and the log says so (and that the loop is lost if it was before START). Not yet
-  tried on an X7000.
+  So with RECEIVE ALL ON (MIDI view, the default) RECEIVE sets START to 0 and END to the most on the sampler for
+  the dump and back after it, see below. The MIDI view logs each received dump's header.
+- **Sample parameters**: RECEIVE and SEND first ask the sampler for the slot's parameters, with the S700's Akai
+  exclusive messages (a request, RSPRM, answered with the parameters, SPRM; tried on an X7000). They are what a
+  sample dump doesn't carry: START and END, the scan mode, the rate (a dump from the X7000 has no usable rate in its
+  header), the sound (OUT and LFO), and the sample's key range in each of the 32 programs. A received sample comes
+  with them as a disk's does, its keygroups in the programs it is in on the sampler, and the MIDI log shows them. If
+  the sampler doesn't answer, the sample comes as the dump has it. REQUEST PARAMETERS in the MIDI view only asks
+  and logs the reply, on SYSEX CHAN first, then on every other channel, and keeps the channel that answers for
+  RECEIVE and SEND. An X7000 answered on channel 1 with identifier 41h (the document's "65", decimal).
+  - With RECEIVE ALL ON, RECEIVE sends the slot's parameters back with START at 0 and END at 32752, receives all of
+    the slot's memory (what is before START, and after END of a recording that was cut, as a disk has it), then
+    sends the parameters back as they were and asks for them again to see that they are; also when the dump fails
+    or is cancelled (the sampler is told to stop sending first). The sample has START, END and the loop where they
+    are on the sampler. If the sampler doesn't take the parameters, only START to END comes over and the log says
+    so (and that the loop is lost if it was before START).
+  - SEND, if the sampler answers, sends all of the sample (as SAVE QD saves it: from START to END only if all of it
+    doesn't fit), then its parameters: START, END, loop, scan mode, direction, rate, sound, and its key ranges in
+    the programs (a sample in no program keeps the slot's key ranges, root and fine tune on the sampler). It asks
+    for them again and logs anything the sampler doesn't have as sent. A sample received with all of its memory
+    goes back the same, memory and parameters. If the sampler doesn't answer, START to END is sent as before.
+  - Setting the parameters is not yet tried on an X7000, only against a simulated one.
 - **QuickDisk images**: S700/X7000 disk images (`.qd`, as the HxC floppy emulator and FlashFloppy on a Gotek use
   them) load with LOAD FILE, several at once. A disk holds one sample with its parameters, as the S700's sample
   parameter message has them: the sample comes with its points, scan mode, rate and sound (OUT and LFO), marked as

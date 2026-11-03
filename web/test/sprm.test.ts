@@ -1,12 +1,17 @@
 import { describe, expect, test } from 'vitest';
 import { MidiLink } from '../src/midi/link';
 import { requestSampleParams, setSampleParams } from '../src/midi/transfer';
+import { dumpWithParams } from '../src/model/convert';
+import { defaultSound, newKeygroup, newProgram } from '../src/model/mapping';
+import { plainRecipe } from '../src/model/recipe';
 import { sampleFromDumpWithParams } from '../src/model/s700';
 import {
-  BANDWIDTHS, BLOCK_LENGTH, HEADER_LENGTH, SAMPLES_PER_BLOCK, encodeBlock, encodeHeader, parseDump, to3Bytes,
+  BANDWIDTHS, BLOCK_LENGTH, HEADER_LENGTH, SAMPLES_PER_BLOCK, blocksToSend, encodeBlock, encodeHeader, parseDump,
+  to3Bytes,
 } from '../src/protocol/akai';
 import {
-  SPRM_LENGTH, bytesWithStart, parseSampleParams, sampleParamsBytesMessage, sampleParamsMessage, sampleParamsRequest,
+  SPRM_LENGTH, bytesWithPoints, paramsDiffer, parseSampleParams, sampleParamsBytes, sampleParamsBytesMessage,
+  sampleParamsMessage, sampleParamsRequest,
 } from '../src/protocol/sprm';
 import { chromeRejects } from './helpers';
 
@@ -94,13 +99,28 @@ describe('sample parameters (Akai exclusive)', () => {
     expect([...sampleParamsBytesMessage(0, 0, r.bytes)]).toEqual([...x7000Message()]);
   });
 
-  test('START changed, and the word kept with it: the rest as it was', () => {
-    const zero = bytesWithStart(X7000_BYTES, 0);
-    expect([...zero.subarray(130, 134)]).toEqual([0, 0, 0xef, 0x7f]); // 0, and END - 0 - 1 = 32751
-    expect(zero.filter((b, i) => b !== X7000_BYTES[i])).toHaveLength(4);
-    expect(parseSampleParams(sampleParamsBytesMessage(0, 0, zero)).params).toMatchObject({ start: 0, end: 32752,
+  test('START and END changed, and the words kept with them: the rest as it was', () => {
+    // START, END - START - 1, END + 1, LOOP, END - LOOP - 1
+    expect([...X7000_BYTES.subarray(130, 140)]).toEqual([0x28, 0x7f, 0xc7, 0x00, 0xf0, 0x7f, 0x33, 0x25, 0xbc, 0x5a]);
+    const all = bytesWithPoints(X7000_BYTES, 0, 32752);
+    expect([...all.subarray(130, 140)]).toEqual([0, 0, 0xef, 0x7f, 0xf0, 0x7f, 0x33, 0x25, 0xbc, 0x5a]);
+    expect(all.filter((b, i) => b !== X7000_BYTES[i])).toHaveLength(4);
+    expect(parseSampleParams(sampleParamsBytesMessage(0, 0, all)).params).toMatchObject({ start: 0, end: 32752,
       loop: 9523 });
-    expect(bytesWithStart(zero, 32552)).toEqual(X7000_BYTES);
+    expect(bytesWithPoints(all, 32552, 32752)).toEqual(X7000_BYTES);
+    const shorter = bytesWithPoints(X7000_BYTES, 100, 20000);
+    expect([...shorter.subarray(130, 140)]).toEqual([100, 0, 0xbb, 0x4d, 0x20, 0x4e, 0x33, 0x25, 0xec, 0x28]);
+    expect(shorter.filter((b, i) => b !== X7000_BYTES[i])).toHaveLength(8);
+  });
+
+  test('what differs between the parameters the sampler has and those it should have', () => {
+    const p = parseSampleParams(x7000Message()).params;
+    expect(paramsDiffer(p, p)).toEqual([]);
+    const programs = p.programs.slice();
+    programs[2] = { ...programs[2], high: 60 };
+    programs[5] = { ...programs[0] };
+    expect(paramsDiffer({ ...p, start: 0, release: 30, programs }, p)).toEqual(['START 0 (not 32552)',
+      'RELEASE 30 (not 85)', 'key ranges in P3 P6']);
   });
 
   test('the message that sets them is the document\'s, and Chrome sends it', () => {
@@ -187,7 +207,7 @@ describe('asking the sampler for parameters', () => {
   test('setting them, and seeing that the sampler took them', async () => {
     for (const takes of [true, false]) {
       const { link, sent, has } = samplerWithParams(X7000_BYTES, takes);
-      const now = await setSampleParams(link, 0, bytesWithStart(X7000_BYTES, 0), { channel: 0, id: 0x41 });
+      const now = await setSampleParams(link, 0, bytesWithPoints(X7000_BYTES, 0, 32752), { channel: 0, id: 0x41 });
       expect(sent.map((m) => m[3])).toEqual([10, 4]); // the parameters, then the request
       expect(now!.params.start).toBe(takes ? 0 : 32552);
       expect(has().start).toBe(takes ? 0 : 32552);
@@ -249,6 +269,17 @@ describe('a sample received with its parameters', () => {
     expect(notes).toEqual([]);
   });
 
+  test('START 0 and END at the most for the dump: all of the memory, past END too', () => {
+    const params = { ...parseSampleParams(documentMessage(0, 0)).params, reversed: false };
+    for (const dumped of [undefined, { start: 0, end: 32752 }]) {
+      const { sample, notes } = sampleFromDumpWithParams(x7000Dump(32752), params, 'SLOT 1', dumped);
+      expect(sample).toMatchObject({ start: 1000, end: 30000, loopStart: 5000, loopEnd: 30000 });
+      expect(sample.data).toHaveLength(32752);
+      expect(sample.data[31000]).toBe(((31000 * 7) % 4096 - 2048) / 2048);
+      expect(notes).toEqual([]);
+    }
+  });
+
   test('START before the loop point: the points from START, the rate from the parameters', () => {
     const params = { ...parseSampleParams(documentMessage(0, 0)).params, reversed: false };
     const { sample, notes } = sampleFromDumpWithParams(x7000Dump(29000), params, 'SLOT 1');
@@ -260,8 +291,50 @@ describe('a sample received with its parameters', () => {
     const dump = x7000Dump(100);
     dump.header = { ...dump.header!, periodValid: true, sampleRate: 39555.4 };
     expect(sampleFromDumpWithParams(dump, { ...params, start: 0, end: 300 }, 'X').notes).toEqual([
-      'The dump has 100 samples, START to END on the sampler is 300',
+      'The dump has 100 samples, the sampler\'s 0 to 300 is 300',
       'The dump\'s header has 39555.4 Hz, the parameters 26399.85 Hz: took the parameters\'',
     ]);
+  });
+});
+
+describe('a sample sent with its parameters', () => {
+  test('a sample received with all of the memory goes back as it came, with the same parameters', async () => {
+    const was = parseSampleParams(x7000Message()).params;
+    const got = sampleFromDumpWithParams(x7000Dump(32752), was, 'SLOT 1');
+    const programs = got.programs.map((k, i) => {
+      const p = newProgram(`P${i + 1}`);
+      if (k) {
+        p.keygroups.push(newKeygroup(got.sample.id, k));
+      }
+      return p;
+    });
+    const { dump, params, inProgram, notes } = await dumpWithParams(got.sample, programs, { slot: 0 },
+      () => Promise.reject(new Error('should not resample')));
+    expect([inProgram, notes]).toEqual([true, []]);
+    expect(paramsDiffer(params, was)).toEqual([]);
+    expect(sampleParamsBytes(params)).toEqual(X7000_BYTES);
+    // all of it, the last block too
+    expect(dump.numBlocks).toBe(546);
+    const sent = parseDump(dump.bytes);
+    expect(sent.header).toMatchObject({ totalWords: 32752, loopStart: 9523, loopEnd: 32752, alternating: true });
+    expect(sent.codes).toEqual(Uint16Array.from({ length: 32752 }, (_, i) => (i * 7) % 4096));
+  });
+
+  test('a sample from a file: all of it, START in the parameters; in no program', async () => {
+    const data = Float32Array.from({ length: 30000 }, (_, i) => (Math.round(Math.sin(i / 20) * 1000) + 0) / 2048);
+    const sample = { id: 'f', name: 'F', source: data, sourceRate: 39555.4, recipe: plainRecipe(), fromSampler: false,
+      rate: 39555.4, data, start: 441, end: 28000, loopStart: 22050, loopEnd: 28000, loopMode: 'forward' as const,
+      reverse: false, sound: defaultSound() };
+    const { dump, params, inProgram } = await dumpWithParams(sample, [newProgram('P1')], { slot: 2 },
+      () => Promise.reject(new Error('should not resample')));
+    expect(inProgram).toBe(false);
+    expect(params).toMatchObject({ start: 441, end: 28000, loop: 22050, scanMode: 2, bandwidth: 76 });
+    expect(parseDump(dump.bytes).header).toMatchObject({ slot: 2, totalWords: 30200, loopStart: 22050,
+      loopEnd: 28000, alternating: false });
+    expect(parseDump(dump.bytes).data!.subarray(0, 30000)).toEqual(data);
+  });
+
+  test('a dump of near the most samples has all of its blocks', () => {
+    expect([6000, 32500, 32700, 32701, 32752].map(blocksToSend)).toEqual([103, 545, 545, 546, 546]);
   });
 });

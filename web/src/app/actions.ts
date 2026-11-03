@@ -3,19 +3,21 @@
 import { decodeAudioFile, resampleInBrowser } from '../audio/decode';
 import { bankToZip, zipToBank } from '../model/bank';
 import { S612_KEYGROUP, diskFromSample, sampleFromDisk } from '../model/disk';
-import { dumpFromSample, sampleFromDump, sampleFromWav, wavLoops } from '../model/convert';
+import { dumpFromSample, dumpWithParams, sampleFromDump, sampleFromWav, wavLoops } from '../model/convert';
 import { defaultSound, newId } from '../model/mapping';
 import { plainRecipe } from '../model/recipe';
 import type { Sample } from '../model/types';
 import { receiveDump, requestSampleParams, setSampleParams, transmitDump } from '../midi/transfer';
 import type { ParamsReply } from '../midi/transfer';
 import { sampleFromDumpWithParams } from '../model/s700';
+import type { Dumped } from '../model/s700';
 import { readWav, encodeWav } from '../protocol/wav';
 import { isQdImage } from '../protocol/qd';
-import { ABORT_DUMP, hex, nearestBandwidth, samplerBandwidth } from '../protocol/akai';
+import { ABORT_DUMP, MAX_SAMPLES, hex, nearestBandwidth, samplerBandwidth } from '../protocol/akai';
+import type { Dump } from '../protocol/akai';
 import { S700_SCAN, bandwidthRate } from '../protocol/s700disk';
 import type { S700SampleParams } from '../protocol/s700disk';
-import { bytesWithStart, sampleParamsRequest } from '../protocol/sprm';
+import { bytesWithPoints, paramsDiffer, sampleParamsBytes, sampleParamsRequest } from '../protocol/sprm';
 import { noteName } from '../model/notes';
 import { download } from '../ui/dom';
 import type { App } from './app';
@@ -136,9 +138,9 @@ export class Actions {
    * PARAMETERS found: with them the sample comes with its points, scan mode, rate and sound, and its keygroups in the
    * programs it is in on the sampler. Without a reply it comes as the dump has it.
    *
-   * The sampler only sends START to END. With START 0 on (settings.wholeSample), START is set to 0 on the sampler for
-   * the dump, by sending the slot's parameters back with START changed, and the parameters as they were are sent
-   * again after it, also when it fails or is cancelled.
+   * The sampler only sends START to END. With RECEIVE ALL on (settings.wholeSample), START is set to 0 and END to the
+   * most on the sampler for the dump, by sending the slot's parameters back with them changed, and the parameters as
+   * they were are sent again after it, also when it fails or is cancelled.
    */
   async receive(): Promise<void> {
     if (this.busy === 'receive') {
@@ -157,7 +159,7 @@ export class Actions {
       await this.waitForAcks();
       const reply = await this.slotParams(slot, this.abort.signal);
       const params = reply?.params ?? null;
-      const putBack = reply && settings.wholeSample ? await this.startToZero(slot, reply) : null;
+      const putBack = reply && settings.wholeSample ? await this.wholeMemory(slot, reply) : null;
       let r;
       try {
         this.abort.signal.throwIfAborted();
@@ -170,7 +172,7 @@ export class Actions {
       } catch (e) {
         if (putBack) {
           this.acksUntil = (e as { timing?: { lastAckAt: number } }).timing?.lastAckAt ?? this.acksUntil;
-          await this.startBack(slot, putBack, true);
+          await this.pointsBack(slot, putBack.was, true);
         }
         throw e;
       }
@@ -186,7 +188,7 @@ export class Actions {
         midi.logLine(p, 'warn');
       }
       if (putBack) {
-        await this.startBack(slot, putBack, !r.header || !r.blocks);
+        await this.pointsBack(slot, putBack.was, !r.header || !r.blocks);
       }
       if (!r.header || !r.blocks) {
         lcd.release();
@@ -196,7 +198,7 @@ export class Actions {
       const name = store.uniqueSampleName(`SLOT ${slot + 1}`);
       let sample: Sample;
       if (params) {
-        const got = sampleFromDumpWithParams(r, params, name);
+        const got = sampleFromDumpWithParams(r, params, name, putBack?.dumped ?? undefined);
         for (const note of got.notes) {
           midi.logLine(`${name}: ${note}`, 'warn');
         }
@@ -246,67 +248,78 @@ export class Actions {
   }
 
   /**
-   * Sets START to 0 on the sampler if it isn't, by sending the slot's parameters back with START changed, so a dump
-   * has all of the sample
+   * Sets START to 0 and END to the most on the sampler, so a dump has all of its memory for the sample, as a disk has
+   * it: what is before START, and after END, of a recording that was cut. The slot's parameters are sent back with
+   * those changed.
    *
-   * @returns the parameters to put back after the dump, null if nothing was changed
+   * @returns the parameters to put back after the dump, and what the sampler has for it (null if not known); null if
+   * nothing was changed
    */
-  private async startToZero(slot: number, reply: ParamsReply): Promise<ParamsReply | null> {
+  private async wholeMemory(slot: number, reply: ParamsReply): Promise<{ was: ParamsReply; dumped: Dumped | null }
+    | null> {
     const { settings, midi, lcd } = this.app;
-    const { start } = reply.params;
-    if (start === 0) {
+    const { start, end } = reply.params;
+    if (start === 0 && end === MAX_SAMPLES) {
       return null;
     }
     if (!reply.checksumOk || reply.slot !== slot) {
-      midi.logLine('START isn\'t set to 0 for the receive: the parameters didn\'t come through right', 'warn');
-      return null;
-    }
-    lcd.hold('START 0 FOR RECEIVE');
-    midi.logLine(`START is ${start}, the sampler only sends START to END: setting START to 0 on slot ${slot + 1} `
-      + 'for the receive, then back');
-    // not cancelled while it is changed, so it is put back
-    const now = await setSampleParams(midi.link!, slot, bytesWithStart(reply.bytes, 0),
-      { channel: settings.paramsChannel, id: settings.paramsId });
-    if (now?.params.start === 0) {
-      midi.logLine('START is 0 on the sampler');
-    } else if (now?.params.start === start) {
-      midi.logLine(`The sampler kept START at ${start}: it didn't take the parameters`, 'warn');
-      return null;
-    } else {
-      midi.logLine(`No reply after setting START to 0: ${now ? `START is ${now.params.start}` : 'not known if it is'}`,
+      midi.logLine('START and END aren\'t changed for the receive: the parameters didn\'t come through right',
         'warn');
+      return null;
     }
+    lcd.hold('RECEIVE ALL');
+    midi.logLine(`START ${start}, END ${end}: the sampler only sends START to END, setting them to 0 and `
+      + `${MAX_SAMPLES} on slot ${slot + 1} for the receive, then back`);
+    // not cancelled while they are changed, so they are put back
+    const now = await setSampleParams(midi.link!, slot, bytesWithPoints(reply.bytes, 0, MAX_SAMPLES),
+      { channel: settings.paramsChannel, id: settings.paramsId });
     lcd.hold(`RECEIVING SLOT ${slot + 1}`);
-    return reply;
+    if (!now) {
+      midi.logLine('No reply after setting START and END: not known if the sampler has them', 'warn');
+      return { was: reply, dumped: null };
+    }
+    const has = { start: now.params.start, end: now.params.end };
+    if (has.start === start && has.end === end) {
+      midi.logLine(`The sampler kept START ${start} and END ${end}: it didn't take the parameters`, 'warn');
+      return null;
+    }
+    midi.logLine(`START ${has.start}, END ${has.end} on the sampler`, has.start === 0 && has.end === MAX_SAMPLES
+      ? 'info' : 'warn');
+    return { was: reply, dumped: has };
   }
 
   /**
-   * Puts the parameters back as they were before START was set to 0, and asks for them to see that they are. After
-   * a dump that failed or was cancelled the sampler may still be sending: it is told to stop first.
+   * Puts the parameters back as they were before the receive, and asks for them to see that they are. After a dump
+   * that failed or was cancelled the sampler may still be sending: it is told to stop first.
    */
-  private async startBack(slot: number, was: ParamsReply, failed: boolean): Promise<void> {
+  private async pointsBack(slot: number, was: ParamsReply, failed: boolean): Promise<void> {
     const { settings, midi, lcd } = this.app;
-    const { start } = was.params;
-    lcd.hold(`START BACK TO ${start}`);
+    const { start, end } = was.params;
+    lcd.hold('PARAMETERS BACK');
     try {
       await this.waitForAcks();
       if (failed) {
         midi.link!.output?.send(ABORT_DUMP);
         await sleep(300);
       }
-      for (let tries = 0; tries < 3; tries++) {
+      let differ = ['no reply'];
+      for (let tries = 0; tries < 3 && differ.length; tries++) {
+        if (tries > 0) {
+          await sleep(1000);
+        }
         const now = await setSampleParams(midi.link!, slot, was.bytes,
           { channel: settings.paramsChannel, id: settings.paramsId });
-        if (now?.params.start === start) {
-          midi.logLine(`START is back at ${start} on the sampler`);
-          return;
-        }
-        await sleep(1000);
+        differ = now ? paramsDiffer(now.params, was.params) : ['no reply'];
       }
-      midi.logLine(`Couldn't see START back at ${start} on slot ${slot + 1}: check it on the sampler`, 'error');
+      if (differ.length) {
+        midi.logLine(`Couldn't see the parameters back on slot ${slot + 1} (${differ.join(', ')}): check START ${start} `
+          + `and END ${end} on the sampler`, 'error');
+      } else {
+        midi.logLine(`START ${start} and END ${end} are back on the sampler`);
+      }
     } catch (e) {
-      midi.logLine(`Couldn't set START back to ${start} on slot ${slot + 1}: ${errorText(e)}. Check it on the `
-        + 'sampler', 'error');
+      midi.logLine(`Couldn't set START back to ${start} and END to ${end} on slot ${slot + 1}: ${errorText(e)}. `
+        + 'Check them on the sampler', 'error');
     }
   }
 
@@ -372,6 +385,12 @@ export class Actions {
     }
   }
 
+  /**
+   * Sends the selected sample to the slot. If the sampler answers a request for the slot's parameters, all of the
+   * sample is sent if it fits, as a disk has it, then its parameters: START, END, loop, scan mode, sound and its key
+   * ranges in the programs (a sample in no program keeps the slot's key ranges, root and fine tune). Else the part
+   * from START to END is sent, and the log says what to set on the sampler.
+   */
   async send(): Promise<void> {
     if (this.busy === 'send') {
       this.cancel();
@@ -394,12 +413,32 @@ export class Actions {
     this.abort = new AbortController();
     try {
       lcd.hold(`PREPARING ${sample.name}`);
-      const { dump, notes } = await dumpFromSample(sample,
-        { slot, filler: { fillerPerBlock: settings.fillerPerBlock } }, resampleInBrowser);
-      for (const note of notes) {
-        midi.logLine(`${sample.name}: ${note}`);
-      }
       await this.waitForAcks();
+      const options = { slot, filler: { fillerPerBlock: settings.fillerPerBlock } };
+      const has = (await requestSampleParams(midi.link!, slot, { channel: settings.paramsChannel,
+        id: settings.paramsId, search: false, signal: this.abort.signal })).reply;
+      let dump: Dump;
+      let params: S700SampleParams | null = null;
+      if (has?.checksumOk && has.slot === slot) {
+        const made = await dumpWithParams(sample, store.programs, options, resampleInBrowser);
+        ({ dump, params } = made);
+        if (!made.inProgram) {
+          Object.assign(params, { programs: has.params.programs, recordPitch: has.params.recordPitch,
+            fineTune: has.params.fineTune });
+          made.notes.push('In no program here: it keeps the slot\'s key ranges, root and fine tune on the sampler');
+        }
+        for (const note of made.notes) {
+          midi.logLine(`${sample.name}: ${note}`);
+        }
+      } else {
+        midi.logLine(`No parameters of slot ${slot + 1} on channel ${settings.paramsChannel + 1} `
+          + `(${hex([settings.paramsId])}h): sending START to END only, without the sound and key ranges`, 'warn');
+        const made = await dumpFromSample(sample, options, resampleInBrowser);
+        dump = made.dump;
+        for (const note of made.notes) {
+          midi.logLine(`${sample.name}: ${note}`);
+        }
+      }
       const r = await transmitDump(midi.link!, dump, {
         signal: this.abort.signal,
         onProgress: (p) => lcd.hold(`SENDING SLOT ${slot + 1} ${Math.min(99, Math.round(p.elapsedMs / p.wireMs * 100))
@@ -407,6 +446,11 @@ export class Actions {
       });
       midi.logLine(`Sent ${sample.name} to slot ${slot + 1}: ${r.bytes} bytes, ${r.numBlocks} blocks, `
         + `${r.replies} replies from the sampler`);
+      if (params && r.cancelled) {
+        midi.logLine('Stopped: the parameters weren\'t sent', 'warn');
+      } else if (params) {
+        await this.sendParams(slot, params);
+      }
       lcd.release();
       if (r.cancelled) {
         lcd.flash('STOPPED WAITING');
@@ -415,12 +459,33 @@ export class Actions {
       }
     } catch (e) {
       lcd.release();
-      midi.logLine(`Send failed: ${errorText(e)}`, 'error');
-      lcd.flash('SEND FAILED, SEE MIDI');
+      if ((e as Error).name === 'AbortError') {
+        lcd.flash('SEND CANCELLED');
+      } else {
+        midi.logLine(`Send failed: ${errorText(e)}`, 'error');
+        lcd.flash('SEND FAILED, SEE MIDI');
+      }
     } finally {
       this.abort = null;
       this.setBusy(null);
     }
+  }
+
+  /** Sets a slot's parameters on the sampler after a dump, and asks for them to see that it has them */
+  private async sendParams(slot: number, params: S700SampleParams): Promise<void> {
+    const { settings, midi, lcd } = this.app;
+    lcd.hold(`PARAMETERS SLOT ${slot + 1}`);
+    const now = await setSampleParams(midi.link!, slot, sampleParamsBytes(params),
+      { channel: settings.paramsChannel, id: settings.paramsId });
+    const differ = now ? paramsDiffer(now.params, params) : null;
+    if (differ?.length === 0) {
+      midi.logLine(`Parameters set on slot ${slot + 1}: START ${params.start}, END ${params.end}, LOOP ${params.loop}, `
+        + 'scan, sound and key ranges');
+      return;
+    }
+    midi.logLine(`${differ ? `The sampler doesn't have the parameters sent (${differ.join(', ')})`
+      : 'No reply after sending the parameters'}: set START ${params.start}, END ${params.end} and LOOP `
+      + `${params.loop} on the sampler`, 'warn');
   }
 
   /** Plays a sample at its own pitch, with its sound */

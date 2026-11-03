@@ -4,13 +4,16 @@ import {
   MAX_SAMPLES, buildDump, encodeSamples, isOneShot, matchesBandwidth, nearestBandwidth, samplerBandwidth,
 } from '../protocol/akai';
 import type { Dump, FillerOptions, ParsedDump } from '../protocol/akai';
+import { S700_SCAN } from '../protocol/s700disk';
+import type { S700SampleParams } from '../protocol/s700disk';
 import type { Wav, WavLoop } from '../protocol/wav';
 import { isTwelveBit } from './edit';
 import { defaultSound, newId } from './mapping';
 import { plainRecipe } from './recipe';
+import { samplerImage } from './s700';
 import { isLooped } from './types';
 import { usedStart } from './points';
-import type { Sample } from './types';
+import type { Program, Sample } from './types';
 
 /**
  * A received dump as a sample, marked as from the sampler: it is sent back as it came. The sampler ends a sample at
@@ -184,4 +187,31 @@ export async function dumpFromSample(sample: Sample, options: SendOptions, resam
     alternating: sample.loopMode === 'alternating',
   }, codes, options.filler);
   return { dump, notes };
+}
+
+export interface DumpWithParams {
+  dump: Dump;
+  /** to send after the dump, see sampleParamsMessage */
+  params: S700SampleParams;
+  /** false if it is in no program: its key ranges would have no key play it */
+  inProgram: boolean;
+  notes: string[];
+}
+
+/**
+ * Makes the dump to send a sample to a sampler that then gets its parameters (START, END, loop, scan mode, sound
+ * and key ranges) with the S700's sample parameters message: all of the sample, as a disk has it, if it fits. The
+ * header's loop is the parameters', so the sampler has END and the loop right if it doesn't take them.
+ */
+export async function dumpWithParams(sample: Sample, programs: Program[], options: SendOptions,
+  resample: Resampler): Promise<DumpWithParams> {
+  const { params, samples, rate, inProgram, notes } = await samplerImage(sample, programs, resample, 'sent');
+  const looped = params.scanMode === S700_SCAN.looping || params.scanMode === S700_SCAN.alternating;
+  const dump = buildDump({
+    slot: options.slot, sampleRate: rate, numSamples: samples.length,
+    // a one shot: a loop shorter than 5 samples
+    loopStart: looped ? params.loop : params.end, loopEnd: params.end,
+    alternating: params.scanMode === S700_SCAN.alternating,
+  }, Uint16Array.from(samples, (v) => v + 2048), options.filler);
+  return { dump, params, inProgram, notes };
 }

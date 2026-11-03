@@ -19,7 +19,8 @@ export interface Settings {
   paramsChannel: number;
   /** the S700 identifier it answered to */
   paramsId: number;
-  /** set START to 0 on the sampler while receiving, so the dump has all of the sample, then back */
+  /** set START to 0 and END to the most on the sampler while receiving, so the dump has all of the sample, then
+   * back */
   wholeSample: boolean;
   ackIntervalMs: number;
   lookaheadMs: number;

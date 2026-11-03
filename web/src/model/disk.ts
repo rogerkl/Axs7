@@ -3,21 +3,16 @@
 // bit audio, so a loaded sample is marked as from the sampler: it is kept and sent as it is. A reversed sample is
 // stored as it plays.
 
-import { BANDWIDTHS, MAX_SAMPLES, encodeSamples, nearestBandwidth, samplerBandwidth } from '../protocol/akai';
+import { MAX_SAMPLES } from '../protocol/akai';
 import { S612_RATE, readS612Disk } from '../protocol/s612disk';
-import {
-  NotS700DiskError, S700_NOT_IN_PROGRAM, S700_PROGRAMS, S700_SCAN, buildS700Block, readS700Disk, writeS700Disk,
-} from '../protocol/s700disk';
-import type { S700Disk, S700KeyRange, S700SampleParams } from '../protocol/s700disk';
+import { NotS700DiskError, buildS700Block, readS700Disk, writeS700Disk } from '../protocol/s700disk';
+import type { S700Disk } from '../protocol/s700disk';
 import type { Resampler } from './convert';
-import { isTwelveBit } from './edit';
 import { defaultSound, newId } from './mapping';
-import { usedStart } from './points';
 import { plainRecipe } from './recipe';
-import { sampleFromS700Params } from './s700';
+import { sampleFromS700Params, samplerImage } from './s700';
 import type { KeyRange, SamplerSample } from './s700';
-import { isLooped } from './types';
-import type { Keygroup, LoopMode, Program, Sample } from './types';
+import type { Program, Sample } from './types';
 
 /**
  * A sample from a disk. An S612 disk has no program data: its sample goes in a program of its own, as on the X7000,
@@ -27,8 +22,6 @@ export interface DiskSample extends SamplerSample {
   /** S700 for the S700's and X7000's disks */
   format: 'S700' | 'S612';
 }
-
-const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 /** Where the X7000 puts an S612 disk's sample */
 export const S612_KEYGROUP: KeyRange = { low: 36, high: 96, root: 60, semitones: 0, cents: 0, fixedPitch: false };
@@ -91,123 +84,16 @@ export interface DiskImage {
   notes: string[];
 }
 
-const SCAN_CODES: Record<LoopMode, number> = { off: S700_SCAN.oneShot, forward: S700_SCAN.looping,
-  alternating: S700_SCAN.alternating, drum: S700_SCAN.drum };
-
-/** The sampler's lowest key range limit and its highest key */
-const HIGHEST_KEY = 99;
-
 /**
  * A disk image of a sample, as the S700 saves one: at one of the sampler's rates, 12 bit, with its points, scan
  * mode and sound, and its keygroups in the first 32 programs. A disk has a START, so all of the sample is saved if it
- * fits, else from START (or a loop start before it).
- *
- * On the sampler the root and the fine tune are the sample's: the first keygroup's are saved, the others' roots go in
- * their transpose.
+ * fits, else from START (or a loop start before it). See samplerImage.
  */
 export async function diskFromSample(sample: Sample, programs: Program[], resample: Resampler)
   : Promise<DiskImage> {
-  const notes: string[] = [];
-  const own = samplerBandwidth(sample.rate);
-  const bw = own ?? nearestBandwidth(sample.rate);
-  const ratio = own ? 1 : bw.rate / sample.rate;
-  let from = 0;
-  let to = sample.data.length;
-  if (to * ratio > MAX_SAMPLES + 0.5) {
-    from = usedStart(sample);
-    to = sample.end;
-    if (from > 0 || to < sample.data.length) {
-      notes.push('Too long for the sampler: saved from START to END');
-    }
-  }
-  let data = sample.data.subarray(from, to);
-  const at = (x: number) => clamp(x - from, 0, data.length);
-  let points = { start: at(sample.start), end: at(sample.end), loopStart: at(sample.loopStart),
-    loopEnd: at(sample.loopEnd) };
-  if (sample.reverse) {
-    // stored as it plays
-    const n = data.length;
-    data = data.slice().reverse();
-    points = { start: n - points.end, end: n - points.start, loopStart: n - points.loopEnd,
-      loopEnd: n - points.loopStart };
-  }
-  if (ratio !== 1) {
-    data = await resample(data, sample.rate, bw.rate);
-    const scaled = (x: number) => clamp(Math.round(x * ratio), 0, data.length);
-    points = { start: scaled(points.start), end: scaled(points.end), loopStart: scaled(points.loopStart),
-      loopEnd: scaled(points.loopEnd) };
-    notes.push(`Resampled from ${Math.round(sample.rate)} to ${bw.rate} Hz (${bw.name})`);
-  }
-  if (data.length > MAX_SAMPLES) {
-    notes.push(`Truncated from ${data.length} to ${MAX_SAMPLES} samples, ${(MAX_SAMPLES / bw.rate).toFixed(2)} s`);
-    data = data.subarray(0, MAX_SAMPLES);
-    const cut = (x: number) => Math.min(x, MAX_SAMPLES);
-    points = { start: cut(points.start), end: cut(points.end), loopStart: cut(points.loopStart),
-      loopEnd: cut(points.loopEnd) };
-  }
-  // its own values if it is 12 bit already (from the sampler, or made so), as sending does
-  const samples = ratio === 1 && isTwelveBit(data) ? Int16Array.from(data, (v) => Math.round(v * 2048))
-    : Int16Array.from(encodeSamples(data), (code) => code - 2048);
-  // the sampler's END is the end of a loop
-  const looped = isLooped(sample.loopMode);
-  const end = Math.max(points.start + 2, looped ? points.loopEnd : points.end);
-  if (looped && points.loopEnd < points.end) {
-    notes.push('The sampler\'s END is the loop end');
-  }
-  const loop = looped ? points.loopStart : Math.min(points.loopStart, end - 1);
-
-  const { ranges, root, cents } = keyRanges(sample.id, programs, notes);
-  const s = sample.sound;
-  const params: S700SampleParams = {
-    programs: ranges, scanMode: SCAN_CODES[sample.loopMode], start: points.start, end, loop,
-    lfoSpeed: s.lfoSpeed, lfoDepth: s.lfoDepth, lfoDelay: s.lfoDelay, filter: s.filter, release: s.release,
-    loudness: s.level, fineTune: clamp(Math.round((cents * 16) / 100), -16, 16), recordPitch: root,
-    bandwidth: 76 - BANDWIDTHS.indexOf(bw), reversed: sample.reverse, velFilter: s.velFilter,
-    velLoudness: s.velLevel, velRelease: s.velRelease,
-  };
-  return { bytes: writeS700Disk(buildS700Block(params, samples)), notes: [...new Set(notes)] };
-}
-
-/** The sample's key range in each of the sampler's programs, and the root and fine tune the sampler has for it */
-function keyRanges(sampleId: string, programs: Program[], notes: string[])
-  : { ranges: S700KeyRange[]; root: number; cents: number } {
-  const mine = programs.map((p) => p.keygroups.filter((k) => k.sampleId === sampleId));
-  if (mine.slice(S700_PROGRAMS).some((k) => k.length)) {
-    notes.push(`The sampler has ${S700_PROGRAMS} programs, only those are saved`);
-  }
-  const first: Keygroup | undefined = mine.flat()[0];
-  if (!first) {
+  const { params, samples, inProgram, notes } = await samplerImage(sample, programs, resample, 'saved');
+  if (!inProgram) {
     notes.push('In no program: the sampler plays it from no key until it gets a key range');
   }
-  // the S700's nominal recording pitch goes from 24 to 96, a root outside goes in the transpose
-  const root = clamp(first?.root ?? 60, 24, 96);
-  const cents = first?.cents ?? 0;
-  const ranges = mine.slice(0, S700_PROGRAMS).map((keygroups, i): S700KeyRange => {
-    const k = keygroups[0];
-    if (!k) {
-      return S700_NOT_IN_PROGRAM;
-    }
-    if (keygroups.length > 1) {
-      notes.push(`Program ${i + 1} has the sample in ${keygroups.length} keygroups, the sampler in one: saved the `
-        + 'first');
-    }
-    if (k.cents !== cents) {
-      notes.push(`The fine tune is the sample's on the sampler: saved with ${cents} cents`);
-    }
-    if (k.low > HIGHEST_KEY) {
-      notes.push(`Program ${i + 1}: the key range is above the sampler's keys, left out`);
-      return S700_NOT_IN_PROGRAM;
-    }
-    // constant pitch plays the sample's own pitch, transposed
-    const transpose = k.semitones + (k.fixedPitch ? 0 : root - k.root);
-    if (Math.abs(transpose) > 60) {
-      notes.push(`Program ${i + 1}: the transpose is more than the sampler's 5 octaves`);
-    }
-    return { low: k.low, high: Math.min(k.high, HIGHEST_KEY), transpose: clamp(transpose, -60, 60),
-      constantPitch: k.fixedPitch, audioTrigger: null };
-  });
-  while (ranges.length < S700_PROGRAMS) {
-    ranges.push(S700_NOT_IN_PROGRAM);
-  }
-  return { ranges, root, cents };
+  return { bytes: writeS700Disk(buildS700Block(params, samples)), notes };
 }
