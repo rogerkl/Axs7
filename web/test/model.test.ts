@@ -147,6 +147,10 @@ describe('store', () => {
     store.addSampleToSlot(sample({ id: 'e' }), 2, null);
     expect([store.bank.slots[2], store.banks[0].slots[2]]).toEqual(['e', 'd']);
     expect(store.program.keygroups.map((k) => k.sampleId)).toEqual(['e']); // in no program: the empty current one
+    // emptied, as an empty slot on the sampler: its sample out of the bank's programs, still in memory
+    store.addSampleToSlot(sample({ id: 'g' }), 7, ranges(5, 6));
+    store.clearSlot(7);
+    expect([store.bank.slots[7], store.programs[5].keygroups, store.samples.has('g')]).toEqual([null, [], true]);
     // into the bank a receive began in, though another is current now
     store.addSampleToSlot(sample({ id: 'f' }), 4, ranges(0), store.banks[0]);
     expect([store.banks[0].slots[4], store.banks[0].programs[0].keygroups.map((k) => k.sampleId)]).toEqual(['f', ['f']]);

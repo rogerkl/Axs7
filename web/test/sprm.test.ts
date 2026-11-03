@@ -4,7 +4,7 @@ import { requestSampleParams, setSampleParams } from '../src/midi/transfer';
 import { dumpWithParams } from '../src/model/convert';
 import { defaultSound, newKeygroup, newProgram } from '../src/model/mapping';
 import { plainRecipe } from '../src/model/recipe';
-import { sampleFromDumpWithParams } from '../src/model/s700';
+import { isEmptySlot, sampleFromDumpWithParams } from '../src/model/s700';
 import {
   BANDWIDTHS, BLOCK_LENGTH, HEADER_LENGTH, SAMPLES_PER_BLOCK, blocksToSend, encodeBlock, encodeHeader, parseDump,
   to3Bytes,
@@ -336,5 +336,21 @@ describe('a sample sent with its parameters', () => {
 
   test('a dump of near the most samples has all of its blocks', () => {
     expect([6000, 32500, 32700, 32701, 32752].map(blocksToSend)).toEqual([103, 545, 545, 546, 546]);
+  });
+});
+
+describe('an empty slot', () => {
+  test('the X7000\'s test tone, in no program, is an empty slot; a sample isn\'t', () => {
+    // as an X7000 sent it for a slot with nothing loaded (2026-11-03)
+    const tone = { ...parseSampleParams(x7000Message()).params, start: 0, end: 360, loop: 0, scanMode: 2,
+      bandwidth: 48, lfoSpeed: 50, lfoDelay: 64, filter: 99, release: 30, velLoudness: 50 };
+    tone.programs = tone.programs.map(() => ({ low: 24, high: 0, transpose: 0, constantPitch: false,
+      audioTrigger: null }));
+    expect(isEmptySlot(tone)).toBe(true);
+    expect(isEmptySlot(parseSampleParams(x7000Message()).params)).toBe(false);
+    const inAProgram = { ...tone, programs: tone.programs.slice() };
+    inAProgram.programs[0] = { ...inAProgram.programs[0], high: 99 };
+    expect(isEmptySlot(inAProgram)).toBe(false);
+    expect(isEmptySlot({ ...tone, end: 361 })).toBe(false);
   });
 });

@@ -154,6 +154,28 @@ export class Store {
     this.emitAll();
   }
 
+  /**
+   * Empties a slot of a bank (the current one if not given), as when it is empty on the sampler: its sample leaves
+   * the bank's programs too, as the sampler has nothing of it in any. The sample stays in memory.
+   */
+  clearSlot(slot: number, bank = this.bank): void {
+    const was = bank.slots[slot];
+    if (!was) {
+      return;
+    }
+    for (const program of bank.programs) {
+      program.keygroups = program.keygroups.filter((k) => k.sampleId !== was);
+    }
+    bank.slots[slot] = null;
+    if (bank === this.bank && !this.program.keygroups.some((k) => k.id === this.selectedKeygroupId)) {
+      this.selectedKeygroupId = this.program.keygroups[0]?.id ?? null;
+    }
+    this.emit('programs');
+    this.emit('keygroups');
+    this.emit('program');
+    this.emit('selection');
+  }
+
   /** The sample in a slot of a bank (the current one if not given), as when it is sent there */
   setSlot(slot: number, sampleId: string | null, bank = this.bank): void {
     if (bank.slots[slot] !== sampleId) {

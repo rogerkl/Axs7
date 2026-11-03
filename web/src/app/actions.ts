@@ -11,7 +11,7 @@ import { plainRecipe } from '../model/recipe';
 import type { Bank, Sample } from '../model/types';
 import { receiveDump, requestSampleParams, setSampleParams, transmitDump } from '../midi/transfer';
 import type { ParamsReply } from '../midi/transfer';
-import { sampleFromDumpWithParams } from '../model/s700';
+import { isEmptySlot, sampleFromDumpWithParams } from '../model/s700';
 import type { Dumped } from '../model/s700';
 import { readWav } from '../protocol/wav';
 import { isQdImage } from '../protocol/qd';
@@ -165,9 +165,9 @@ export class Actions {
     this.setBusy('receive');
     this.abort = new AbortController();
     try {
-      const got = await this.receiveSlot(slot, store.bank, this.abort.signal, `RECEIVING SLOT ${slot + 1}`);
+      const got = await this.receiveSlot(slot, store.bank, this.abort.signal, `RECEIVING SLOT ${slot + 1}`, false);
       lcd.release();
-      lcd.flash(got.ok ? `RECEIVED ${got.sample.name}` : 'RECEIVED WITH ERRORS');
+      lcd.flash(!got || got.ok ? `RECEIVED ${got?.sample.name ?? ''}` : 'RECEIVED WITH ERRORS');
     } catch (e) {
       lcd.release();
       if (isAbort(e)) {
@@ -184,7 +184,8 @@ export class Actions {
 
   /**
    * Receives every slot of the sampler (SLOTS), one after the other as RECEIVE does, into the bank that is current
-   * when it starts. A slot that fails is logged and passed over. Pressing it (or RECEIVE) again stops it.
+   * when it starts. An empty slot (the sampler's test tone, see isEmptySlot) isn't received, it is emptied in the
+   * bank. A slot that fails is logged and passed over. Pressing it (or RECEIVE) again stops it.
    */
   async receiveBank(): Promise<void> {
     if (this.busy === 'receiveBank' || this.busy === 'receive') {
@@ -200,13 +201,19 @@ export class Actions {
     this.setBusy('receiveBank');
     this.abort = new AbortController();
     const failed: number[] = [];
+    const empty: number[] = [];
     let received = 0;
     try {
       midi.logLine(`Receiving slots 1-${count} into ${bank.name}`);
       for (let slot = 0; slot < count; slot++) {
         this.abort.signal.throwIfAborted();
         try {
-          const got = await this.receiveSlot(slot, bank, this.abort.signal, `RECEIVE BANK ${slot + 1}/${count}`);
+          const got = await this.receiveSlot(slot, bank, this.abort.signal, `RECEIVE BANK ${slot + 1}/${count}`,
+            true);
+          if (!got) {
+            empty.push(slot + 1);
+            continue;
+          }
           received++;
           if (!got.ok) {
             failed.push(slot + 1);
@@ -221,8 +228,10 @@ export class Actions {
       }
       lcd.release();
       midi.logLine(`Received ${received} of ${count} slots into ${bank.name}`
+        + (empty.length ? `, slot ${empty.join(', ')} empty` : '')
         + (failed.length ? `, slot ${failed.join(', ')} failed or with errors` : ''), failed.length ? 'warn' : 'info');
-      lcd.flash(failed.length ? `RECEIVED, ${failed.length} WITH ERRORS` : `RECEIVED ${count} SLOTS`);
+      lcd.flash(failed.length ? `RECEIVED, ${failed.length} WITH ERRORS`
+        : `RECEIVED ${received}${empty.length ? `, ${empty.length} EMPTY` : ` SLOT${received === 1 ? '' : 'S'}`}`);
     } catch (e) {
       lcd.release();
       if (isAbort(e)) {
@@ -242,14 +251,24 @@ export class Actions {
    * Receives a slot's sample into the slot of the bank, with its parameters, the dump logged
    *
    * @param label for the LCD while receiving
+   * @param skipEmpty an empty slot (the sampler's test tone) isn't received but emptied in the bank, null returned
    * @throws Error if it fails, the AbortError if cancelled
    */
-  private async receiveSlot(slot: number, bank: Bank, signal: AbortSignal, label: string)
-    : Promise<{ sample: Sample; ok: boolean }> {
+  private async receiveSlot(slot: number, bank: Bank, signal: AbortSignal, label: string, skipEmpty: boolean)
+    : Promise<{ sample: Sample; ok: boolean } | null> {
     const { store, lcd, settings, midi } = this.app;
     lcd.hold(label);
     await this.waitForAcks();
     const reply = await this.slotParams(slot, signal);
+    if (reply?.checksumOk && reply.slot === slot && isEmptySlot(reply.params)) {
+      const what = 'the sampler\'s test tone: START 0, END 360, in no program';
+      if (skipEmpty) {
+        midi.logLine(`Slot ${slot + 1} is empty (${what}), not received`);
+        store.clearSlot(slot, bank);
+        return null;
+      }
+      midi.logLine(`Slot ${slot + 1} looks empty (${what})`, 'warn');
+    }
     const params = reply?.params ?? null;
     const putBack = reply && settings.wholeSample ? await this.wholeMemory(slot, reply, label) : null;
     let r;

@@ -74,6 +74,14 @@ export function sampleFromS700Params(p: S700SampleParams, data: Float32Array, na
   return { sample, programs, notes };
 }
 
+/**
+ * A slot with nothing loaded: the X7000 has a test tone there, START 0, END 360, LOOP 0, in no program. Not worth
+ * receiving, a sample of one's own won't be like it.
+ */
+export function isEmptySlot(p: S700SampleParams): boolean {
+  return p.start === 0 && p.end === 360 && p.loop === 0 && p.programs.every((k) => k.low > k.high);
+}
+
 /** The part of the sampler's memory a dump has: its START to its END when it sent it */
 export interface Dumped {
   start: number;
@@ -84,7 +92,7 @@ export interface Dumped {
  * A sample received from the sampler with the parameters it sent for it. The sampler dumps its memory from START to
  * END; for the receive they may have been set to 0 and to the most (`dumped`, else told by the dump's length). The
  * sample has all the dump has, with its points where they are on the sampler; a loop point before what the dump has
- * can't be had. The rate is the parameters': the X7000's dump header doesn't have it right.
+ * can't be had. The rate is the parameters': a dump an X7000 sent once had no usable period in its header.
  */
 export function sampleFromDumpWithParams(r: ParsedDump, p: S700SampleParams, name: string, dumped?: Dumped)
   : SamplerSample {

@@ -81,8 +81,11 @@ Samples are loaded or received into memory and played from the on-screen keyboar
   sample can also be picked by hand in the BANK view. Programs from before banks go into banks 32 at a time.
   RECEIVE BANK (BANK view) receives every slot (SLOTS) into the bank, and SEND BANK sends the bank's samples to
   their slots (it asks first; slots without a sample here are left as they are on the sampler), each slot as
-  RECEIVE and SEND do it, with its parameters. A slot that fails is logged and passed over; pressing the button
-  again, or RECEIVE or SEND, stops. With RECEIVE ALL each slot is a full dump, about 30 s, so 16 slots take some
+  RECEIVE and SEND do it, with its parameters. An empty slot, where the X7000 has its test tone (START 0, END
+  360, LOOP 0, in no program), isn't received, and is emptied in the bank; RECEIVE of the one slot still gets it.
+  A slot that fails is logged and passed over; pressing the button again, or RECEIVE or SEND, stops. Setting START
+  and END on the sampler for the receive and back works on an X7000. With RECEIVE ALL each slot is a full dump,
+  about 30 s, so 16 slots take some
   8 minutes.
 - **Transfers**: receive a sample slot from the sampler, send the selected sample to one. The slot is chosen in
   the app, with SLOT ▲▼ next to RECEIVE and SEND (also in the SAMPLE and MIDI views), nothing needs to be set on
@@ -96,8 +99,8 @@ Samples are loaded or received into memory and played from the on-screen keyboar
   the dump and back after it, see below. The MIDI view logs each received dump's header.
 - **Sample parameters**: RECEIVE and SEND first ask the sampler for the slot's parameters, with the S700's Akai
   exclusive messages (a request, RSPRM, answered with the parameters, SPRM; tried on an X7000). They are what a
-  sample dump doesn't carry: START and END, the scan mode, the rate (a dump from the X7000 has no usable rate in its
-  header), the sound (OUT and LFO), and the sample's key range in each of the 32 programs. A received sample comes
+  sample dump doesn't carry: START and END, the scan mode, the rate (taken from the parameters: a dump an X7000 sent
+  once had no usable period in its header), the sound (OUT and LFO), and the sample's key range in each of the 32 programs. A received sample comes
   with them as a disk's does, its keygroups in the programs it is in on the sampler, and the MIDI log shows them. If
   the sampler doesn't answer, the sample comes as the dump has it. REQUEST PARAMETERS in the MIDI view only asks
   and logs the reply, on SYSEX CHAN first, then on every other channel, and keeps the channel that answers for
@@ -113,7 +116,8 @@ Samples are loaded or received into memory and played from the on-screen keyboar
     the programs (a sample in no program keeps the slot's key ranges, root and fine tune on the sampler). It asks
     for them again and logs anything the sampler doesn't have as sent. A sample received with all of its memory
     goes back the same, memory and parameters. If the sampler doesn't answer, START to END is sent as before.
-  - Setting the parameters is not yet tried on an X7000, only against a simulated one.
+  - Setting START and END for RECEIVE ALL, and back, works on an X7000; SEND with parameters is not yet tried
+    there.
 - **QuickDisk images**: S700/X7000 disk images (`.qd`, as the HxC floppy emulator and FlashFloppy on a Gotek use
   them) load with LOAD FILE, several at once. A disk holds one sample with its parameters, as the S700's sample
   parameter message has them: the sample comes with its points, scan mode, rate and sound (OUT and LFO), marked as
