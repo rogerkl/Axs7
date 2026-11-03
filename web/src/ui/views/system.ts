@@ -138,7 +138,7 @@ export function bankView(app: App): View {
       h('div', { class: 'list-head' }, h('span', { class: 'c-num' }, 'SLOT'), h('span', { class: 'c-name' }, 'SAMPLE')),
       ...store.bank.slots.slice(0, settings.slotCount).map((id, i) => {
         const select = h('select', { class: 'sample-select', 'aria-label': `Slot ${i + 1} sample`,
-          onChange: () => store.setSlot(i, select.value || null) },
+          onChange: () => store.assignSlot(i, select.value || null) },
         h('option', { value: '' }, '– NONE –'),
         ...samples.map((s) => h('option', { value: s.id, selected: s.id === id }, s.name)));
         // the slot RECEIVE and SEND use
@@ -172,8 +172,8 @@ export function bankView(app: App): View {
       h('div', { class: 'detail' }, head,
         h('p', { class: 'info' }, 'A bank is what the sampler holds at once: its 32 programs and which sample is in '
           + 'each of its slots. RECEIVE puts the slot\'s sample in the bank\'s slot and its key ranges in the bank\'s '
-          + 'programs, as the sampler has them; SEND puts the sample in the slot and sends its key ranges. Samples '
-          + 'are in memory, shared by the banks.'),
+          + 'programs, as the sampler has them; SEND puts the sample in the slot and sends its key ranges. A sample '
+          + 'picked for a slot here gets the slot\'s key ranges. Samples are in memory, shared by the banks.'),
         slots,
         h('div', { class: 'row' },
           h('button', { class: 'soft', onClick: () => actions.receiveBank() }, 'RECEIVE BANK'),

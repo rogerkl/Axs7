@@ -85,7 +85,9 @@ Samples are loaded or received into memory and played from the on-screen keyboar
   sampler's parameters, the slot's keygroups get the new sample). SEND puts the sample in the slot and sends its
   key ranges from the bank's programs. PROG ◀▶ and MIDI program change pick P1-P32, BANK ▶ and MIDI bank select
   (controller 0) the bank; the same program number in another bank. CLEAR PROGRAM empties a program. A slot's
-  sample can also be picked by hand in the BANK view. Programs from before banks go into banks 32 at a time.
+  sample can also be picked by hand in the BANK view: the slot's key ranges are then the picked sample's, as when
+  the sampler loads a sample without programs (NONE empties the slot, the key ranges stay with the sample that was
+  there). SEND of a sample in no program does the same, as the sampler keeps the slot's key ranges. Programs from before banks go into banks 32 at a time.
   RECEIVE BANK (BANK view) receives every slot (SLOTS) into the bank, and SEND BANK sends the bank's samples to
   their slots (it asks first; slots without a sample here are left as they are on the sampler), each slot as
   RECEIVE and SEND do it, with its parameters. A slot whose sample is in no program on the sampler isn't

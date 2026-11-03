@@ -177,10 +177,16 @@ describe('store', () => {
     store.addSampleToSlot(sample({ id: 'd' }), 2, [{ program: 3, range: range(24) }], 'none');
     expect(where()).toEqual([['d 60'], [], ['d 72'], []]);
     expect(store.bank.slots[2]).toBe('d');
+    // picked by hand: the slot's key ranges are its now; NONE leaves them with the sample that was there
+    store.addSample(sample({ id: 'h' }));
+    store.assignSlot(2, 'h');
+    expect(where()).toEqual([['h 60'], [], ['h 72'], []]);
+    store.assignSlot(2, null);
+    expect([store.bank.slots[2], where()[0]]).toEqual([null, ['h 60']]);
     // in no slot, only one program
     store.addSampleWithKeygroups(sample({ id: 'e' }), file, 2);
-    expect(where()[2]).toEqual(['d 72', 'e 72']);
-    expect(where()[0]).toEqual(['d 60']);
+    expect(where()[2]).toEqual(['h 72', 'e 72']);
+    expect(where()[0]).toEqual(['h 60']);
   });
 
   test('key range stays in order', () => {

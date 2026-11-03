@@ -658,10 +658,13 @@ export class Actions {
       id: settings.paramsId, search: false, signal })).reply;
     let dump: Dump;
     let params: S700SampleParams | null = null;
+    /** in no program here: the sampler keeps the slot's key ranges, which then play this sample */
+    let slotRanges = false;
     if (has?.checksumOk && has.slot === slot) {
       const made = await dumpWithParams(sample, bank.programs, options, resampleInBrowser);
       ({ dump, params } = made);
       if (!made.inProgram) {
+        slotRanges = true;
         Object.assign(params, { programs: has.params.programs, recordPitch: has.params.recordPitch,
           fineTune: has.params.fineTune });
         made.notes.push('In no program here: it keeps the slot\'s key ranges, root and fine tune on the sampler');
@@ -686,7 +689,9 @@ export class Actions {
     });
     midi.logLine(`Sent ${sample.name} to slot ${slot + 1}: ${r.bytes} bytes, ${r.numBlocks} blocks, `
       + `${r.replies} replies from the sampler`);
-    if (!r.cancelled) {
+    if (!r.cancelled && slotRanges) {
+      store.assignSlot(slot, sample.id, bank);
+    } else if (!r.cancelled) {
       store.setSlot(slot, sample.id, bank);
     }
     if (params && r.cancelled) {

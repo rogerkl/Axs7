@@ -193,6 +193,29 @@ export class Store {
     this.emit('selection');
   }
 
+  /**
+   * A sample put in a slot of a bank (the current one if not given) by hand: the slot's key ranges, its sample's
+   * before, are this one's now, as when the sampler loads a sample without its programs (P**). Null empties the slot,
+   * the key ranges stay its sample's.
+   */
+  assignSlot(slot: number, sampleId: string | null, bank = this.bank): void {
+    const was = bank.slots[slot];
+    if (was === sampleId) {
+      return;
+    }
+    if (sampleId && was) {
+      for (const program of bank.programs) {
+        for (const k of program.keygroups.filter((g) => g.sampleId === was)) {
+          k.sampleId = sampleId;
+        }
+      }
+    }
+    bank.slots[slot] = sampleId;
+    this.emit('programs');
+    this.emit('keygroups');
+    this.emit('program');
+  }
+
   /** The sample in a slot of a bank (the current one if not given), as when it is sent there */
   setSlot(slot: number, sampleId: string | null, bank = this.bank): void {
     if (bank.slots[slot] !== sampleId) {
