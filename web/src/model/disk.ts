@@ -1,15 +1,12 @@
 // S700/X7000 disk images (.qd), and loading the S612's. An S700 disk side holds one sample with its points, scan
-// mode, rate and sound, and its keygroups in the sampler's 32 programs. It holds the sampler's own 12 bit audio, so a
-// loaded sample is marked as from the sampler: it is kept and sent as it is.
-//
-// A reversed sample is stored as it plays, the S700 only shows that it is reversed. Loading reverses it back, so it
-// shows as reversed here too.
+// mode, rate and sound, and its keygroups in the sampler's 32 programs (see s700.ts). It holds the sampler's own 12
+// bit audio, so a loaded sample is marked as from the sampler: it is kept and sent as it is. A reversed sample is
+// stored as it plays.
 
 import { BANDWIDTHS, MAX_SAMPLES, encodeSamples, nearestBandwidth, samplerBandwidth } from '../protocol/akai';
 import { S612_RATE, readS612Disk } from '../protocol/s612disk';
 import {
-  NotS700DiskError, S700_NOT_IN_PROGRAM, S700_PROGRAMS, S700_SCAN, bandwidthRate, buildS700Block, readS700Disk,
-  writeS700Disk,
+  NotS700DiskError, S700_NOT_IN_PROGRAM, S700_PROGRAMS, S700_SCAN, buildS700Block, readS700Disk, writeS700Disk,
 } from '../protocol/s700disk';
 import type { S700Disk, S700KeyRange, S700SampleParams } from '../protocol/s700disk';
 import type { Resampler } from './convert';
@@ -17,27 +14,19 @@ import { isTwelveBit } from './edit';
 import { defaultSound, newId } from './mapping';
 import { usedStart } from './points';
 import { plainRecipe } from './recipe';
+import { sampleFromS700Params } from './s700';
+import type { KeyRange, SamplerSample } from './s700';
 import { isLooped } from './types';
-import type { Keygroup, LoopMode, Program, Sample, Sound } from './types';
+import type { Keygroup, LoopMode, Program, Sample } from './types';
 
-/** A keygroup's settings, without its id and sample */
-export type KeyRange = Omit<Keygroup, 'id' | 'sampleId'>;
-
-export interface DiskSample {
+/**
+ * A sample from a disk. An S612 disk has no program data: its sample goes in a program of its own, as on the X7000,
+ * with S612_KEYGROUP.
+ */
+export interface DiskSample extends SamplerSample {
   /** S700 for the S700's and X7000's disks */
   format: 'S700' | 'S612';
-  sample: Sample;
-  /**
-   * The sample's keygroup in each of the sampler's programs, null where it isn't in the program. An S612 disk has no
-   * program data: its sample goes in a program of its own, as on the X7000, with S612_KEYGROUP.
-   */
-  programs: (KeyRange | null)[];
-  /** what wasn't as it should be, for the log */
-  notes: string[];
 }
-
-const SCAN_MODES = new Map<number, LoopMode>([[S700_SCAN.oneShot, 'off'], [S700_SCAN.looping, 'forward'],
-  [S700_SCAN.alternating, 'alternating'], [S700_SCAN.drum, 'drum']]);
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
@@ -59,7 +48,7 @@ export function sampleFromDisk(image: Uint8Array, name: string): DiskSample {
     }
     throw e;
   }
-  const { params: p, samples, crcOk, skipped } = disk;
+  const { params, samples, crcOk, skipped } = disk;
   const notes: string[] = [];
   if (!crcOk) {
     notes.push('The disk is damaged (CRC error), the sample may have clicks or noise');
@@ -68,39 +57,8 @@ export function sampleFromDisk(image: Uint8Array, name: string): DiskSample {
     notes.push('Passed over an older, damaged copy on the disk');
   }
   // the sampler's memory holds 32752 samples, the disk a few more
-  const data = Float32Array.from(samples.subarray(0, MAX_SAMPLES), (v) => v / 2048);
-  const end = clamp(p.end, 2, data.length);
-  let loopMode = SCAN_MODES.get(p.scanMode);
-  if (!loopMode) {
-    notes.push(`Unknown scan mode ${p.scanMode}, played as one shot`);
-    loopMode = 'off';
-  }
-  const rate = samplerBandwidth(bandwidthRate(p.bandwidth))?.rate ?? bandwidthRate(p.bandwidth);
-  if (!samplerBandwidth(rate)) {
-    notes.push(`Rate code ${p.bandwidth} isn't one of the sampler's, ${rate.toFixed(0)} Hz`);
-  }
-  const level = (v: number) => clamp(v, 0, 99);
-  const sound: Sound = { level: level(p.loudness), velLevel: level(p.velLoudness), filter: level(p.filter),
-    velFilter: level(p.velFilter), release: level(p.release), velRelease: level(p.velRelease),
-    lfoSpeed: level(p.lfoSpeed), lfoDepth: level(p.lfoDepth), lfoDelay: level(p.lfoDelay),
-    pressure: defaultSound().pressure };
-  // the X7000's loop runs from the loop point to END
-  let points = { start: clamp(p.start, 0, end - 2), end, loopStart: clamp(p.loop, 0, end - 2), loopEnd: end };
-  if (p.reversed) {
-    const n = data.length;
-    data.reverse();
-    points = { start: n - points.end, end: n - points.start, loopStart: n - points.loopEnd,
-      loopEnd: n - points.loopStart };
-  }
-  const sample: Sample = {
-    id: newId(), name, source: data, sourceRate: rate, recipe: plainRecipe(), fromSampler: true, rate, data,
-    ...points, loopMode, reverse: p.reversed, sound,
-  };
-  const programs = p.programs.map((r): KeyRange | null => (r.low > r.high ? null : {
-    low: r.low, high: r.high, root: p.recordPitch, semitones: r.transpose,
-    cents: Math.round((p.fineTune * 100) / 16), fixedPitch: r.constantPitch,
-  }));
-  return { format: 'S700', sample, programs, notes };
+  const got = sampleFromS700Params(params, Float32Array.from(samples.subarray(0, MAX_SAMPLES), (v) => v / 2048), name);
+  return { format: 'S700', ...got, notes: [...notes, ...got.notes] };
 }
 
 /**

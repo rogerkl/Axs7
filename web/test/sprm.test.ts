@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'vitest';
 import { MidiLink } from '../src/midi/link';
 import { requestSampleParams } from '../src/midi/transfer';
+import { sampleFromDumpWithParams } from '../src/model/s700';
+import {
+  BANDWIDTHS, BLOCK_LENGTH, HEADER_LENGTH, SAMPLES_PER_BLOCK, buildDump, parseDump, to3Bytes,
+} from '../src/protocol/akai';
 import { SPRM_LENGTH, parseSampleParams, sampleParamsMessage, sampleParamsRequest } from '../src/protocol/sprm';
 import { chromeRejects } from './helpers';
 
@@ -21,11 +25,27 @@ function documentMessage(channel: number, slot: number): Uint8Array {
   [48, 60, 0x80 | 5, 62].forEach((v, k) => db(7 + 2 * 8 + k * 2, v));
   db(265, 4); // RPMODE alternating
   dw(267, 1000); // SSTRT
-  dw(271, 29999); // undefined: END - 1, as the S700 keeps it
+  dw(271, 30000 - 1000 - 1); // undefined: END - START - 1, as the X7000 keeps it
   dw(275, 30000); // SEND
   dw(279, 5000); // SLOOP
   dw(283, 30000 - 1 - 5000); // undefined: the loop length
   [40, 50, 60, 99, 70, 88, 0xfd, 60, 69, 255, 10, 20, 30].forEach((v, k) => db(287 + k * 2, v));
+  m[317] = m.subarray(7, 317).reduce((x, b) => x ^ b, 0);
+  m[318] = 0xf7;
+  return m;
+}
+
+/** What an X7000 sent for its slot 1 (2026-11-03): START after the loop point, alternating, in programs 1 and 3 */
+const X7000_BYTES = Uint8Array.from(('18 60 74 bc 18 00 00 bc 18 60 74 bc 18 00 00 bc'
+  + ' 18 00 00 bc'.repeat(28)
+  + ' 00 04 28 7f c7 00 f0 7f 33 25 bc 5a 00 00 00 5a 55 4b 00 3c 3c 00 00 00 00 00 00').split(' '),
+(h) => parseInt(h, 16));
+
+/** The message with the bytes, as the sampler sends it */
+function x7000Message(): Uint8Array {
+  const m = new Uint8Array(SPRM_LENGTH);
+  m.set([0xf0, 0x47, 0, 10, 0x41, 0, 0]);
+  X7000_BYTES.forEach((b, i) => m.set([b & 0x7f, b >> 7], 7 + 2 * i));
   m[317] = m.subarray(7, 317).reduce((x, b) => x ^ b, 0);
   m[318] = 0xf7;
   return m;
@@ -56,6 +76,19 @@ describe('sample parameters (Akai exclusive)', () => {
     damaged[300] ^= 1;
     expect(parseSampleParams(damaged).checksumOk).toBe(false);
     expect(() => parseSampleParams(documentMessage(3, 5).subarray(0, 100))).toThrow(/Not a sample parameters/);
+  });
+
+  test('what an X7000 sent, and the same message made from its parameters', () => {
+    const r = parseSampleParams(x7000Message());
+    expect(r.bytes).toEqual(X7000_BYTES);
+    expect(r.params).toMatchObject({ scanMode: 4, start: 32552, end: 32752, loop: 9523, filter: 90, release: 85,
+      loudness: 75, recordPitch: 60, bandwidth: 60, reversed: false });
+    const inProgram = { low: 24, high: 96, transpose: -12, constantPitch: false, audioTrigger: null };
+    expect(r.params.programs.flatMap((k, i) => (k.low <= k.high ? [i] : []))).toEqual([0, 2]);
+    expect(r.params.programs[0]).toEqual(inProgram);
+    expect(r.params.programs[2]).toEqual(inProgram);
+    // the words the sampler keeps besides: END - START - 1, END - LOOP - 1
+    expect([...sampleParamsMessage(0, 0, r.params)]).toEqual([...x7000Message()]);
   });
 
   test('the message that sets them is the document\'s, and Chrome sends it', () => {
@@ -108,6 +141,15 @@ describe('asking the sampler for parameters', () => {
     expect(r.reply).toMatchObject({ askedChannel: 0, askedId: 0x65 });
   });
 
+  test('only on the channel given, as RECEIVE asks', async () => {
+    const { link, sent } = fakeSampler(5);
+    expect(await requestSampleParams(link, 0, { channel: 5, waitMs: 15, search: false }))
+      .toMatchObject({ reply: { askedChannel: 5 }, requests: 1 });
+    expect(await requestSampleParams(link, 0, { channel: 4, waitMs: 2, search: false }))
+      .toMatchObject({ reply: null, requests: 1 });
+    expect(sent.map((s) => s[2])).toEqual([5, 4]);
+  });
+
   test('no reply at all, or cancelled', async () => {
     const { link } = fakeSampler(null);
     const r = await requestSampleParams(link, 0, { waitMs: 2 });
@@ -116,5 +158,52 @@ describe('asking the sampler for parameters', () => {
     const asking = requestSampleParams(link, 0, { waitMs: 1000, signal: abort.signal });
     setTimeout(() => abort.abort(), 10);
     await expect(asking).rejects.toThrow(/Cancelled/);
+  });
+});
+
+/**
+ * A dump of a ramp as the X7000 sends one: the words in its header are the samples it sends, not 200 more as in a
+ * dump sent to it, and its period isn't a rate
+ */
+function x7000Dump(numSamples: number) {
+  const codes = Uint16Array.from({ length: numSamples }, (_, i) => (i * 7) % 4096);
+  const sent = buildDump({ slot: 0, sampleRate: 39555.4, numSamples, loopStart: 0, loopEnd: numSamples,
+    alternating: false }, codes).bytes;
+  const length = HEADER_LENGTH + Math.ceil(numSamples / SAMPLES_PER_BLOCK) * BLOCK_LENGTH;
+  const bytes = Uint8Array.of(...sent.subarray(0, length), 0xf7);
+  to3Bytes(1815780, bytes, 6); // the period in x7000-received.syx
+  to3Bytes(numSamples, bytes, 9);
+  const r = parseDump(bytes);
+  expect(r).toMatchObject({ ok: true, header: { periodValid: false, totalWords: numSamples } });
+  return r;
+}
+
+describe('a sample received with its parameters', () => {
+  test('START after the loop point: the dump is START to END, the loop is lost', () => {
+    const params = parseSampleParams(x7000Message()).params;
+    const { sample, programs, notes } = sampleFromDumpWithParams(x7000Dump(200), params, 'SLOT 1');
+    expect(sample).toMatchObject({ start: 0, end: 200, loopStart: 0, loopEnd: 200, loopMode: 'alternating',
+      rate: BANDWIDTHS.find((b) => b.rate === 15697.6)!.rate, fromSampler: true, reverse: false });
+    expect(sample.sound).toMatchObject({ filter: 90, release: 85, level: 75, lfoDepth: 0, velRelease: 0 });
+    expect(sample.data[1]).toBe((7 - 2048) / 2048);
+    const range = { low: 24, high: 96, root: 60, semitones: -12, cents: 0, fixedPitch: false };
+    expect(programs.slice(0, 4)).toEqual([range, null, range, null]);
+    expect(notes).toEqual([expect.stringMatching(/^LOOP 9523 is before START 32552.*START to 9523 or less/)]);
+  });
+
+  test('START before the loop point: the points from START, the rate from the parameters', () => {
+    const params = { ...parseSampleParams(documentMessage(0, 0)).params, reversed: false };
+    const { sample, notes } = sampleFromDumpWithParams(x7000Dump(29000), params, 'SLOT 1');
+    expect(sample).toMatchObject({ start: 0, end: 29000, loopStart: 4000, loopEnd: 29000, loopMode: 'alternating',
+      rate: BANDWIDTHS.find((b) => b.name === '11khz')!.rate });
+    expect(sample.data).toHaveLength(29000);
+    expect(notes).toEqual([]);
+    // not as the parameters have it
+    const dump = x7000Dump(100);
+    dump.header = { ...dump.header!, periodValid: true, sampleRate: 39555.4 };
+    expect(sampleFromDumpWithParams(dump, { ...params, start: 0, end: 300 }, 'X').notes).toEqual([
+      'The dump has 100 samples, START to END on the sampler is 300',
+      'The dump\'s header has 39555.4 Hz, the parameters 26399.85 Hz: took the parameters\'',
+    ]);
   });
 });

@@ -235,6 +235,8 @@ export interface ParamsOptions {
   id?: number;
   /** how long to wait for a reply to each request: the reply takes 102 ms to send */
   waitMs?: number;
+  /** false: ask only on `channel` with `id`, once */
+  search?: boolean;
   signal?: AbortSignal;
   onRequest?: (channel: number, id: number) => void;
 }
@@ -246,7 +248,7 @@ export interface ParamsOptions {
  */
 export async function requestSampleParams(link: MidiLink, slot: number, options: ParamsOptions = {}):
   Promise<ParamsResult> {
-  const { channel = 0, id = S700_IDS[0], waitMs = 600, signal, onRequest } = options;
+  const { channel = 0, id = S700_IDS[0], waitMs = 600, search = true, signal, onRequest } = options;
   const output = link.output;
   if (!output || !link.input) {
     throw new TransferError('No MIDI input and output selected');
@@ -275,8 +277,8 @@ export async function requestSampleParams(link: MidiLink, slot: number, options:
   });
   try {
     let requests = 0;
-    for (const askedId of [id, ...S700_IDS.filter((i) => i !== id)]) {
-      for (let k = 0; k < 16; k++) {
+    for (const askedId of search ? [id, ...S700_IDS.filter((i) => i !== id)] : [id]) {
+      for (let k = 0; k < (search ? 16 : 1); k++) {
         if (signal?.aborted) {
           throw new DOMException('Cancelled', 'AbortError');
         }

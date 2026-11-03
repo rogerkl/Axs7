@@ -72,13 +72,17 @@ Samples are loaded or received into memory and played from the on-screen keyboar
   receiving and sending slot 7 on an X7000 with 16). Samples are
   resampled to the nearest of the sampler's rates and limited to its 32752 samples when sent.
   The sampler sends a sample from its START point to its END: what is before START isn't sent, even a loop point
-  there (with START after the loop point, the sample plays fine on the sampler, but only START to END comes over).
-  Set START to 0 on the sampler to receive all of a sample. The MIDI view logs each received dump's header.
-- **Sample parameters** (first step, not yet tried on an X7000): REQUEST PARAMETERS in the MIDI view asks the
-  sampler for the slot's parameters with the S700's Akai exclusive message (RSPRM), and logs the reply (SPRM): START
-  and END as the display shows them, the scan mode, the sound and the sample's key range in each of the 32
-  programs, what a sample dump doesn't carry. It asks on SYSEX CHAN first, then on the other channels, and keeps
-  the channel that answers. The document's S700 identifier "65" is read as decimal (41h); 65h is tried too.
+  there (with START after the loop point, the sample plays fine on the sampler, but only START to END comes over,
+  and the log says the loop is lost). Set START to 0 on the sampler to receive all of a sample. The MIDI view logs
+  each received dump's header.
+- **Sample parameters**: RECEIVE first asks the sampler for the slot's parameters, with the S700's Akai exclusive
+  messages (a request, RSPRM, answered with the parameters, SPRM; tried on an X7000). They are what a sample dump
+  doesn't carry: START and END, the scan mode, the rate (a dump from the X7000 has no usable rate in its header),
+  the sound (OUT and LFO), and the sample's key range in each of the 32 programs. A received sample comes with them
+  as a disk's does, its keygroups in the programs it is in on the sampler, and the MIDI log shows them. If the
+  sampler doesn't answer, the sample comes as the dump has it. REQUEST PARAMETERS in the MIDI view only asks and
+  logs the reply, on SYSEX CHAN first, then on every other channel, and keeps the channel that answers for RECEIVE.
+  An X7000 answered on channel 1 with identifier 41h (the document's "65", decimal).
 - **QuickDisk images**: S700/X7000 disk images (`.qd`, as the HxC floppy emulator and FlashFloppy on a Gotek use
   them) load with LOAD FILE, several at once. A disk holds one sample with its parameters, as the S700's sample
   parameter message has them: the sample comes with its points, scan mode, rate and sound (OUT and LFO), marked as
@@ -142,7 +146,7 @@ there at first and a release runs on its tag.
   scheduled ahead with timestamps, and a dump is sent as one message without waiting for ACKs between blocks.
   Verified on an X7000.
 - `web/src/model`: samples, programs and keygroups, rendering a sample from its original and edits, IndexedDB
-  storage, banks. `web/src/app/renderer.ts` renders a sample again when its edits or points change.
+  storage, banks, and the S700's sample parameters as a sample (`s700.ts`). `web/src/app/renderer.ts` renders a sample again when its edits or points change.
 - `web/src/audio`: the AudioWorklet, the engine's main thread side, and the player.
 - `web/src/ui`, `web/src/app`: the front panel, views and actions.
 - `spike/`: the Web MIDI test page used to verify the transfers on the sampler.

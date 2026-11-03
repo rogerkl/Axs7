@@ -37,7 +37,7 @@ function s700Block(samples: ArrayLike<number>, p: BlockParams = {}, badCrc = fal
   const end = p.end ?? 32752;
   b[0xa8] = p.scan ?? 2;
   word(0xa9, p.start ?? 0);
-  word(0xab, end - 1);
+  word(0xab, end - 1 - (p.start ?? 0)); // as the X7000 sends it
   word(0xad, end);
   word(0xaf, p.loop ?? 0);
   word(0xb1, end - 1 - (p.loop ?? 0));

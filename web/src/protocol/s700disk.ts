@@ -7,10 +7,10 @@
 //   8        "S700 FORMAT 0.00"
 //   28h      32 programs x 4 bytes: lowest key, highest key, transpose (7 bits signed, top bit constant pitch), audio
 //            trigger (top bit off, 7 bits note)
-//   A8h      scan mode (RPMODE), start (SSTRT), a word the S700 keeps (END - 1), END + 1 (SEND), loop point (SLOOP),
-//            a word the S700 keeps (loop length), LFO speed, depth and delay, filter, release, loudness, fine tune
-//            (1/16 semitone, signed), nominal recording pitch (RECNP), recording bandwidth (RECBW), reversed,
-//            velocity to filter, to loudness, to release, 2 undefined
+//   A8h      scan mode (RPMODE), start (SSTRT), a word the S700 keeps (END - START - 1, as an X7000 sent it),
+//            END + 1 (SEND), loop point (SLOOP), a word the S700 keeps (END - LOOP - 1), LFO speed, depth and
+//            delay, filter, release, loudness, fine tune (1/16 semitone, signed), nominal recording pitch (RECNP),
+//            recording bandwidth (RECBW), reversed, velocity to filter, to loudness, to release, 2 undefined
 //   C2h      4000h bytes of low nibbles, two samples to a byte (the even one in the low nibble), then 8000h bytes of
 //            the high 8 bits: 32768 samples, 12 bit offset binary (800h is 0) as in a sample dump
 //   C0C2h    CRC-16 of the bytes from the marker on
@@ -201,7 +201,7 @@ export function s700ParamBytes(params: S700SampleParams): Uint8Array {
   const at = PARAMS_AT;
   b[at] = params.scanMode;
   word(at + 1, params.start);
-  word(at + 3, params.end - 1); // the S700 keeps these two too
+  word(at + 3, params.end - 1 - params.start); // the S700 keeps these two too
   word(at + 5, params.end);
   word(at + 7, params.loop);
   word(at + 9, params.end - 1 - params.loop);

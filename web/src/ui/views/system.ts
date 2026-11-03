@@ -79,9 +79,9 @@ export function midiView(app: App): View {
       h('div', { class: 'params' }, ...cells.map((c) => c.el)),
       h('div', { class: 'row' },
         h('button', { class: 'soft', onClick: () => actions.requestParams() }, 'REQUEST PARAMETERS'),
-        h('span', { class: 'info' }, 'Asks for the slot\'s START, END, scan mode, sound and key ranges, which a '
-          + 'sample dump doesn\'t carry, and logs them. A try of the S700\'s message on the X7000: it asks on SYSEX '
-          + 'CHAN first, then on the other channels, and keeps the one that is answered.')),
+        h('span', { class: 'info' }, 'RECEIVE asks for the slot\'s START, END, scan mode, rate, sound and key '
+          + 'ranges on SYSEX CHAN, as a sample dump doesn\'t carry them. This only asks and logs them: on SYSEX CHAN '
+          + 'first, then on the other channels, and keeps the one that is answered.')),
       h('p', { class: 'info' }, 'SLOTS is how many sample slots the sampler has: 6 on a standard X7000, more '
         + 'with a memory expansion. The same input plays the programs (also from the sampler\'s own keyboard) and '
         + 'receives sample dumps. Use Chrome or Edge, from localhost or https. Filler adds pauses between blocks '

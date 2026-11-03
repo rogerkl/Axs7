@@ -8,11 +8,12 @@ import { defaultSound, newId } from '../model/mapping';
 import { plainRecipe } from '../model/recipe';
 import type { Sample } from '../model/types';
 import { receiveDump, requestSampleParams, transmitDump } from '../midi/transfer';
-import type { ParamsReply } from '../midi/transfer';
+import { sampleFromDumpWithParams } from '../model/s700';
 import { readWav, encodeWav } from '../protocol/wav';
 import { isQdImage } from '../protocol/qd';
 import { hex, nearestBandwidth, samplerBandwidth } from '../protocol/akai';
 import { S700_SCAN, bandwidthRate } from '../protocol/s700disk';
+import type { S700SampleParams } from '../protocol/s700disk';
 import { sampleParamsRequest } from '../protocol/sprm';
 import { noteName } from '../model/notes';
 import { download } from '../ui/dom';
@@ -128,6 +129,11 @@ export class Actions {
     }
   }
 
+  /**
+   * Receives the slot's sample. The sampler is asked for the slot's parameters first, on the channel REQUEST
+   * PARAMETERS found: with them the sample comes with its points, scan mode, rate and sound, and its keygroups in the
+   * programs it is in on the sampler. Without a reply it comes as the dump has it.
+   */
   async receive(): Promise<void> {
     if (this.busy === 'receive') {
       this.cancel();
@@ -143,6 +149,7 @@ export class Actions {
     try {
       lcd.hold(`RECEIVING SLOT ${slot + 1}`);
       await this.waitForAcks();
+      const params = await this.slotParams(slot, this.abort.signal);
       const r = await receiveDump(midi.link!, slot, {
         ackIntervalMs: settings.ackIntervalMs,
         lookaheadMs: settings.lookaheadMs,
@@ -165,8 +172,19 @@ export class Actions {
         lcd.flash('RECEIVE FAILED, SEE MIDI');
         return;
       }
-      const sample = sampleFromDump(r, store.uniqueSampleName(`SLOT ${slot + 1}`));
-      store.addSample(sample);
+      const name = store.uniqueSampleName(`SLOT ${slot + 1}`);
+      let sample: Sample;
+      if (params) {
+        const got = sampleFromDumpWithParams(r, params, name);
+        for (const note of got.notes) {
+          midi.logLine(`${name}: ${note}`, 'warn');
+        }
+        sample = got.sample;
+        store.addSampleToPrograms(sample, got.programs);
+      } else {
+        sample = sampleFromDump(r, name);
+        store.addSample(sample);
+      }
       lcd.release();
       lcd.flash(r.ok ? `RECEIVED ${sample.name}` : 'RECEIVED WITH ERRORS');
     } catch (e) {
@@ -187,9 +205,28 @@ export class Actions {
     }
   }
 
+  /** The slot's parameters, asked for once on the channel that answered last, logged; null without a reply */
+  private async slotParams(slot: number, signal: AbortSignal): Promise<S700SampleParams | null> {
+    const { settings, midi } = this.app;
+    const r = await requestSampleParams(midi.link!, slot, { channel: settings.paramsChannel, id: settings.paramsId,
+      search: false, signal });
+    if (!r.reply) {
+      midi.logLine(`No parameters of slot ${slot + 1} on channel ${settings.paramsChannel + 1} `
+        + `(${hex([settings.paramsId])}h): the sample comes as the dump has it, without its rate, sound and programs. `
+        + 'REQUEST PARAMETERS in the MIDI view looks on every channel.', 'warn');
+      return null;
+    }
+    midi.logLine(`Parameters of slot ${r.reply.slot + 1}${r.reply.checksumOk ? '' : ', CHECKSUM ERROR'}:`,
+      r.reply.checksumOk ? 'info' : 'warn');
+    for (const line of paramsLines(r.reply.params)) {
+      midi.logLine(line);
+    }
+    return r.reply.params;
+  }
+
   /**
-   * Asks the sampler for the slot's parameters with the S700's Akai exclusive request, and logs the reply: to find out
-   * whether the X7000 answers it, on which channel, and what it sends
+   * Asks the sampler for the slot's parameters with the S700's Akai exclusive request, on SYSEX CHAN first, then
+   * every other channel, and logs the reply. The channel that answers is kept for RECEIVE.
    */
   async requestParams(): Promise<void> {
     if (this.busy === 'params') {
@@ -227,8 +264,12 @@ export class Actions {
       settings.paramsChannel = r.reply.askedChannel;
       settings.paramsId = r.reply.askedId;
       this.app.saveSettings();
-      for (const line of paramsLines(r.reply)) {
-        midi.logLine(line, r.reply.checksumOk ? 'info' : 'warn');
+      const level = r.reply.checksumOk ? 'info' : 'warn';
+      midi.logLine(`Parameters of slot ${r.reply.slot + 1}: asked on channel ${r.reply.askedChannel + 1} with `
+        + `identifier ${hex([r.reply.askedId])}h, the reply on channel ${r.reply.channel + 1} with `
+        + `${hex([r.reply.id])}h${r.reply.checksumOk ? '' : ', CHECKSUM ERROR'}`, level);
+      for (const line of [...paramsLines(r.reply.params), `Bytes: ${hex(r.reply.bytes)}`]) {
+        midi.logLine(line, level);
       }
       lcd.flash(`PARAMETERS OF SLOT ${r.reply.slot + 1}`);
     } catch (e) {
@@ -376,22 +417,19 @@ const SCAN_NAMES = new Map<number, string>([[S700_SCAN.oneShot, 'ONE SHOT'], [S7
   [S700_SCAN.alternating, 'ALT'], [S700_SCAN.drum, 'DRUM']]);
 
 /** The parameters the sampler sent, for the log */
-function paramsLines(r: ParamsReply): string[] {
-  const p = r.params;
+function paramsLines(p: S700SampleParams): string[] {
   const programs = p.programs.flatMap((k, i) => (k.low <= k.high
     ? [`P${i + 1} ${noteName(k.low)}-${noteName(k.high)}${k.transpose ? ` ${k.transpose > 0 ? '+' : ''}${k.transpose}` : ''}`
       + `${k.constantPitch ? ' FIXED' : ''}${k.audioTrigger === null ? '' : ` TRIGGER ${noteName(k.audioTrigger)}`}`]
     : []));
   return [
-    `Parameters of slot ${r.slot + 1}: asked on channel ${r.askedChannel + 1} with identifier ${hex([r.askedId])}h, `
-      + `the reply on channel ${r.channel + 1} with ${hex([r.id])}h${r.checksumOk ? '' : ', CHECKSUM ERROR'}`,
     `START ${p.start}, END ${p.end}, LOOP ${p.loop}, SCAN ${SCAN_NAMES.get(p.scanMode) ?? `? (${p.scanMode})`}`
       + `${p.reversed ? ', REVERSED' : ''}`,
-    `Rate ${bandwidthRate(p.bandwidth).toFixed(1)} Hz (code ${p.bandwidth}), root ${noteName(p.recordPitch)}, `
+    `Rate ${(samplerBandwidth(bandwidthRate(p.bandwidth))?.rate ?? bandwidthRate(p.bandwidth)).toFixed(1)} Hz `
+      + `(code ${p.bandwidth}), root ${noteName(p.recordPitch)}, `
       + `fine tune ${p.fineTune}/16 semitone`,
     `LFO speed ${p.lfoSpeed} depth ${p.lfoDepth} delay ${p.lfoDelay}, filter ${p.filter}, release ${p.release}, `
       + `level ${p.loudness}, velocity to filter ${p.velFilter}, level ${p.velLoudness}, release ${p.velRelease}`,
     programs.length ? `Programs: ${programs.join(', ')}` : 'In no program',
-    `Bytes: ${hex(r.bytes)}`,
   ];
 }
