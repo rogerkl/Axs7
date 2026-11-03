@@ -3,7 +3,9 @@
 import { decodeAudioFile, resampleInBrowser } from '../audio/decode';
 import { memoryToZip, zipToMemory } from '../model/memory';
 import { S612_KEYGROUP, diskFromSample, sampleFromDisk } from '../model/disk';
-import { dumpFromSample, dumpWithParams, sampleFromDump, sampleFromWav, wavLoops } from '../model/convert';
+import {
+  dumpFromSample, dumpWithParams, sampleFromDump, sampleFromWav, wavFromSample, wavKeygroups,
+} from '../model/convert';
 import { defaultSound, newId } from '../model/mapping';
 import { plainRecipe } from '../model/recipe';
 import type { Bank, Sample } from '../model/types';
@@ -11,7 +13,7 @@ import { receiveDump, requestSampleParams, setSampleParams, transmitDump } from 
 import type { ParamsReply } from '../midi/transfer';
 import { sampleFromDumpWithParams } from '../model/s700';
 import type { Dumped } from '../model/s700';
-import { readWav, encodeWav } from '../protocol/wav';
+import { readWav } from '../protocol/wav';
 import { isQdImage } from '../protocol/qd';
 import { ABORT_DUMP, MAX_SAMPLES, hex, nearestBandwidth, samplerBandwidth } from '../protocol/akai';
 import type { Dump } from '../protocol/akai';
@@ -46,7 +48,9 @@ export class Actions {
   /**
    * Loads audio files as samples. The file is kept as the original; what is loaded starts out normalized, and at
    * the nearest of the sampler's rates with RATE ON LOAD = SAMPLER, as edits that can be changed. A wav file saved
-   * from a sample that came from the sampler is marked as such again, and isn't edited.
+   * from a sample that came from the sampler is marked as such again, and isn't edited. A wav file saved here comes
+   * back as it was, without those edits: its points, scan mode, direction, sound, and its keygroups in the current
+   * bank's programs by number.
    *
    * An S700/X7000 disk image (.qd) brings its sample as the sampler has it, with its sound, and its keygroups in the
    * programs it was in on the sampler. An S612 disk's sample loads as a file does, in a program of its own.
@@ -81,7 +85,8 @@ export class Actions {
             rate, data, start: 0, end: data.length, loopStart: 0, loopEnd: data.length, loopMode: 'off',
             reverse: false, sound: defaultSound() };
         }
-        if (!sample.fromSampler) {
+        // a wav file saved here is as it sounded, its settings with it: loaded as it is
+        if (!sample.fromSampler && !wav?.meta.settings) {
           sample.recipe.normalize = true;
           if (this.app.settings.loadRate === 'sampler' && !samplerBandwidth(sample.sourceRate)) {
             sample.recipe.resampleTo = nearestBandwidth(sample.sourceRate).rate;
@@ -89,9 +94,13 @@ export class Actions {
           Object.assign(sample, await renderer.render(sample));
         }
         renderer.adopt([sample]);
+        const keygroups = wav ? wavKeygroups(wav) : null;
         if (disk) {
           // the S612 has no programs: the X7000 gives its sample a program of its own
           store.addSampleToOwnProgram(sample, S612_KEYGROUP);
+        } else if (keygroups) {
+          // as it was in the programs (of the bank it was saved from), in the current bank's
+          store.addSampleWithKeygroups(sample, keygroups);
         } else {
           store.addSample(sample);
         }
@@ -662,10 +671,12 @@ export class Actions {
     this.app.engine.noteOff(AUDITION_KEY);
   }
 
-  /** The sample as it plays, with its loop, and marked if it came from the sampler */
+  /**
+   * The sample as it plays, with its loop for other programs, and its settings and keygroups in the current bank's
+   * programs for this one, marked if it came from the sampler
+   */
   saveWav(sample: Sample): void {
-    download(encodeWav(sample.data, sample.rate, wavLoops(sample), sample.fromSampler ? { fromSampler: true } : undefined),
-      `${sample.name}.wav`, 'audio/wav');
+    download(wavFromSample(sample, this.app.store.programs), `${sample.name}.wav`, 'audio/wav');
   }
 
   /**

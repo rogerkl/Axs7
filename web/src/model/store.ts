@@ -94,13 +94,28 @@ export class Store {
    * @param keygroups the sample's keygroup in each program, null where it isn't in the program
    */
   addSampleToPrograms(sample: Sample, keygroups: (KeyRange | null)[]): void {
-    if (!keygroups.some(Boolean)) {
+    this.addSampleWithKeygroups(sample, keygroups.flatMap((range, program) => (range ? [{ program, range }] : [])));
+  }
+
+  /**
+   * Adds a sample with keygroups in the current bank's programs by number, as many in a program as there are, and
+   * selects it. Without any it is added as addSample adds it.
+   */
+  addSampleWithKeygroups(sample: Sample, keygroups: { program: number; range: KeyRange }[]): void {
+    const placed = keygroups.filter((k) => k.program < BANK_PROGRAMS);
+    if (placed.length === 0) {
       this.addSample(sample);
       return;
     }
     this.samples.set(sample.id, normalizeSample(sample));
     this.selectedSampleId = sample.id;
-    this.placeInPrograms(sample.id, keygroups);
+    for (const { program, range } of placed) {
+      const keygroup = newKeygroup(sample.id, range);
+      this.programs[program].keygroups.push(keygroup);
+      if (program === this.programIndex) {
+        this.selectedKeygroupId = keygroup.id;
+      }
+    }
     this.emitAll();
   }
 

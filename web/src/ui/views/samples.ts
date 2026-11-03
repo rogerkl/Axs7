@@ -315,7 +315,8 @@ export function samplesView(app: App): View {
     if (!s) {
       cells = [];
       detail.replaceChildren(wave.el, h('div', { class: 'empty-help' },
-        h('p', {}, 'Load WAV files (several at once, the loop in a WAV file is kept), S700/X7000 QuickDisk images '
+        h('p', {}, 'Load WAV files (several at once, the loop in a WAV file is kept, and one saved here has its '
+          + 'settings and keygroups), S700/X7000 QuickDisk images '
           + '(.qd, with their sound and keygroups), or receive a sample from the sampler. Memory is only limited by '
           + 'the browser.'),
         samplerGroup(false)));
@@ -412,7 +413,8 @@ export function samplesView(app: App): View {
           } }, 'ADD TO PROGRAM'),
         reset,
         h('button', { class: 'soft', onClick: () => actions.saveWav(sample()),
-          title: 'The sample as it sounds, with its loop' }, 'SAVE WAV'),
+          title: 'The sample as it sounds, with its loop, and its settings and keygroups for loading it here again' },
+        'SAVE WAV'),
         h('button', { class: 'soft', onClick: () => actions.saveDisk(sample()),
           title: 'An S700/X7000 disk image (.qd) of the sample, with its sound and keygroups, for a Gotek or HxC' },
         'SAVE QD'),

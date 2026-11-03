@@ -3,7 +3,9 @@ import { describe, expect, test } from 'vitest';
 import { BW16, MAX_SAMPLES, decodeHeader, encodeSamples, parseDump, samplerBandwidth } from '../src/protocol/akai';
 import { encodeWav, readWav } from '../src/protocol/wav';
 import { memoryToZip, zipToMemory } from '../src/model/memory';
-import { dumpFromSample, sampleFromDump, sampleFromWav, samplerFit } from '../src/model/convert';
+import {
+  dumpFromSample, sampleFromDump, sampleFromWav, samplerFit, wavFromSample, wavKeygroups,
+} from '../src/model/convert';
 import { defaultSound, newBank, newKeygroup, newProgram, normalizeProgram, voicesFor } from '../src/model/mapping';
 import { noteName, parseNote } from '../src/model/notes';
 import { cutoffHz, engineParams, lfoRate, releaseTime } from '../src/model/params';
@@ -428,6 +430,48 @@ describe('wav', () => {
     expect(odd.meta.fromSampler).toBe(true);
     expect(readWav(encodeWav(data, BW16.rate, []).buffer as ArrayBuffer)!.meta).toEqual({});
     expect(isTwelveBit(readWav(encodeWav(Float32Array.of(2047 / 2048, -1), 8000, []).buffer as ArrayBuffer)!.data)).toBe(true);
+  });
+
+  test('a wav file saved here loads as it was: points, scan, direction, sound, keygroups in the programs', () => {
+    const programs = newBank('B').programs;
+    const sound = { ...defaultSound(), filter: 64, velRelease: 99, lfoDepth: 12, pressure: 30 };
+    const s = sample({ name: 'KICK', loopMode: 'drum', reverse: true, start: 120, end: 5800, loopStart: 300,
+      loopEnd: 5000, sound, fromSampler: true, data: quantize12Data(Float32Array.from(testSine(BW16.rate, 6000))) });
+    programs[0].keygroups.push(newKeygroup('s1', { low: 36, high: 47, root: 40, cents: -5 }));
+    programs[2].keygroups.push(newKeygroup('s1', { low: 48, high: 59, fixedPitch: true, semitones: 7 }),
+      newKeygroup('other', { low: 60 }), newKeygroup('s1', { low: 60, high: 72 }));
+    const wav = readWav(wavFromSample(s, programs).buffer as ArrayBuffer)!;
+    expect(wav.loops).toEqual([]); // a drum trigger has no loop for other programs
+    const back = sampleFromWav(wav, 'KICK');
+    expect(back).toMatchObject({ loopMode: 'drum', reverse: true, start: 120, end: 5800, loopStart: 300, loopEnd: 5000,
+      fromSampler: true, rate: BW16.rate });
+    expect(back.sound).toEqual(sound);
+    expect(back.data).toEqual(s.data);
+    const keygroups = wavKeygroups(wav)!;
+    expect(keygroups.map((k) => [k.program, k.range.low, k.range.high])).toEqual([[0, 36, 47], [2, 48, 59], [2, 60, 72]]);
+    expect(keygroups[0].range).toEqual({ low: 36, high: 47, root: 40, semitones: 0, cents: -5, fixedPitch: false });
+    // into the current bank's programs by number, two in P3
+    const store = new Store();
+    store.addSampleWithKeygroups(back, keygroups);
+    expect(store.programs.slice(0, 3).map((p) => p.keygroups.map((k) => [k.sampleId, k.low]))).toEqual([
+      [[back.id, 36]], [], [[back.id, 48], [back.id, 60]]]);
+  });
+
+  test('a wav file from elsewhere, or with settings that don\'t make sense', () => {
+    const data = Float32Array.from(testSine(BW16.rate, 1000));
+    const plain = readWav(encodeWav(data, BW16.rate, [{ start: 100, end: 900, alternating: true }]).buffer as ArrayBuffer)!;
+    expect(wavKeygroups(plain)).toBeNull();
+    expect(sampleFromWav(plain, 'X')).toMatchObject({ start: 0, end: 1000, loopMode: 'alternating', sound: defaultSound() });
+    const odd = readWav(encodeWav(data, BW16.rate, [], { settings: {
+      start: -5, end: 5000, loopStart: Number.NaN, loopEnd: 800, loopMode: 'sideways', reverse: 1 as unknown as boolean,
+      sound: { filter: 500, level: 'loud' as unknown as number },
+      keygroups: [{ program: -1 }, { program: 4, low: 200, root: 3.5 }] as never,
+    } }).buffer as ArrayBuffer)!;
+    const s = sampleFromWav(odd, 'X');
+    expect(s).toMatchObject({ start: 0, end: 1000, loopStart: 0, loopEnd: 800, loopMode: 'off', reverse: false });
+    expect(s.sound).toEqual({ ...defaultSound(), filter: 99 });
+    expect(wavKeygroups(odd)).toEqual([{ program: 4, range: { low: 127, high: 127, root: 60, semitones: 0, cents: 0,
+      fixedPitch: false } }]);
   });
 
   test('reads 24 bit stereo and 32 bit float', () => {

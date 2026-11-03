@@ -18,6 +18,24 @@ export interface WavLoop {
 export interface WavMeta {
   /** received from the sampler, to be sent back as it came */
   fromSampler?: boolean;
+  /** the sample's settings in this sampler, so a file it saved loads as it was (see model/convert.ts) */
+  settings?: WavSettings;
+}
+
+/** As JSON: read back with care, the file may come from anywhere */
+export interface WavSettings {
+  start: number;
+  end: number;
+  loopStart: number;
+  loopEnd: number;
+  /** off, forward, alternating or drum */
+  loopMode: string;
+  reverse: boolean;
+  /** OUT and LFO, 0-99 */
+  sound: Record<string, number>;
+  /** in the programs of the bank it was saved from, by number from 0 (P1 is 0) */
+  keygroups: { program: number; low: number; high: number; root: number; semitones: number; cents: number;
+    fixedPitch: boolean }[];
 }
 
 export interface Wav {

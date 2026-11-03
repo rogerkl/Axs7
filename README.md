@@ -11,6 +11,10 @@ Samples are loaded or received into memory and played from the on-screen keyboar
 - **Memory**: samples from WAV files (the loop in a WAV `smpl` chunk is kept) or other audio files, or received
   from a slot on the sampler. Not limited like the sampler's memory, and kept in the browser between visits
   (samples in IndexedDB, banks in localStorage).
+- **WAV files**: SAVE WAV saves a sample as it sounds, with its loop in the `smpl` chunk for other programs, and in
+  an `axs7` chunk (other programs skip it) its START, END, loop, scan mode, direction and sound, and its keygroups
+  in the current bank's programs. Loading such a file brings all of it back as it was, without the edits a loaded
+  file gets (normalizing, resampling), its keygroups in the current bank's programs by number, as a disk's are.
 - **Edits that lose nothing**: a sample keeps its original as loaded, and its edits (RESAMPLE, NORMALIZE, 12 BIT,
   ATTACK, CROSSFADE) are settings. Whenever one of them or a point changes, the sample is rendered again from the
   original, so normalizing after moving START, or going back to the original's rate, loses nothing. What plays,

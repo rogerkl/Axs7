@@ -6,14 +6,15 @@ import {
 import type { Dump, FillerOptions, ParsedDump } from '../protocol/akai';
 import { S700_SCAN } from '../protocol/s700disk';
 import type { S700SampleParams } from '../protocol/s700disk';
-import type { Wav, WavLoop } from '../protocol/wav';
+import { encodeWav } from '../protocol/wav';
+import type { Wav, WavLoop, WavSettings } from '../protocol/wav';
 import { isTwelveBit } from './edit';
 import { defaultSound, newId } from './mapping';
 import { plainRecipe } from './recipe';
 import { samplerImage } from './s700';
 import { isLooped } from './types';
 import { usedStart } from './points';
-import type { Program, Sample } from './types';
+import type { Keygroup, LoopMode, Program, Sample, Sound } from './types';
 
 /**
  * A received dump as a sample, marked as from the sampler: it is sent back as it came. The sampler ends a sample at
@@ -48,14 +49,15 @@ export function sampleFromDump(r: ParsedDump, name: string): Sample {
 /**
  * A wav file as a sample, with the first loop of its smpl chunk, or as one shot without one, without edits. A wav
  * file only has whole Hz, so a rate that is one of the sampler's (like 39555 for 39555.4) gets the sampler's exact
- * rate. A file saved from a sample that came from the sampler is marked so again.
+ * rate. A file saved from a sample that came from the sampler is marked so again. A file saved here has the sample's
+ * settings too (wavSettings): its points, scan mode, direction and sound come back as they were.
  */
 export function sampleFromWav(wav: Wav, name: string): Sample {
   const n = wav.data.length;
   const loop = wav.loops?.[0];
   const loopEnd = loop ? Math.min(loop.end, n) : n;
   const rate = samplerBandwidth(wav.sampleRate)?.rate ?? wav.sampleRate;
-  return {
+  const sample: Sample = {
     id: newId(),
     name,
     source: wav.data,
@@ -72,6 +74,65 @@ export function sampleFromWav(wav: Wav, name: string): Sample {
     reverse: false,
     sound: defaultSound(),
   };
+  const settings = wav.meta.settings;
+  if (settings && typeof settings === 'object') {
+    const at = (v: unknown, fallback: number) => (Number.isFinite(v) ? clamp(Math.round(v as number), 0, n)
+      : fallback);
+    Object.assign(sample, { start: at(settings.start, sample.start), end: at(settings.end, sample.end),
+      loopStart: at(settings.loopStart, sample.loopStart), loopEnd: at(settings.loopEnd, sample.loopEnd) });
+    if (LOOP_MODES.includes(settings.loopMode as LoopMode)) {
+      sample.loopMode = settings.loopMode as LoopMode;
+    }
+    sample.reverse = settings.reverse === true;
+    const sound = settings.sound ?? {};
+    for (const key of Object.keys(sample.sound) as (keyof Sound)[]) {
+      if (Number.isFinite(sound[key])) {
+        sample.sound[key] = clamp(sound[key], 0, 99);
+      }
+    }
+  }
+  return sample;
+}
+
+/** The scan modes a wav file's settings may have */
+const LOOP_MODES: LoopMode[] = ['off', 'forward', 'alternating', 'drum'];
+
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+/** A keygroup in a program by number, as a wav file saved here has them */
+export interface ProgramKeygroup {
+  /** P1 is 0 */
+  program: number;
+  range: Omit<Keygroup, 'id' | 'sampleId'>;
+}
+
+/** The keygroups in a wav file saved here, null for one from elsewhere (or before they were saved) */
+export function wavKeygroups(wav: Wav): ProgramKeygroup[] | null {
+  const list = wav.meta.settings?.keygroups;
+  if (!Array.isArray(list)) {
+    return null;
+  }
+  const note = (v: unknown, fallback: number) => (Number.isInteger(v) ? clamp(v as number, 0, 127) : fallback);
+  return list.filter((k) => Number.isInteger(k?.program) && k.program >= 0).map((k) => ({
+    program: k.program,
+    range: { low: note(k.low, 0), high: note(k.high, 127), root: note(k.root, 60),
+      semitones: Number.isFinite(k.semitones) ? clamp(Math.round(k.semitones), -60, 60) : 0,
+      cents: Number.isFinite(k.cents) ? clamp(Math.round(k.cents), -100, 100) : 0, fixedPitch: k.fixedPitch === true },
+  }));
+}
+
+/**
+ * A sample as a wav file: the audio as it plays, its loop in the smpl chunk for other programs, and in the axs7 chunk
+ * its settings and its keygroups in the programs (of the current bank), so it loads here as it was
+ */
+export function wavFromSample(sample: Sample, programs: Program[]): Uint8Array {
+  const keygroups = programs.flatMap((p, program) => p.keygroups.filter((k) => k.sampleId === sample.id)
+    .map(({ low, high, root, semitones, cents, fixedPitch }) => ({ program, low, high, root, semitones, cents,
+      fixedPitch })));
+  const settings: WavSettings = { start: sample.start, end: sample.end, loopStart: sample.loopStart,
+    loopEnd: sample.loopEnd, loopMode: sample.loopMode, reverse: sample.reverse, sound: { ...sample.sound }, keygroups };
+  return encodeWav(sample.data, sample.rate, wavLoops(sample),
+    { ...(sample.fromSampler ? { fromSampler: true } : {}), settings });
 }
 
 export function wavLoops(sample: Sample): WavLoop[] {
