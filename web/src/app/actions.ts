@@ -6,7 +6,7 @@ import { S612_KEYGROUP, diskFromSample, sampleFromDisk } from '../model/disk';
 import { dumpFromSample, dumpWithParams, sampleFromDump, sampleFromWav, wavLoops } from '../model/convert';
 import { defaultSound, newId } from '../model/mapping';
 import { plainRecipe } from '../model/recipe';
-import type { Sample } from '../model/types';
+import type { Bank, Sample } from '../model/types';
 import { receiveDump, requestSampleParams, setSampleParams, transmitDump } from '../midi/transfer';
 import type { ParamsReply } from '../midi/transfer';
 import { sampleFromDumpWithParams } from '../model/s700';
@@ -27,9 +27,10 @@ const AUDITION_KEY = 200;
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const isAbort = (e: unknown) => (e as Error | null)?.name === 'AbortError';
 
 export class Actions {
-  busy: 'receive' | 'send' | 'params' | null = null;
+  busy: 'receive' | 'send' | 'receiveBank' | 'sendBank' | 'params' | null = null;
   private abort: AbortController | null = null;
   /** when the ACKs scheduled by the last receive have gone out */
   private acksUntil = 0;
@@ -143,80 +144,24 @@ export class Actions {
    * they were are sent again after it, also when it fails or is cancelled.
    */
   async receive(): Promise<void> {
-    if (this.busy === 'receive') {
+    if (this.busy === 'receive' || this.busy === 'receiveBank') {
       this.cancel();
       return;
     }
     if (this.busy || !this.midiReady()) {
       return;
     }
-    const { store, lcd, settings, midi } = this.app;
+    const { lcd, settings, midi, store } = this.app;
     const slot = settings.slot;
     this.setBusy('receive');
     this.abort = new AbortController();
     try {
-      lcd.hold(`RECEIVING SLOT ${slot + 1}`);
-      await this.waitForAcks();
-      const reply = await this.slotParams(slot, this.abort.signal);
-      const params = reply?.params ?? null;
-      const putBack = reply && settings.wholeSample ? await this.wholeMemory(slot, reply) : null;
-      let r;
-      try {
-        this.abort.signal.throwIfAborted();
-        r = await receiveDump(midi.link!, slot, {
-          ackIntervalMs: settings.ackIntervalMs,
-          lookaheadMs: settings.lookaheadMs,
-          signal: this.abort.signal,
-          onProgress: (p) => lcd.hold(`RECEIVING SLOT ${slot + 1} ${(p.elapsedMs / 1000).toFixed(0).padStart(2)}S`),
-        });
-      } catch (e) {
-        if (putBack) {
-          this.acksUntil = (e as { timing?: { lastAckAt: number } }).timing?.lastAckAt ?? this.acksUntil;
-          await this.pointsBack(slot, putBack.was, true);
-        }
-        throw e;
-      }
-      this.acksUntil = r.timing.lastAckAt;
-      midi.logLine(`Received ${r.length} bytes from slot ${slot + 1} in ${r.timing.seconds.toFixed(1)} s: `
-        + `${r.blocks ?? 0} of ${r.expectedBlocks ?? '?'} blocks, ${r.checksumErrors ?? 0} checksum errors`);
-      if (r.header && r.headerBytes) {
-        const h = r.header;
-        midi.logLine(`Header: ${h.totalWords} words, loop ${h.loopStart}-${h.loopEnd} `
-          + `${h.alternating ? 'alternating' : 'forward'}, period ${h.period} ns (${hex(r.headerBytes)})`);
-      }
-      for (const p of r.problems) {
-        midi.logLine(p, 'warn');
-      }
-      if (putBack) {
-        await this.pointsBack(slot, putBack.was, !r.header || !r.blocks);
-      }
-      if (!r.header || !r.blocks) {
-        lcd.release();
-        lcd.flash('RECEIVE FAILED, SEE MIDI');
-        return;
-      }
-      const name = store.uniqueSampleName(`SLOT ${slot + 1}`);
-      let sample: Sample;
-      if (params) {
-        const got = sampleFromDumpWithParams(r, params, name, putBack?.dumped ?? undefined);
-        for (const note of got.notes) {
-          midi.logLine(`${name}: ${note}`, 'warn');
-        }
-        sample = got.sample;
-        store.addSampleToSlot(sample, slot, got.programs);
-      } else {
-        sample = sampleFromDump(r, name);
-        store.addSampleToSlot(sample, slot, null);
-      }
+      const got = await this.receiveSlot(slot, store.bank, this.abort.signal, `RECEIVING SLOT ${slot + 1}`);
       lcd.release();
-      lcd.flash(r.ok ? `RECEIVED ${sample.name}` : 'RECEIVED WITH ERRORS');
+      lcd.flash(got.ok ? `RECEIVED ${got.sample.name}` : 'RECEIVED WITH ERRORS');
     } catch (e) {
-      const timing = (e as { timing?: { lastAckAt: number } }).timing;
-      if (timing) {
-        this.acksUntil = timing.lastAckAt;
-      }
       lcd.release();
-      if ((e as Error).name === 'AbortError') {
+      if (isAbort(e)) {
         lcd.flash('RECEIVE CANCELLED');
       } else {
         midi.logLine(`Receive failed: ${errorText(e)}`, 'error');
@@ -226,6 +171,125 @@ export class Actions {
       this.abort = null;
       this.setBusy(null);
     }
+  }
+
+  /**
+   * Receives every slot of the sampler (SLOTS), one after the other as RECEIVE does, into the bank that is current
+   * when it starts. A slot that fails is logged and passed over. Pressing it (or RECEIVE) again stops it.
+   */
+  async receiveBank(): Promise<void> {
+    if (this.busy === 'receiveBank' || this.busy === 'receive') {
+      this.cancel();
+      return;
+    }
+    if (this.busy || !this.midiReady()) {
+      return;
+    }
+    const { lcd, settings, midi, store } = this.app;
+    const bank = store.bank;
+    const count = settings.slotCount;
+    this.setBusy('receiveBank');
+    this.abort = new AbortController();
+    const failed: number[] = [];
+    let received = 0;
+    try {
+      midi.logLine(`Receiving slots 1-${count} into ${bank.name}`);
+      for (let slot = 0; slot < count; slot++) {
+        this.abort.signal.throwIfAborted();
+        try {
+          const got = await this.receiveSlot(slot, bank, this.abort.signal, `RECEIVE BANK ${slot + 1}/${count}`);
+          received++;
+          if (!got.ok) {
+            failed.push(slot + 1);
+          }
+        } catch (e) {
+          if (isAbort(e)) {
+            throw e;
+          }
+          midi.logLine(`Slot ${slot + 1} failed: ${errorText(e)}`, 'error');
+          failed.push(slot + 1);
+        }
+      }
+      lcd.release();
+      midi.logLine(`Received ${received} of ${count} slots into ${bank.name}`
+        + (failed.length ? `, slot ${failed.join(', ')} failed or with errors` : ''), failed.length ? 'warn' : 'info');
+      lcd.flash(failed.length ? `RECEIVED, ${failed.length} WITH ERRORS` : `RECEIVED ${count} SLOTS`);
+    } catch (e) {
+      lcd.release();
+      if (isAbort(e)) {
+        midi.logLine(`Receiving the bank stopped after ${received} of ${count} slots`, 'warn');
+        lcd.flash('RECEIVE BANK CANCELLED');
+      } else {
+        midi.logLine(`Receiving the bank failed: ${errorText(e)}`, 'error');
+        lcd.flash('RECEIVE FAILED, SEE MIDI');
+      }
+    } finally {
+      this.abort = null;
+      this.setBusy(null);
+    }
+  }
+
+  /**
+   * Receives a slot's sample into the slot of the bank, with its parameters, the dump logged
+   *
+   * @param label for the LCD while receiving
+   * @throws Error if it fails, the AbortError if cancelled
+   */
+  private async receiveSlot(slot: number, bank: Bank, signal: AbortSignal, label: string)
+    : Promise<{ sample: Sample; ok: boolean }> {
+    const { store, lcd, settings, midi } = this.app;
+    lcd.hold(label);
+    await this.waitForAcks();
+    const reply = await this.slotParams(slot, signal);
+    const params = reply?.params ?? null;
+    const putBack = reply && settings.wholeSample ? await this.wholeMemory(slot, reply, label) : null;
+    let r;
+    try {
+      signal.throwIfAborted();
+      r = await receiveDump(midi.link!, slot, {
+        ackIntervalMs: settings.ackIntervalMs,
+        lookaheadMs: settings.lookaheadMs,
+        signal,
+        onProgress: (p) => lcd.hold(`${label} ${(p.elapsedMs / 1000).toFixed(0).padStart(2)}S`),
+      });
+    } catch (e) {
+      this.acksUntil = (e as { timing?: { lastAckAt: number } }).timing?.lastAckAt ?? this.acksUntil;
+      if (putBack) {
+        await this.pointsBack(slot, putBack.was, true);
+      }
+      throw e;
+    }
+    this.acksUntil = r.timing.lastAckAt;
+    midi.logLine(`Received ${r.length} bytes from slot ${slot + 1} in ${r.timing.seconds.toFixed(1)} s: `
+      + `${r.blocks ?? 0} of ${r.expectedBlocks ?? '?'} blocks, ${r.checksumErrors ?? 0} checksum errors`);
+    if (r.header && r.headerBytes) {
+      const h = r.header;
+      midi.logLine(`Header: ${h.totalWords} words, loop ${h.loopStart}-${h.loopEnd} `
+        + `${h.alternating ? 'alternating' : 'forward'}, period ${h.period} ns (${hex(r.headerBytes)})`);
+    }
+    for (const p of r.problems) {
+      midi.logLine(p, 'warn');
+    }
+    if (putBack) {
+      await this.pointsBack(slot, putBack.was, !r.header || !r.blocks);
+    }
+    if (!r.header || !r.blocks) {
+      throw new Error(`No sample came from slot ${slot + 1}`);
+    }
+    const name = store.uniqueSampleName(`SLOT ${slot + 1}`);
+    let sample: Sample;
+    if (params) {
+      const got = sampleFromDumpWithParams(r, params, name, putBack?.dumped ?? undefined);
+      for (const note of got.notes) {
+        midi.logLine(`${name}: ${note}`, 'warn');
+      }
+      sample = got.sample;
+      store.addSampleToSlot(sample, slot, got.programs, bank);
+    } else {
+      sample = sampleFromDump(r, name);
+      store.addSampleToSlot(sample, slot, null, bank);
+    }
+    return { sample, ok: r.ok };
   }
 
   /** The slot's parameters, asked for once on the channel that answered last, logged; null without a reply */
@@ -255,8 +319,8 @@ export class Actions {
    * @returns the parameters to put back after the dump, and what the sampler has for it (null if not known); null if
    * nothing was changed
    */
-  private async wholeMemory(slot: number, reply: ParamsReply): Promise<{ was: ParamsReply; dumped: Dumped | null }
-    | null> {
+  private async wholeMemory(slot: number, reply: ParamsReply, label: string)
+    : Promise<{ was: ParamsReply; dumped: Dumped | null } | null> {
     const { settings, midi, lcd } = this.app;
     const { start, end } = reply.params;
     if (start === 0 && end === MAX_SAMPLES) {
@@ -273,7 +337,7 @@ export class Actions {
     // not cancelled while they are changed, so they are put back
     const now = await setSampleParams(midi.link!, slot, bytesWithPoints(reply.bytes, 0, MAX_SAMPLES),
       { channel: settings.paramsChannel, id: settings.paramsId });
-    lcd.hold(`RECEIVING SLOT ${slot + 1}`);
+    lcd.hold(label);
     if (!now) {
       midi.logLine('No reply after setting START and END: not known if the sampler has them', 'warn');
       return { was: reply, dumped: null };
@@ -392,7 +456,7 @@ export class Actions {
    * from START to END is sent, and the log says what to set on the sampler.
    */
   async send(): Promise<void> {
-    if (this.busy === 'send') {
+    if (this.busy === 'send' || this.busy === 'sendBank') {
       this.cancel();
       return;
     }
@@ -412,48 +476,7 @@ export class Actions {
     this.setBusy('send');
     this.abort = new AbortController();
     try {
-      lcd.hold(`PREPARING ${sample.name}`);
-      await this.waitForAcks();
-      const options = { slot, filler: { fillerPerBlock: settings.fillerPerBlock } };
-      const has = (await requestSampleParams(midi.link!, slot, { channel: settings.paramsChannel,
-        id: settings.paramsId, search: false, signal: this.abort.signal })).reply;
-      let dump: Dump;
-      let params: S700SampleParams | null = null;
-      if (has?.checksumOk && has.slot === slot) {
-        const made = await dumpWithParams(sample, store.programs, options, resampleInBrowser);
-        ({ dump, params } = made);
-        if (!made.inProgram) {
-          Object.assign(params, { programs: has.params.programs, recordPitch: has.params.recordPitch,
-            fineTune: has.params.fineTune });
-          made.notes.push('In no program here: it keeps the slot\'s key ranges, root and fine tune on the sampler');
-        }
-        for (const note of made.notes) {
-          midi.logLine(`${sample.name}: ${note}`);
-        }
-      } else {
-        midi.logLine(`No parameters of slot ${slot + 1} on channel ${settings.paramsChannel + 1} `
-          + `(${hex([settings.paramsId])}h): sending START to END only, without the sound and key ranges`, 'warn');
-        const made = await dumpFromSample(sample, options, resampleInBrowser);
-        dump = made.dump;
-        for (const note of made.notes) {
-          midi.logLine(`${sample.name}: ${note}`);
-        }
-      }
-      const r = await transmitDump(midi.link!, dump, {
-        signal: this.abort.signal,
-        onProgress: (p) => lcd.hold(`SENDING SLOT ${slot + 1} ${Math.min(99, Math.round(p.elapsedMs / p.wireMs * 100))
-          .toString().padStart(2)}%`),
-      });
-      midi.logLine(`Sent ${sample.name} to slot ${slot + 1}: ${r.bytes} bytes, ${r.numBlocks} blocks, `
-        + `${r.replies} replies from the sampler`);
-      if (!r.cancelled) {
-        store.setSlot(slot, sample.id);
-      }
-      if (params && r.cancelled) {
-        midi.logLine('Stopped: the parameters weren\'t sent', 'warn');
-      } else if (params) {
-        await this.sendParams(slot, params);
-      }
+      const r = await this.sendSlot(sample, slot, store.bank, this.abort.signal, `SENDING SLOT ${slot + 1}`);
       lcd.release();
       if (r.cancelled) {
         lcd.flash('STOPPED WAITING');
@@ -462,7 +485,7 @@ export class Actions {
       }
     } catch (e) {
       lcd.release();
-      if ((e as Error).name === 'AbortError') {
+      if (isAbort(e)) {
         lcd.flash('SEND CANCELLED');
       } else {
         midi.logLine(`Send failed: ${errorText(e)}`, 'error');
@@ -472,6 +495,138 @@ export class Actions {
       this.abort = null;
       this.setBusy(null);
     }
+  }
+
+  /**
+   * Sends the samples in the current bank's slots to those slots on the sampler, one after the other as SEND does,
+   * with their key ranges in the bank's programs. Slots without a sample here are left as they are on the sampler.
+   * A slot that fails is logged and passed over. Pressing it (or SEND) again stops it.
+   */
+  async sendBank(): Promise<void> {
+    if (this.busy === 'sendBank' || this.busy === 'send') {
+      this.cancel();
+      return;
+    }
+    if (this.busy || !this.midiReady()) {
+      return;
+    }
+    const { lcd, settings, midi, store } = this.app;
+    const bank = store.bank;
+    const count = settings.slotCount;
+    const slots = bank.slots.slice(0, count).flatMap((id, slot) => {
+      const sample = id ? store.samples.get(id) : undefined;
+      return sample ? [{ slot, sample }] : [];
+    });
+    if (slots.length === 0) {
+      lcd.flash('NO SAMPLES IN THE SLOTS');
+      return;
+    }
+    if (!confirm(`Send the ${slots.length} samples in ${bank.name}'s slots to the sampler (slot `
+      + `${slots.map((s) => s.slot + 1).join(', ')})? They replace what is in those slots there.`)) {
+      return;
+    }
+    this.setBusy('sendBank');
+    this.abort = new AbortController();
+    const failed: number[] = [];
+    let sent = 0;
+    try {
+      const empty = Array.from({ length: count }, (_, i) => i).filter((i) => !slots.some((s) => s.slot === i));
+      midi.logLine(`Sending ${bank.name} to slots ${slots.map((s) => s.slot + 1).join(', ')}`
+        + (empty.length ? `; slot ${empty.map((i) => i + 1).join(', ')} without a sample here, left as they are` : ''));
+      for (const [k, { slot, sample }] of slots.entries()) {
+        this.abort.signal.throwIfAborted();
+        try {
+          const r = await this.sendSlot(sample, slot, bank, this.abort.signal,
+            `SEND BANK ${k + 1}/${slots.length}`);
+          if (r.cancelled) {
+            throw new DOMException('Cancelled', 'AbortError');
+          }
+          sent++;
+          if (r.replies < r.numBlocks) {
+            failed.push(slot + 1);
+          }
+        } catch (e) {
+          if (isAbort(e)) {
+            throw e;
+          }
+          midi.logLine(`Slot ${slot + 1} failed: ${errorText(e)}`, 'error');
+          failed.push(slot + 1);
+        }
+      }
+      lcd.release();
+      midi.logLine(`Sent ${sent} of ${slots.length} samples of ${bank.name}`
+        + (failed.length ? `, slot ${failed.join(', ')} failed or not all acknowledged` : ''),
+      failed.length ? 'warn' : 'info');
+      lcd.flash(failed.length ? `SENT, ${failed.length} WITH ERRORS` : `SENT ${sent} SLOTS`);
+    } catch (e) {
+      lcd.release();
+      if (isAbort(e)) {
+        midi.logLine(`Sending the bank stopped after ${sent} of ${slots.length} samples`, 'warn');
+        lcd.flash('SEND BANK CANCELLED');
+      } else {
+        midi.logLine(`Sending the bank failed: ${errorText(e)}`, 'error');
+        lcd.flash('SEND FAILED, SEE MIDI');
+      }
+    } finally {
+      this.abort = null;
+      this.setBusy(null);
+    }
+  }
+
+  /**
+   * Sends a sample to a slot, with its parameters and its key ranges in the bank's programs if the sampler answers
+   * for them, the transfer logged
+   *
+   * @param label for the LCD while sending
+   * @throws Error if it fails, the AbortError if cancelled before sending
+   */
+  private async sendSlot(sample: Sample, slot: number, bank: Bank, signal: AbortSignal, label: string)
+    : Promise<{ cancelled: boolean; replies: number; numBlocks: number }> {
+    const { store, lcd, settings, midi } = this.app;
+    lcd.hold(`PREPARING ${sample.name}`);
+    await this.waitForAcks();
+    const options = { slot, filler: { fillerPerBlock: settings.fillerPerBlock } };
+    const has = (await requestSampleParams(midi.link!, slot, { channel: settings.paramsChannel,
+      id: settings.paramsId, search: false, signal })).reply;
+    let dump: Dump;
+    let params: S700SampleParams | null = null;
+    if (has?.checksumOk && has.slot === slot) {
+      const made = await dumpWithParams(sample, bank.programs, options, resampleInBrowser);
+      ({ dump, params } = made);
+      if (!made.inProgram) {
+        Object.assign(params, { programs: has.params.programs, recordPitch: has.params.recordPitch,
+          fineTune: has.params.fineTune });
+        made.notes.push('In no program here: it keeps the slot\'s key ranges, root and fine tune on the sampler');
+      }
+      for (const note of made.notes) {
+        midi.logLine(`${sample.name}: ${note}`);
+      }
+    } else {
+      midi.logLine(`No parameters of slot ${slot + 1} on channel ${settings.paramsChannel + 1} `
+        + `(${hex([settings.paramsId])}h): sending START to END only, without the sound and key ranges`, 'warn');
+      const made = await dumpFromSample(sample, options, resampleInBrowser);
+      dump = made.dump;
+      for (const note of made.notes) {
+        midi.logLine(`${sample.name}: ${note}`);
+      }
+    }
+    signal.throwIfAborted();
+    const r = await transmitDump(midi.link!, dump, {
+      signal,
+      onProgress: (p) => lcd.hold(`${label} ${Math.min(99, Math.round(p.elapsedMs / p.wireMs * 100))
+        .toString().padStart(2)}%`),
+    });
+    midi.logLine(`Sent ${sample.name} to slot ${slot + 1}: ${r.bytes} bytes, ${r.numBlocks} blocks, `
+      + `${r.replies} replies from the sampler`);
+    if (!r.cancelled) {
+      store.setSlot(slot, sample.id, bank);
+    }
+    if (params && r.cancelled) {
+      midi.logLine('Stopped: the parameters weren\'t sent', 'warn');
+    } else if (params) {
+      await this.sendParams(slot, params);
+    }
+    return r;
   }
 
   /** Sets a slot's parameters on the sampler after a dump, and asks for them to see that it has them */

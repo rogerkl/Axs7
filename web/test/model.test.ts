@@ -145,6 +145,10 @@ describe('store', () => {
     store.addSampleToSlot(sample({ id: 'e' }), 2, null);
     expect([store.bank.slots[2], store.banks[0].slots[2]]).toEqual(['e', 'd']);
     expect(store.program.keygroups.map((k) => k.sampleId)).toEqual(['e']); // in no program: the empty current one
+    // into the bank a receive began in, though another is current now
+    store.addSampleToSlot(sample({ id: 'f' }), 4, ranges(0), store.banks[0]);
+    expect([store.banks[0].slots[4], store.banks[0].programs[0].keygroups.map((k) => k.sampleId)]).toEqual(['f', ['f']]);
+    expect([store.bank.slots[4], store.programs[0].keygroups.map((k) => k.sampleId)]).toEqual([null, ['e']]);
   });
 
   test('key range stays in order', () => {

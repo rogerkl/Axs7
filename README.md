@@ -75,6 +75,11 @@ Samples are loaded or received into memory and played from the on-screen keyboar
   key ranges from the bank's programs. PROG ◀▶ and MIDI program change pick P1-P32, BANK ▶ and MIDI bank select
   (controller 0) the bank; the same program number in another bank. CLEAR PROGRAM empties a program. A slot's
   sample can also be picked by hand in the BANK view. Programs from before banks go into banks 32 at a time.
+  RECEIVE BANK (BANK view) receives every slot (SLOTS) into the bank, and SEND BANK sends the bank's samples to
+  their slots (it asks first; slots without a sample here are left as they are on the sampler), each slot as
+  RECEIVE and SEND do it, with its parameters. A slot that fails is logged and passed over; pressing the button
+  again, or RECEIVE or SEND, stops. With RECEIVE ALL each slot is a full dump, about 30 s, so 16 slots take some
+  8 minutes.
 - **Transfers**: receive a sample slot from the sampler, send the selected sample to one. The slot is chosen in
   the app, with SLOT ▲▼ next to RECEIVE and SEND (also in the SAMPLE and MIDI views), nothing needs to be set on
   the sampler: the slot number goes in the dump request and in the header of a sent dump. How many slots the

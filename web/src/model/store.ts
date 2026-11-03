@@ -110,47 +110,49 @@ export class Store {
    * bank's programs), or without them, the keygroups the slot's sample had here, now with this one.
    *
    * @param keygroups from the sampler's parameters, null if it didn't send them
+   * @param bank the bank the receive began in, the current one if not given
    */
-  addSampleToSlot(sample: Sample, slot: number, keygroups: (KeyRange | null)[] | null): void {
-    const was = this.bank.slots[slot];
+  addSampleToSlot(sample: Sample, slot: number, keygroups: (KeyRange | null)[] | null, bank = this.bank): void {
+    const was = bank.slots[slot];
     this.samples.set(sample.id, normalizeSample(sample));
     this.selectedSampleId = sample.id;
-    const theirs = was ? this.programs.flatMap((p) => p.keygroups.filter((k) => k.sampleId === was)) : [];
+    const theirs = was ? bank.programs.flatMap((p) => p.keygroups.filter((k) => k.sampleId === was)) : [];
     if (keygroups) {
-      for (const program of this.programs) {
+      for (const program of bank.programs) {
         program.keygroups = program.keygroups.filter((k) => !was || k.sampleId !== was);
       }
-      this.placeInPrograms(sample.id, keygroups);
+      this.placeInPrograms(sample.id, keygroups, bank);
     } else if (theirs.length) {
       theirs.forEach((k) => {
         k.sampleId = sample.id;
       });
     }
-    this.bank.slots[slot] = sample.id;
+    bank.slots[slot] = sample.id;
     // in no program: in the current one if it is empty, so it can be played, as addSample does
-    const placed = this.programs.some((p) => p.keygroups.some((k) => k.sampleId === sample.id));
-    if (!placed && this.program.keygroups.length === 0) {
-      this.program.keygroups.push(newKeygroup(sample.id));
+    const program = bank.programs[this.programIndex];
+    const placed = bank.programs.some((p) => p.keygroups.some((k) => k.sampleId === sample.id));
+    if (!placed && program.keygroups.length === 0) {
+      program.keygroups.push(newKeygroup(sample.id));
     }
     this.selectedKeygroupId = this.program.keygroups.find((k) => k.sampleId === sample.id)?.id
       ?? this.selectedKeygroupId;
     this.emitAll();
   }
 
-  /** The sample in a slot of the current bank, as when it is sent there */
-  setSlot(slot: number, sampleId: string | null): void {
-    if (this.bank.slots[slot] !== sampleId) {
-      this.bank.slots[slot] = sampleId;
+  /** The sample in a slot of a bank (the current one if not given), as when it is sent there */
+  setSlot(slot: number, sampleId: string | null, bank = this.bank): void {
+    if (bank.slots[slot] !== sampleId) {
+      bank.slots[slot] = sampleId;
       this.emit('programs');
     }
   }
 
-  private placeInPrograms(sampleId: string, keygroups: (KeyRange | null)[]): void {
+  private placeInPrograms(sampleId: string, keygroups: (KeyRange | null)[], bank = this.bank): void {
     keygroups.slice(0, BANK_PROGRAMS).forEach((k, i) => {
       if (k) {
         const keygroup = newKeygroup(sampleId, k);
-        this.programs[i].keygroups.push(keygroup);
-        if (i === this.programIndex) {
+        bank.programs[i].keygroups.push(keygroup);
+        if (bank === this.bank && i === this.programIndex) {
           this.selectedKeygroupId = keygroup.id;
         }
       }

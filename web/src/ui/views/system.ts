@@ -174,7 +174,14 @@ export function bankView(app: App): View {
           + 'each of its slots. RECEIVE puts the slot\'s sample in the bank\'s slot and its key ranges in the bank\'s '
           + 'programs, as the sampler has them; SEND puts the sample in the slot and sends its key ranges. Samples '
           + 'are in memory, shared by the banks.'),
-        slots, stats,
+        slots,
+        h('div', { class: 'row' },
+          h('button', { class: 'soft', onClick: () => actions.receiveBank() }, 'RECEIVE BANK'),
+          h('button', { class: 'soft', onClick: () => actions.sendBank() }, 'SEND BANK'),
+          h('span', { class: 'info' }, 'Every slot (SLOTS in MIDI) from the sampler into this bank, or this bank\'s '
+            + 'samples to their slots, each with its parameters as RECEIVE and SEND do. Press again, or RECEIVE or '
+            + 'SEND, to stop.')),
+        stats,
         h('div', { class: 'row' },
           h('button', { class: 'soft', onClick: () => actions.saveMemory() }, 'SAVE MEMORY'),
           h('button', { class: 'soft', onClick: async () => {

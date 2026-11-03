@@ -177,8 +177,8 @@ async function main(): Promise<void> {
   slotTitles();
   app.onSlot(slotTitles);
   actions.onBusy = () => {
-    receive.setLed(actions.busy === 'receive', true);
-    send.setLed(actions.busy === 'send', true);
+    receive.setLed(actions.busy === 'receive' || actions.busy === 'receiveBank', true);
+    send.setLed(actions.busy === 'send' || actions.busy === 'sendBank', true);
   };
   const transferButtons = [receive, send,
     panelButton('SAVE', () => actions.saveMemory(), { title: 'Save the memory, every bank and sample (zip file)' }),
