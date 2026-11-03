@@ -1,21 +1,26 @@
-// A bank is the whole memory in a zip file: bank.json with the programs and sample settings, and each sample as a
-// wav file with its loop, so they can be used in other programs too. That is the rendered audio, what plays; a
-// sample with edits has its original in originals/ as well, so editing goes on from it.
+// A memory file is the whole memory in a zip file: memory.json with the banks (programs and slots) and sample
+// settings, and each sample as a wav file with its loop, so they can be used in other programs too. That is the
+// rendered audio, what plays; a sample with edits has its original in originals/ as well, so editing goes on from it.
+// Files from before banks (bank.json, axs7-bank) are read too, their programs 32 to a bank.
 
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { encodeWav, readWav } from '../protocol/wav';
 import { wavLoops } from './convert';
-import { defaultSound, normalizeProgram } from './mapping';
+import { BANK_PROGRAMS, banksFromPrograms, defaultSound, normalizeBank } from './mapping';
 import { plainRecipe } from './recipe';
-import type { LoopMode, Program, Recipe, Sample, Sound } from './types';
+import type { Bank, LoopMode, Program, Recipe, Sample, Sound } from './types';
 
-export const BANK_FORMAT = 'axs7-bank';
+export const MEMORY_FORMAT = 'axs7-memory';
+/** 4: banks of 32 programs and slots, before that a list of programs (axs7-bank, bank.json) */
+export const MEMORY_VERSION = 4;
+const OLD_FORMAT = 'axs7-bank';
 /** 2: samples have their sound, programs only key ranges. 3: samples have their original and recipe. */
-export const BANK_VERSION = 3;
+const OLD_VERSION = 3;
 
-export interface Bank {
+export interface Memory {
   samples: Sample[];
-  programs: Program[];
+  banks: Bank[];
+  bankIndex: number;
   programIndex: number;
 }
 
@@ -42,12 +47,15 @@ interface SampleEntry {
   reverse?: boolean;
 }
 
-interface BankJson {
+interface MemoryJson {
   format: string;
   version: number;
+  bankIndex?: number;
   programIndex: number;
   samples: SampleEntry[];
-  programs: Program[];
+  banks?: Bank[];
+  /** before banks */
+  programs?: Program[];
 }
 
 function fileName(dir: string, index: number, name: string): string {
@@ -55,9 +63,9 @@ function fileName(dir: string, index: number, name: string): string {
   return `${dir}/${String(index + 1).padStart(3, '0')}-${safe}.wav`;
 }
 
-export function bankToZip(bank: Bank): Uint8Array {
+export function memoryToZip(memory: Memory): Uint8Array {
   const files: Record<string, Uint8Array> = {};
-  const samples = bank.samples.map((s, i): SampleEntry => {
+  const samples = memory.samples.map((s, i): SampleEntry => {
     const meta = s.fromSampler ? { fromSampler: true } : undefined;
     const file = fileName('samples', i, s.name);
     files[file] = encodeWav(s.data, s.rate, wavLoops(s), meta);
@@ -70,26 +78,29 @@ export function bankToZip(bank: Bank): Uint8Array {
       fromSampler: s.fromSampler, start: s.start, end: s.end, loopStart: s.loopStart, loopEnd: s.loopEnd,
       loopMode: s.loopMode, reverse: s.reverse, sound: s.sound };
   });
-  const json: BankJson = { format: BANK_FORMAT, version: BANK_VERSION, programIndex: bank.programIndex, samples,
-    programs: bank.programs };
-  files['bank.json'] = strToU8(JSON.stringify(json, null, 2));
+  const json: MemoryJson = { format: MEMORY_FORMAT, version: MEMORY_VERSION, bankIndex: memory.bankIndex,
+    programIndex: memory.programIndex, samples, banks: memory.banks };
+  files['memory.json'] = strToU8(JSON.stringify(json, null, 2));
   return zipSync(files, { level: 6 });
 }
 
-/** @throws Error if it isn't a bank this version can read */
-export function zipToBank(zip: Uint8Array): Bank {
+/** @throws Error if it isn't a memory file (or a bank file from before banks) this version can read */
+export function zipToMemory(zip: Uint8Array): Memory {
   let files: Record<string, Uint8Array>;
   try {
     files = unzipSync(zip);
   } catch {
     throw new Error('Not a zip file');
   }
-  if (!files['bank.json']) {
-    throw new Error('No bank.json in the zip file');
+  const file = files['memory.json'] ?? files['bank.json'];
+  if (!file) {
+    throw new Error('No memory.json in the zip file');
   }
-  const json = JSON.parse(strFromU8(files['bank.json'])) as BankJson;
-  if (json.format !== BANK_FORMAT || !(json.version <= BANK_VERSION)) {
-    throw new Error(`Not a bank this version can read (${json.format} ${json.version})`);
+  const json = JSON.parse(strFromU8(file)) as MemoryJson;
+  const readable = (json.format === MEMORY_FORMAT && json.version <= MEMORY_VERSION)
+    || (json.format === OLD_FORMAT && json.version <= OLD_VERSION);
+  if (!readable) {
+    throw new Error(`Not a memory file this version can read (${json.format} ${json.version})`);
   }
   const wavFile = (entry: SampleEntry, path: string) => {
     const bytes = files[path];
@@ -114,7 +125,9 @@ export function zipToBank(zip: Uint8Array): Bank {
       loopMode: entry.loopMode, reverse: !!entry.reverse, sound: { ...defaultSound(), ...entry.sound },
     };
   });
-  // version 1 programs had the sound settings, they are left out
-  const programs = json.programs.map(normalizeProgram);
-  return { samples, programs, programIndex: json.programIndex ?? 0 };
+  // version 1 programs had the sound settings, they are left out; before version 4 the programs were a list
+  const banks = json.banks ? json.banks.map(normalizeBank) : banksFromPrograms(json.programs ?? []);
+  const old = json.format === OLD_FORMAT ? json.programIndex ?? 0 : 0;
+  return { samples, banks, bankIndex: json.bankIndex ?? Math.floor(old / BANK_PROGRAMS),
+    programIndex: json.format === OLD_FORMAT ? old % BANK_PROGRAMS : json.programIndex ?? 0 };
 }

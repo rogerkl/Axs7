@@ -1,4 +1,4 @@
-import type { Keygroup, LoopMode, Program, Sample, Sound } from './types';
+import type { Bank, Keygroup, LoopMode, Program, Sample, Sound } from './types';
 
 export function newId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -6,6 +6,39 @@ export function newId(): string {
 
 export function newProgram(name: string): Program {
   return { id: newId(), name, keygroups: [] };
+}
+
+/** The programs in a bank, as the sampler has: P1-P32 */
+export const BANK_PROGRAMS = 32;
+/** The slots a bank keeps, as many as the sampler can have (16 with a memory expansion) */
+export const BANK_SLOTS = 16;
+
+const programName = (i: number) => `PROGRAM ${i + 1}`;
+
+/** A bank with its 32 programs empty and no samples in its slots */
+export function newBank(name: string): Bank {
+  return { id: newId(), name, programs: Array.from({ length: BANK_PROGRAMS }, (_, i) => newProgram(programName(i))),
+    slots: new Array<string | null>(BANK_SLOTS).fill(null) };
+}
+
+/** A bank as this version has them: its 32 programs, and its slots */
+export function normalizeBank(b: Partial<Bank>): Bank {
+  const programs = (b.programs ?? []).slice(0, BANK_PROGRAMS).map(normalizeProgram);
+  while (programs.length < BANK_PROGRAMS) {
+    programs.push(newProgram(programName(programs.length)));
+  }
+  const slots = Array.from({ length: BANK_SLOTS }, (_, i) => b.slots?.[i] ?? null);
+  return { id: b.id ?? newId(), name: b.name ?? 'BANK', programs, slots };
+}
+
+/** Banks for the programs of a version before banks: 32 to a bank, in order */
+export function banksFromPrograms(programs: Partial<Program>[]): Bank[] {
+  const banks: Bank[] = [];
+  for (let i = 0; i === 0 || i < programs.length; i += BANK_PROGRAMS) {
+    banks.push(normalizeBank({ name: `BANK ${banks.length + 1}`, programs: programs.slice(i, i + BANK_PROGRAMS)
+      .map((p) => normalizeProgram(p)) }));
+  }
+  return banks;
 }
 
 /** By default over the whole keyboard, with the sample's own pitch at C3 like the sampler */

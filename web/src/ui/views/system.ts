@@ -1,4 +1,5 @@
-// MIDI: ports, keyboard channel and transfer settings, with the transfer log. BANK: memory, save and load.
+// MIDI: ports, keyboard channel and transfer settings, with the transfer log. BANK: the banks, their slots and
+// programs, and the memory saved and loaded.
 
 import type { App, View } from '../../app/app';
 import { MAX_SLOTS } from '../../protocol/akai';
@@ -104,42 +105,88 @@ export function midiView(app: App): View {
 }
 
 export function bankView(app: App): View {
-  const { store, actions } = app;
+  const { store, actions, settings } = app;
+  const head = h('div', { class: 'row program-row' });
   const stats = h('div', { class: 'params' });
+  const slots = h('div', { class: 'list slots', role: 'list', 'aria-label': 'Slots' });
   const programs = h('div', { class: 'list', role: 'listbox', 'aria-label': 'Programs' });
+
+  function buildHead(): void {
+    const name = h('input', { class: 'name-input', value: store.bank.name, maxLength: 24, 'aria-label': 'Bank name',
+      onChange: () => store.updateBank({ name: name.value.trim() || 'BANK' }) });
+    const cell = new ParamCell({
+      key: 'bank.number', label: 'BANK', min: 1, max: store.banks.length, coarse: 1,
+      get: () => store.bankIndex + 1, set: (v) => store.selectBank(v - 1), detail: () => `OF ${store.banks.length}`,
+    });
+    head.replaceChildren(cell.el, name,
+      h('button', { class: 'soft', onClick: () => store.addBank() }, 'NEW BANK'),
+      h('button', { class: 'soft danger', onClick: () => {
+        if (confirm(`Delete ${store.bank.name}, its programs and slots? The samples stay in memory.`)) {
+          store.removeBank();
+        }
+      } }, 'DELETE BANK'));
+  }
 
   function render(): void {
     const mb = store.memoryBytes() / 1024 / 1024;
     const stat = (label: string, value: string) =>
       h('div', { class: 'param static' }, h('div', { class: 'param-label' }, label), h('div', { class: 'param-value' }, value));
-    stats.replaceChildren(stat('SAMPLES', String(store.samples.size)), stat('PROGRAMS', String(store.programs.length)),
+    stats.replaceChildren(stat('SAMPLES', String(store.samples.size)), stat('BANKS', String(store.banks.length)),
       stat('MEMORY', `${mb.toFixed(mb < 10 ? 1 : 0)}MB`));
+    const samples = [...store.samples.values()];
+    slots.replaceChildren(
+      h('div', { class: 'list-head' }, h('span', { class: 'c-num' }, 'SLOT'), h('span', { class: 'c-name' }, 'SAMPLE')),
+      ...store.bank.slots.slice(0, settings.slotCount).map((id, i) => {
+        const select = h('select', { class: 'sample-select', 'aria-label': `Slot ${i + 1} sample`,
+          onChange: () => store.setSlot(i, select.value || null) },
+        h('option', { value: '' }, '– NONE –'),
+        ...samples.map((s) => h('option', { value: s.id, selected: s.id === id }, s.name)));
+        // the slot RECEIVE and SEND use
+        return h('div', { class: `list-row${i === settings.slot ? ' selected' : ''}`, role: 'listitem',
+          title: 'Click the number for RECEIVE and SEND to use this slot' },
+        h('button', { class: 'c-num slot-pick', onClick: () => app.setSlot(i) }, `S${String(i + 1).padStart(2, '0')}`),
+        select);
+      }));
     programs.replaceChildren(
       h('div', { class: 'list-head' }, h('span', { class: 'c-num' }, '#'), h('span', { class: 'c-name' }, 'PROGRAM'),
         h('span', { class: 'c-small' }, 'KEYGROUPS')),
       ...store.programs.map((p, i) => h('button', {
         class: `list-row${i === store.programIndex ? ' selected' : ''}`, role: 'option',
         'aria-selected': i === store.programIndex, onClick: () => store.selectProgram(i),
-      }, h('span', { class: 'c-num' }, String(i + 1).padStart(2, '0')), h('span', { class: 'c-name' }, p.name),
-      h('span', { class: 'c-small' }, String(p.keygroups.length)))));
+      }, h('span', { class: 'c-num' }, `P${String(i + 1).padStart(2, '0')}`), h('span', { class: 'c-name' }, p.name),
+      h('span', { class: 'c-small' }, p.keygroups.length ? String(p.keygroups.length) : '–'))));
   }
 
+  buildHead();
   render();
-  const off = (['samples', 'programs', 'keygroups', 'program'] as const).map((e) => store.on(e, render));
+  const off = [
+    ...(['samples', 'keygroups', 'program'] as const).map((e) => store.on(e, render)),
+    store.on('programs', () => {
+      buildHead();
+      render();
+    }),
+    app.onSlot(render),
+  ];
   return {
     el: h('div', { class: 'view view-bank' },
-      h('div', { class: 'detail' }, stats,
+      h('div', { class: 'detail' }, head,
+        h('p', { class: 'info' }, 'A bank is what the sampler holds at once: its 32 programs and which sample is in '
+          + 'each of its slots. RECEIVE puts the slot\'s sample in the bank\'s slot and its key ranges in the bank\'s '
+          + 'programs, as the sampler has them; SEND puts the sample in the slot and sends its key ranges. Samples '
+          + 'are in memory, shared by the banks.'),
+        slots, stats,
         h('div', { class: 'row' },
-          h('button', { class: 'soft', onClick: () => actions.saveBank() }, 'SAVE BANK'),
+          h('button', { class: 'soft', onClick: () => actions.saveMemory() }, 'SAVE MEMORY'),
           h('button', { class: 'soft', onClick: async () => {
             const [file] = await pickFiles('.zip', false);
             if (file) {
-              await actions.loadBank(file);
+              await actions.loadMemory(file);
             }
-          } }, 'LOAD BANK'),
+          } }, 'LOAD MEMORY'),
           h('button', { class: 'soft danger', onClick: () => actions.clearMemory() }, 'CLEAR MEMORY')),
-        h('p', { class: 'info' }, 'A bank is a zip file with all samples as WAV files (with their loops) and the '
-          + 'programs in bank.json. Memory is also kept in the browser between visits.')),
+        h('p', { class: 'info' }, 'A memory file is a zip file with every bank and sample: the samples as WAV files '
+          + '(with their loops), the banks and settings in memory.json. Bank files from before banks load too. Memory '
+          + 'is also kept in the browser between visits.')),
       programs),
     dispose: () => off.forEach((f) => f()),
   };

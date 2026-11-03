@@ -100,9 +100,9 @@ async function main(): Promise<void> {
   try {
     const persistence = await Persistence.open((e) => midi.logLine(`Could not save to the browser: ${e}`, 'warn'));
     const saved = await persistence.load();
-    if (saved.samples.length || saved.programs.length) {
+    if (saved.samples.length || saved.banks.length) {
       renderer.adopt(saved.samples); // stored as rendered
-      store.replaceAll(saved.samples, saved.programs, saved.programIndex);
+      store.replaceAll(saved.samples, saved.banks, saved.bankIndex, saved.programIndex);
     }
     persistence.attach(store);
   } catch (e) {
@@ -116,7 +116,8 @@ async function main(): Promise<void> {
     const sampleView = s && ['samples', 'out', 'lfo'].includes(settings.view);
     const line1 = Lcd.pair(sampleView
       ? `S${String([...store.samples.keys()].indexOf(s.id) + 1).padStart(2, '0')} ${s.name}`
-      : `P${String(store.programIndex + 1).padStart(2, '0')} ${store.program.name}`, voices ? `${voices}V` : '');
+      : `${store.banks.length > 1 ? `B${store.bankIndex + 1} ` : ''}P${String(store.programIndex + 1).padStart(2, '0')} `
+        + store.program.name, voices ? `${voices}V` : '');
     const cell = dataEntry.cell;
     if (cell?.el.isConnected) {
       const detail = cell.spec.detail?.(cell.spec.get());
@@ -154,10 +155,11 @@ async function main(): Promise<void> {
   const smallButtons = [
     panelButton('PROG ◀', () => store.selectProgram(store.programIndex - 1), { title: 'Previous program' }),
     panelButton('PROG ▶', () => store.selectProgram(store.programIndex + 1), { title: 'Next program' }),
-    panelButton('NEW PROG', () => {
-      store.addProgram();
-      app.showView('program');
-    }, { title: 'New program' }),
+    panelButton('BANK ▶', () => {
+      store.selectBank((store.bankIndex + 1) % store.banks.length);
+      const name = store.bank.name === `BANK ${store.bankIndex + 1}` ? '' : ` ${store.bank.name}`;
+      lcd.flash(`BANK ${store.bankIndex + 1} OF ${store.banks.length}${name}`);
+    }, { title: 'Next bank, the same program number in it (NEW BANK in the BANK view)' }),
     panelButton('LOAD FILE', async () => actions.loadFiles(await pickFiles('.wav,.qd,audio/*', true)),
       { title: 'Load WAV or other audio files into memory, or S700/X7000 QuickDisk images (.qd)' }),
     audition,
@@ -167,9 +169,10 @@ async function main(): Promise<void> {
   const receive = panelButton('RECEIVE', () => actions.receive(), { led: true });
   const send = panelButton('SEND', () => actions.send(), { led: true });
   const slotTitles = () => {
-    receive.button.title = `Receive the sample in slot ${settings.slot + 1} from the sampler (again to cancel). `
-      + 'The sampler sends from its START point, set START to 0 on it to get all of the sample';
-    send.button.title = `Send the selected sample to slot ${settings.slot + 1} on the sampler, it replaces what is there`;
+    receive.button.title = `Receive the sample in slot ${settings.slot + 1} from the sampler, into slot `
+      + `${settings.slot + 1} of the current bank with its key ranges (again to cancel)`;
+    send.button.title = `Send the selected sample to slot ${settings.slot + 1} on the sampler, with its key ranges in `
+      + 'the current bank; it replaces what is there';
   };
   slotTitles();
   app.onSlot(slotTitles);
@@ -178,13 +181,13 @@ async function main(): Promise<void> {
     send.setLed(actions.busy === 'send', true);
   };
   const transferButtons = [receive, send,
-    panelButton('SAVE', () => actions.saveBank(), { title: 'Save the memory as a bank (zip file)' }),
+    panelButton('SAVE', () => actions.saveMemory(), { title: 'Save the memory, every bank and sample (zip file)' }),
     panelButton('LOAD', async () => {
       const [file] = await pickFiles('.zip', false);
       if (file) {
-        await actions.loadBank(file);
+        await actions.loadMemory(file);
       }
-    }, { title: 'Load a bank (zip file)' }),
+    }, { title: 'Load a memory file (zip file), it replaces the memory' }),
   ];
 
   const strip = h('div', { class: 'strip' });

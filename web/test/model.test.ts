@@ -2,16 +2,16 @@ import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { describe, expect, test } from 'vitest';
 import { BW16, MAX_SAMPLES, decodeHeader, encodeSamples, parseDump, samplerBandwidth } from '../src/protocol/akai';
 import { encodeWav, readWav } from '../src/protocol/wav';
-import { bankToZip, zipToBank } from '../src/model/bank';
+import { memoryToZip, zipToMemory } from '../src/model/memory';
 import { dumpFromSample, sampleFromDump, sampleFromWav, samplerFit } from '../src/model/convert';
-import { defaultSound, newKeygroup, newProgram, normalizeProgram, voicesFor } from '../src/model/mapping';
+import { defaultSound, newBank, newKeygroup, newProgram, normalizeProgram, voicesFor } from '../src/model/mapping';
 import { noteName, parseNote } from '../src/model/notes';
 import { cutoffHz, engineParams, lfoRate, releaseTime } from '../src/model/params';
 import { isPortion, movePoint, normalizeSample, usedStart } from '../src/model/points';
 import { attackRoom, isTwelveBit, normalizeData, portionPeak, quantize12Data, to12BitCode } from '../src/model/edit';
 import { isEdited, plainRecipe } from '../src/model/recipe';
 import { Store } from '../src/model/store';
-import type { Sample } from '../src/model/types';
+import type { Program, Sample } from '../src/model/types';
 import { fixture, testSine } from './helpers';
 
 const sample = (overrides: Partial<Sample> = {}): Sample => {
@@ -110,13 +110,41 @@ describe('store', () => {
     expect(store.program.keygroups).toHaveLength(1);
   });
 
-  test('removing a sample leaves its keygroups without one', () => {
+  test('removing a sample leaves its keygroups without one, and its slots empty, in every bank', () => {
     const store = new Store();
     store.addSample(sample());
     store.addSample(sample({ id: 's2' }));
+    store.setSlot(3, 's1');
+    store.addBank();
+    store.addSampleToSlot(store.samples.get('s1')!, 0, null);
     store.removeSample('s1');
-    expect(store.program.keygroups[0].sampleId).toBeNull();
+    expect(store.banks.map((b) => [b.programs[0].keygroups[0].sampleId, b.slots[0], b.slots[3]]))
+      .toEqual([[null, null, null], [null, null, null]]);
     expect(store.selectedSampleId).toBe('s2');
+  });
+
+  test('a received sample goes in the bank\'s slot, with the key ranges the sampler sent, the slot\'s sample before out', () => {
+    const store = new Store();
+    const range = { low: 36, high: 59, root: 48, semitones: 0, cents: 0, fixedPitch: false };
+    const ranges = (...at: number[]) => Array.from({ length: 32 }, (_, i) => (at.includes(i) ? range : null));
+    store.addSampleToSlot(sample({ id: 'a' }), 2, ranges(0, 3));
+    store.addSampleToSlot(sample({ id: 'b' }), 5, ranges(3));
+    expect(store.bank.slots.slice(0, 6)).toEqual([null, null, 'a', null, null, 'b']);
+    const inPrograms = () => store.programs.slice(0, 4).map((p) => p.keygroups.map((k) => k.sampleId));
+    expect(inPrograms()).toEqual([['a'], [], [], ['a', 'b']]);
+    // slot 3 again: the sampler sent other key ranges for it
+    store.addSampleToSlot(sample({ id: 'c' }), 2, ranges(1));
+    expect(inPrograms()).toEqual([[], ['c'], [], ['b']]);
+    expect(store.samples.has('a')).toBe(true);
+    // without the sampler's parameters: the slot's keygroups, now with the new sample
+    store.addSampleToSlot(sample({ id: 'd' }), 2, null);
+    expect(inPrograms()).toEqual([[], ['d'], [], ['b']]);
+    expect(store.bank.slots[2]).toBe('d');
+    // only in the current bank
+    store.addBank();
+    store.addSampleToSlot(sample({ id: 'e' }), 2, null);
+    expect([store.bank.slots[2], store.banks[0].slots[2]]).toEqual(['e', 'd']);
+    expect(store.program.keygroups.map((k) => k.sampleId)).toEqual(['e']); // in no program: the empty current one
   });
 
   test('key range stays in order', () => {
@@ -128,14 +156,22 @@ describe('store', () => {
     expect(store.selectedKeygroup).toMatchObject({ low: 30, high: 30 });
   });
 
-  test('programs', () => {
+  test('banks of 32 programs, and the same program number in another bank', () => {
     const store = new Store();
-    store.addProgram();
-    expect(store.programIndex).toBe(1);
-    expect(store.program.name).toBe('PROGRAM 2');
-    store.removeProgram();
-    store.removeProgram();
-    expect(store.programs).toHaveLength(1);
+    expect(store.programs.map((p) => p.name).slice(30)).toEqual(['PROGRAM 31', 'PROGRAM 32']);
+    store.selectProgram(40);
+    expect(store.programIndex).toBe(31);
+    store.selectProgram(4);
+    store.addKeygroup(newKeygroup(null));
+    store.addBank();
+    expect([store.bankIndex, store.bank.name, store.programIndex, store.program.keygroups]).toEqual([1, 'BANK 2', 4, []]);
+    store.selectBank(0);
+    expect(store.program.keygroups).toHaveLength(1);
+    store.clearProgram();
+    expect(store.program.keygroups).toEqual([]);
+    store.removeBank();
+    store.removeBank();
+    expect(store.banks).toHaveLength(1);
     expect(store.uniqueSampleName('A')).toBe('A');
     store.addSample(sample({ name: 'A' }));
     expect(store.uniqueSampleName('A')).toBe('A 2');
@@ -411,16 +447,19 @@ describe('wav', () => {
   });
 });
 
-describe('bank', () => {
-  test('zip round trip keeps samples, loops, exact rates, sounds and programs', () => {
-    const program = newProgram('BASS ROOT');
+describe('memory file', () => {
+  test('zip round trip keeps samples, loops, exact rates, sounds, banks with their programs and slots', () => {
+    const banks = [newBank('ONE'), newBank('TWO')];
+    const program = banks[1].programs[5];
+    program.name = 'BASS ROOT';
     program.keygroups.push(newKeygroup('s1', { low: 36, high: 59, root: 48, cents: 5 }));
+    banks[1].slots[2] = 's2';
     const samples = [sample(), sample({ id: 's2', name: 'ONE/SHOT?', loopMode: 'drum', reverse: true, rate: 22199.53,
       start: 40,
       end: 5950, sound: { ...defaultSound(), filter: 64, velFilter: 30, release: 0, lfoDepth: 12 } })];
-    const bank = zipToBank(bankToZip({ samples, programs: [program, newProgram('P2')], programIndex: 1 }));
-    expect(bank.programIndex).toBe(1);
-    expect(bank.programs[0]).toEqual(program);
+    const bank = zipToMemory(memoryToZip({ samples, banks, bankIndex: 1, programIndex: 5 }));
+    expect([bank.bankIndex, bank.programIndex]).toEqual([1, 5]);
+    expect(bank.banks).toEqual(banks);
     expect(bank.samples.map((s) => [s.id, s.name, s.rate, s.loopMode, s.start, s.end, s.loopStart, s.loopEnd]))
       .toEqual([['s1', 'SINE', BW16.rate, 'forward', 0, 6000, 0, 5900],
         ['s2', 'ONE/SHOT?', 22199.53, 'drum', 40, 5950, 0, 5900]]);
@@ -434,7 +473,8 @@ describe('bank', () => {
     const edited = sample({ id: 'e', source, sourceRate: 44100, rate: BW16.rate, data: quantize12Data(source.slice(0, 7000)),
       end: 7000, loopEnd: 6000, recipe: { ...plainRecipe(), resampleTo: BW16.rate, twelveBit: true, attackMs: 12 } });
     const received = sample({ id: 'r', fromSampler: true, data: quantize12Data(source) });
-    const bank = zipToBank(bankToZip({ samples: [edited, received], programs: [newProgram('P')], programIndex: 0 }));
+    const bank = zipToMemory(memoryToZip({ samples: [edited, received], banks: [newBank('B')], bankIndex: 0,
+      programIndex: 0 }));
     const [e, r] = bank.samples;
     expect(e.recipe).toEqual(edited.recipe);
     expect(e).toMatchObject({ sourceRate: 44100, rate: BW16.rate, fromSampler: false, end: 7000 });
@@ -444,11 +484,32 @@ describe('bank', () => {
     expect(r.source).toBe(r.data); // no original of its own, the audio is it
   });
 
+  /** A bank file as versions before banks saved it: bank.json with a list of programs */
+  function oldBankFile(version: number, programs: Program[], programIndex: number) {
+    const files = unzipSync(memoryToZip({ samples: [sample()], banks: [], bankIndex: 0, programIndex: 0 }));
+    const json = JSON.parse(strFromU8(files['memory.json']));
+    Object.assign(json, { format: 'axs7-bank', version, programs, programIndex });
+    delete json.banks;
+    delete json.bankIndex;
+    delete files['memory.json'];
+    files['bank.json'] = strToU8(JSON.stringify(json));
+    return { files, json };
+  }
+
+  test('bank files from before banks: their programs 32 to a bank', () => {
+    const programs = Array.from({ length: 40 }, (_, i) => newProgram(`OLD ${i + 1}`));
+    programs[33].keygroups.push(newKeygroup('s1', { low: 40 }));
+    const { files } = oldBankFile(3, programs, 33);
+    const memory = zipToMemory(zipSync(files));
+    expect(memory.banks.map((b) => [b.name, b.programs.length, b.programs[0].name, b.programs[31].name]))
+      .toEqual([['BANK 1', 32, 'OLD 1', 'OLD 32'], ['BANK 2', 32, 'OLD 33', 'PROGRAM 32']]);
+    expect([memory.bankIndex, memory.programIndex]).toEqual([1, 1]);
+    expect(memory.banks[1].programs[1].keygroups).toMatchObject([{ sampleId: 's1', low: 40 }]);
+    expect(memory.banks[1].slots).toEqual(new Array(16).fill(null));
+  });
+
   test('version 2 banks: the audio is the original', () => {
-    const zip = bankToZip({ samples: [sample()], programs: [], programIndex: 0 });
-    const files = unzipSync(zip);
-    const json = JSON.parse(strFromU8(files['bank.json']));
-    json.version = 2;
+    const { files, json } = oldBankFile(2, [], 0);
     for (const entry of json.samples) {
       delete entry.original;
       delete entry.sourceRate;
@@ -456,12 +517,14 @@ describe('bank', () => {
       delete entry.fromSampler;
     }
     files['bank.json'] = strToU8(JSON.stringify(json));
-    const [s] = zipToBank(zipSync(files)).samples;
+    const [s] = zipToMemory(zipSync(files)).samples;
     expect(s.source).toBe(s.data);
     expect(s).toMatchObject({ sourceRate: BW16.rate, fromSampler: false, recipe: plainRecipe() });
   });
 
-  test('rejects what is not a bank', () => {
-    expect(() => zipToBank(new Uint8Array([1, 2, 3]))).toThrow(/zip/);
+  test('rejects what is not a memory file', () => {
+    expect(() => zipToMemory(new Uint8Array([1, 2, 3]))).toThrow(/zip/);
+    const { files } = oldBankFile(9, [], 0);
+    expect(() => zipToMemory(zipSync(files))).toThrow(/can read/);
   });
 });

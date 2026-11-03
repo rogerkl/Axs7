@@ -155,11 +155,11 @@ describe('samples from disks', () => {
     expect(programs.slice(3).every((p) => p === null)).toBe(true);
   });
 
-  test('the store puts them in the programs by number, made as needed', () => {
+  test('the store puts them in the current bank\'s programs by number', () => {
     const store = new Store();
     const { sample, programs } = sampleFromDisk(image, 'PAD');
     store.addSampleToPrograms(sample, programs);
-    expect(store.programs).toHaveLength(3);
+    expect(store.programs).toHaveLength(32);
     expect(store.programs[0].keygroups).toMatchObject([{ sampleId: sample.id, low: 24, high: 99, root: 62 }]);
     expect(store.programs[1].keygroups).toEqual([]);
     expect(store.programs[2].keygroups).toMatchObject([{ low: 36, high: 48, semitones: -24, fixedPitch: true }]);
@@ -224,10 +224,10 @@ describe('S612 disks', () => {
     const store = new Store();
     const first = sampleFromDisk(qdImage(s612Block(ramp)), 'Vibes').sample;
     store.addSampleToOwnProgram(first, S612_KEYGROUP);
-    expect(store.programs).toHaveLength(1);
+    expect(store.programIndex).toBe(0);
     const second = { ...first, id: 'two', name: 'Marimba' };
     store.addSampleToOwnProgram(second, S612_KEYGROUP);
-    expect(store.programs.map((p) => p.name)).toEqual(['PROGRAM 1', 'MARIMBA']);
+    expect(store.programs.slice(0, 3).map((p) => p.name)).toEqual(['PROGRAM 1', 'MARIMBA', 'PROGRAM 3']);
     expect(store.programIndex).toBe(1);
     expect(store.program.keygroups).toMatchObject([{ sampleId: 'two', low: 36, high: 96, root: 60 }]);
     expect(store.selectedSampleId).toBe('two');

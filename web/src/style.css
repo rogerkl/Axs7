@@ -1140,3 +1140,33 @@ button.soft.danger {
     font-size: 11px;
   }
 }
+
+/* a bank's slots: the number picks the slot RECEIVE and SEND use, the select the sample in it */
+.view-bank .slots .list-head,
+.view-bank .slots .list-row {
+  grid-template-columns: 34px 1fr;
+}
+
+.view-bank .slots {
+  max-height: 220px;
+  margin: 8px 0;
+}
+
+.slot-pick {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.view-bank .slots .sample-select {
+  width: 100%;
+}
+
+/* the selected slot's row is lit, its select stays as the others */
+.view-bank .slots .list-row.selected .sample-select {
+  color: var(--panel-print);
+}

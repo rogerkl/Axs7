@@ -92,3 +92,16 @@ export interface Program {
   name: string;
   keygroups: Keygroup[];
 }
+
+/**
+ * What the sampler holds at once: its 32 programs (BANK_PROGRAMS), P1-P32, and which sample is in each of its slots.
+ * Samples are in memory, shared by the banks.
+ */
+export interface Bank {
+  id: string;
+  name: string;
+  /** P1-P32, always BANK_PROGRAMS of them */
+  programs: Program[];
+  /** the sample in each of the sampler's slots (0 is slot 1), null if none is known; always BANK_SLOTS of them */
+  slots: (string | null)[];
+}

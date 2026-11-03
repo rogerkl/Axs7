@@ -1,9 +1,10 @@
-// Keeps the memory between visits: the samples in IndexedDB, the programs (small) in localStorage. localStorage
-// writes at once, so a program edited just before the page closes isn't lost, as an IndexedDB write still running
-// then would be.
+// Keeps the memory between visits: the samples in IndexedDB, the banks (small) in localStorage. localStorage writes
+// at once, so a program edited just before the page closes isn't lost, as an IndexedDB write still running then
+// would be.
 
+import { BANK_PROGRAMS, banksFromPrograms, normalizeBank } from './mapping';
 import type { Store } from './store';
-import type { Program, Sample } from './types';
+import type { Bank, Program, Sample } from './types';
 
 const DB_NAME = 'axs7';
 const SAMPLES = 'samples';
@@ -13,7 +14,10 @@ const PROGRAMS_KEY = 'programs';
 const PROGRAMS_STORAGE = 'axs7.programs';
 
 interface ProgramsRecord {
-  programs: Program[];
+  banks?: Bank[];
+  bankIndex?: number;
+  /** before banks, the programs were a list */
+  programs?: Program[];
   programIndex: number;
   /** the samples' ids in memory order, IndexedDB gives them back by id */
   sampleOrder?: string[];
@@ -50,7 +54,7 @@ export class Persistence {
     return new Persistence(await request(open), onError);
   }
 
-  async load(): Promise<{ samples: Sample[]; programs: Program[]; programIndex: number }> {
+  async load(): Promise<{ samples: Sample[]; banks: Bank[]; bankIndex: number; programIndex: number }> {
     const tx = this.db.transaction([SAMPLES, META], 'readonly');
     const samples = await request(tx.objectStore(SAMPLES).getAll() as IDBRequest<Sample[]>);
     const record = readPrograms()
@@ -58,7 +62,16 @@ export class Persistence {
     this.saved = new Set(samples.map((s) => s.id));
     const order = new Map((record?.sampleOrder ?? []).map((id, i) => [id, i]));
     samples.sort((a, b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity));
-    return { samples, programs: record?.programs ?? [], programIndex: record?.programIndex ?? 0 };
+    if (!record) {
+      return { samples, banks: [], bankIndex: 0, programIndex: 0 };
+    }
+    if (record.banks) {
+      return { samples, banks: record.banks.map(normalizeBank), bankIndex: record.bankIndex ?? 0,
+        programIndex: record.programIndex };
+    }
+    // from before banks: 32 programs to a bank
+    return { samples, banks: banksFromPrograms(record.programs ?? []),
+      bankIndex: Math.floor(record.programIndex / BANK_PROGRAMS), programIndex: record.programIndex % BANK_PROGRAMS };
   }
 
   /** Saves the store's changes from now on */
@@ -129,7 +142,7 @@ export class Persistence {
   }
 
   private async putPrograms(store: Store): Promise<void> {
-    const record: ProgramsRecord = { programs: store.programs, programIndex: store.programIndex,
+    const record: ProgramsRecord = { banks: store.banks, bankIndex: store.bankIndex, programIndex: store.programIndex,
       sampleOrder: [...store.samples.keys()] };
     localStorage.setItem(PROGRAMS_STORAGE, JSON.stringify(record));
   }

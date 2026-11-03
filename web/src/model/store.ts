@@ -1,14 +1,18 @@
-// The sampler's memory: samples and programs, with events for whoever shows or keeps them.
+// The memory: samples, and banks of the sampler's 32 programs and its slots, with events for whoever shows or keeps
+// them.
 
-import { newKeygroup, newProgram, normalizeProgram } from './mapping';
+import { BANK_PROGRAMS, newBank, newKeygroup, normalizeBank } from './mapping';
 import { normalizeSample } from './points';
 import type { Rendered } from './render';
-import type { Keygroup, Program, Recipe, Sample, Sound } from './types';
+import type { Bank, Keygroup, Program, Recipe, Sample, Sound } from './types';
+
+/** A keygroup's settings, without its id and sample */
+type KeyRange = Omit<Keygroup, 'id' | 'sampleId'>;
 
 /**
- * samples, programs and keygroups: the lists changed. sample: one sample's values changed (its id is passed).
- * audio: one sample's rendered audio changed (its id is passed).
- * program: the current program's values changed. selection: the selected sample or keygroup changed.
+ * samples, programs and keygroups: the lists changed (programs: also the banks, the current bank or program, and the
+ * slots). sample: one sample's values changed (its id is passed). audio: one sample's rendered audio changed (its id
+ * is passed). program: the current program's values changed. selection: the selected sample or keygroup changed.
  */
 export type StoreEvent = 'samples' | 'sample' | 'audio' | 'programs' | 'program' | 'keygroups' | 'selection';
 type Listener = (id?: string) => void;
@@ -17,7 +21,9 @@ export type SamplePatch = Partial<Omit<Sample, 'id' | 'data' | 'source' | 'sourc
 
 export class Store {
   samples = new Map<string, Sample>();
-  programs: Program[] = [newProgram('PROGRAM 1')];
+  banks: Bank[] = [newBank('BANK 1')];
+  bankIndex = 0;
+  /** in the current bank, 0-31 */
   programIndex = 0;
   selectedSampleId: string | null = null;
   selectedKeygroupId: string | null = null;
@@ -37,6 +43,15 @@ export class Store {
     for (const listener of this.listeners.get(event) ?? []) {
       listener(id);
     }
+  }
+
+  get bank(): Bank {
+    return this.banks[this.bankIndex];
+  }
+
+  /** the current bank's P1-P32 */
+  get programs(): Program[] {
+    return this.bank.programs;
   }
 
   get program(): Program {
@@ -73,30 +88,76 @@ export class Store {
   }
 
   /**
-   * Adds a sample from the sampler's disk with its keygroups, in the programs it had on the sampler, by number (made
-   * as needed), and selects it. Without any it is added as addSample adds it.
+   * Adds a sample from the sampler with its keygroups, in the current bank's programs it had on the sampler, by
+   * number, and selects it. Without any it is added as addSample adds it.
    *
    * @param keygroups the sample's keygroup in each program, null where it isn't in the program
    */
-  addSampleToPrograms(sample: Sample, keygroups: (Omit<Keygroup, 'id' | 'sampleId'> | null)[]): void {
+  addSampleToPrograms(sample: Sample, keygroups: (KeyRange | null)[]): void {
     if (!keygroups.some(Boolean)) {
       this.addSample(sample);
       return;
     }
     this.samples.set(sample.id, normalizeSample(sample));
     this.selectedSampleId = sample.id;
-    keygroups.forEach((k, i) => {
+    this.placeInPrograms(sample.id, keygroups);
+    this.emitAll();
+  }
+
+  /**
+   * Adds a sample received from a slot of the sampler, in that slot of the current bank. The bank is then as the
+   * sampler is: with the keygroups the sampler sent for the slot (the sample that was in the slot here leaves the
+   * bank's programs), or without them, the keygroups the slot's sample had here, now with this one.
+   *
+   * @param keygroups from the sampler's parameters, null if it didn't send them
+   */
+  addSampleToSlot(sample: Sample, slot: number, keygroups: (KeyRange | null)[] | null): void {
+    const was = this.bank.slots[slot];
+    this.samples.set(sample.id, normalizeSample(sample));
+    this.selectedSampleId = sample.id;
+    const theirs = was ? this.programs.flatMap((p) => p.keygroups.filter((k) => k.sampleId === was)) : [];
+    if (keygroups) {
+      for (const program of this.programs) {
+        program.keygroups = program.keygroups.filter((k) => !was || k.sampleId !== was);
+      }
+      this.placeInPrograms(sample.id, keygroups);
+    } else if (theirs.length) {
+      theirs.forEach((k) => {
+        k.sampleId = sample.id;
+      });
+    }
+    this.bank.slots[slot] = sample.id;
+    // in no program: in the current one if it is empty, so it can be played, as addSample does
+    const placed = this.programs.some((p) => p.keygroups.some((k) => k.sampleId === sample.id));
+    if (!placed && this.program.keygroups.length === 0) {
+      this.program.keygroups.push(newKeygroup(sample.id));
+    }
+    this.selectedKeygroupId = this.program.keygroups.find((k) => k.sampleId === sample.id)?.id
+      ?? this.selectedKeygroupId;
+    this.emitAll();
+  }
+
+  /** The sample in a slot of the current bank, as when it is sent there */
+  setSlot(slot: number, sampleId: string | null): void {
+    if (this.bank.slots[slot] !== sampleId) {
+      this.bank.slots[slot] = sampleId;
+      this.emit('programs');
+    }
+  }
+
+  private placeInPrograms(sampleId: string, keygroups: (KeyRange | null)[]): void {
+    keygroups.slice(0, BANK_PROGRAMS).forEach((k, i) => {
       if (k) {
-        while (this.programs.length <= i) {
-          this.programs.push(newProgram(`PROGRAM ${this.programs.length + 1}`));
-        }
-        const keygroup = newKeygroup(sample.id, k);
+        const keygroup = newKeygroup(sampleId, k);
         this.programs[i].keygroups.push(keygroup);
         if (i === this.programIndex) {
           this.selectedKeygroupId = keygroup.id;
         }
       }
     });
+  }
+
+  private emitAll(): void {
     this.emit('samples');
     this.emit('programs');
     this.emit('keygroups');
@@ -105,24 +166,24 @@ export class Store {
   }
 
   /**
-   * Adds a sample in a program of its own, named after it (or the current program if it is empty), with one keygroup,
-   * and selects both. As the X7000 loads an S612 disk, which has no program data.
+   * Adds a sample in a program of its own: the current program if it is empty, else the first empty one in the bank,
+   * named after it (the current program if none is empty), with one keygroup, and selects both. As the X7000 loads an
+   * S612 disk, which has no program data.
    */
-  addSampleToOwnProgram(sample: Sample, keygroup: Omit<Keygroup, 'id' | 'sampleId'>): void {
+  addSampleToOwnProgram(sample: Sample, keygroup: KeyRange): void {
     this.samples.set(sample.id, normalizeSample(sample));
     this.selectedSampleId = sample.id;
     if (this.program.keygroups.length > 0) {
-      this.programs.push(newProgram(sample.name.toUpperCase()));
-      this.programIndex = this.programs.length - 1;
+      const empty = this.programs.findIndex((p) => p.keygroups.length === 0);
+      if (empty >= 0) {
+        this.programIndex = empty;
+        this.program.name = sample.name.toUpperCase();
+      }
     }
     const added = newKeygroup(sample.id, keygroup);
     this.program.keygroups.push(added);
     this.selectedKeygroupId = added.id;
-    this.emit('samples');
-    this.emit('programs');
-    this.emit('keygroups');
-    this.emit('program');
-    this.emit('selection');
+    this.emitAll();
   }
 
   updateSample(id: string, patch: SamplePatch): void {
@@ -151,16 +212,19 @@ export class Store {
     }
   }
 
-  /** Removes a sample, keygroups that played it are left without a sample */
+  /** Removes a sample, keygroups that played it are left without a sample, and slots that had it empty */
   removeSample(id: string): void {
     const ids = [...this.samples.keys()];
     if (!this.samples.delete(id)) {
       return;
     }
-    for (const program of this.programs) {
-      for (const keygroup of program.keygroups.filter((k) => k.sampleId === id)) {
-        keygroup.sampleId = null;
+    for (const bank of this.banks) {
+      for (const program of bank.programs) {
+        for (const keygroup of program.keygroups.filter((k) => k.sampleId === id)) {
+          keygroup.sampleId = null;
+        }
       }
+      bank.slots = bank.slots.map((s) => (s === id ? null : s));
     }
     if (this.selectedSampleId === id) {
       const index = ids.indexOf(id);
@@ -181,6 +245,7 @@ export class Store {
     this.emit('selection');
   }
 
+  /** P1-P32 of the current bank, from 0 */
   selectProgram(index: number): void {
     const i = Math.max(0, Math.min(index, this.programs.length - 1));
     if (i !== this.programIndex) {
@@ -191,25 +256,51 @@ export class Store {
     }
   }
 
-  addProgram(): Program {
-    const program = newProgram(`PROGRAM ${this.programs.length + 1}`);
-    this.programs.push(program);
-    this.programIndex = this.programs.length - 1;
+  /** The program with the same number in another bank */
+  selectBank(index: number): void {
+    const i = Math.max(0, Math.min(index, this.banks.length - 1));
+    if (i !== this.bankIndex) {
+      this.bankIndex = i;
+      this.selectedKeygroupId = this.program.keygroups[0]?.id ?? null;
+      this.emit('programs');
+      this.emit('selection');
+    }
+  }
+
+  /** A new bank after the others, empty, and selects it */
+  addBank(): Bank {
+    const bank = newBank(`BANK ${this.banks.length + 1}`);
+    this.banks.push(bank);
+    this.bankIndex = this.banks.length - 1;
     this.selectedKeygroupId = null;
     this.emit('programs');
     this.emit('selection');
-    return program;
+    return bank;
   }
 
-  /** Removes the current program, there is always at least one */
-  removeProgram(): void {
-    this.programs.splice(this.programIndex, 1);
-    if (this.programs.length === 0) {
-      this.programs.push(newProgram('PROGRAM 1'));
+  /** Removes the current bank, there is always at least one. The samples stay in memory. */
+  removeBank(): void {
+    this.banks.splice(this.bankIndex, 1);
+    if (this.banks.length === 0) {
+      this.banks.push(newBank('BANK 1'));
     }
-    this.programIndex = Math.min(this.programIndex, this.programs.length - 1);
+    this.bankIndex = Math.min(this.bankIndex, this.banks.length - 1);
     this.selectedKeygroupId = this.program.keygroups[0]?.id ?? null;
     this.emit('programs');
+    this.emit('selection');
+  }
+
+  updateBank(patch: Partial<Pick<Bank, 'name'>>): void {
+    Object.assign(this.bank, patch);
+    this.emit('programs');
+  }
+
+  /** Takes the current program's keygroups out, the samples stay in memory */
+  clearProgram(): void {
+    this.program.keygroups = [];
+    this.selectedKeygroupId = null;
+    this.emit('keygroups');
+    this.emit('program');
     this.emit('selection');
   }
 
@@ -260,12 +351,13 @@ export class Store {
     }
   }
 
-  /** Replaces everything, as when loading a bank */
-  replaceAll(samples: Sample[], programs: Program[], programIndex = 0): void {
+  /** Replaces everything, as when loading a memory file */
+  replaceAll(samples: Sample[], banks: Bank[], bankIndex = 0, programIndex = 0): void {
     // samples kept from before start and end points get them
     this.samples = new Map(samples.map((s) => [s.id, normalizeSample(s)]));
-    this.programs = programs.length ? programs.map(normalizeProgram) : [newProgram('PROGRAM 1')];
-    this.programIndex = Math.max(0, Math.min(programIndex, this.programs.length - 1));
+    this.banks = banks.length ? banks.map(normalizeBank) : [newBank('BANK 1')];
+    this.bankIndex = Math.max(0, Math.min(bankIndex, this.banks.length - 1));
+    this.programIndex = Math.max(0, Math.min(programIndex, BANK_PROGRAMS - 1));
     this.selectedSampleId = samples[0]?.id ?? null;
     this.selectedKeygroupId = this.program.keygroups[0]?.id ?? null;
     this.emit('samples');

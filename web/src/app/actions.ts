@@ -1,7 +1,7 @@
 // What the panel buttons do: load files, transfers with the sampler, banks.
 
 import { decodeAudioFile, resampleInBrowser } from '../audio/decode';
-import { bankToZip, zipToBank } from '../model/bank';
+import { memoryToZip, zipToMemory } from '../model/memory';
 import { S612_KEYGROUP, diskFromSample, sampleFromDisk } from '../model/disk';
 import { dumpFromSample, dumpWithParams, sampleFromDump, sampleFromWav, wavLoops } from '../model/convert';
 import { defaultSound, newId } from '../model/mapping';
@@ -203,10 +203,10 @@ export class Actions {
           midi.logLine(`${name}: ${note}`, 'warn');
         }
         sample = got.sample;
-        store.addSampleToPrograms(sample, got.programs);
+        store.addSampleToSlot(sample, slot, got.programs);
       } else {
         sample = sampleFromDump(r, name);
-        store.addSample(sample);
+        store.addSampleToSlot(sample, slot, null);
       }
       lcd.release();
       lcd.flash(r.ok ? `RECEIVED ${sample.name}` : 'RECEIVED WITH ERRORS');
@@ -446,6 +446,9 @@ export class Actions {
       });
       midi.logLine(`Sent ${sample.name} to slot ${slot + 1}: ${r.bytes} bytes, ${r.numBlocks} blocks, `
         + `${r.replies} replies from the sampler`);
+      if (!r.cancelled) {
+        store.setSlot(slot, sample.id);
+      }
       if (params && r.cancelled) {
         midi.logLine('Stopped: the parameters weren\'t sent', 'warn');
       } else if (params) {
@@ -529,34 +532,36 @@ export class Actions {
     }
   }
 
-  saveBank(): void {
+  /** The whole memory, every bank and sample, as a zip file */
+  saveMemory(): void {
     const { store, lcd } = this.app;
     const stamp = new Date().toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-');
-    download(bankToZip({ samples: [...store.samples.values()], programs: store.programs,
-      programIndex: store.programIndex }), `axs7-bank-${stamp}.zip`, 'application/zip');
-    lcd.flash('BANK SAVED');
+    download(memoryToZip({ samples: [...store.samples.values()], banks: store.banks, bankIndex: store.bankIndex,
+      programIndex: store.programIndex }), `axs7-memory-${stamp}.zip`, 'application/zip');
+    lcd.flash('MEMORY SAVED');
   }
 
-  async loadBank(file: File): Promise<void> {
+  /** A memory file, or a bank file from before banks: it replaces the memory */
+  async loadMemory(file: File): Promise<void> {
     const { store, lcd } = this.app;
     try {
-      const bank = zipToBank(new Uint8Array(await file.arrayBuffer()));
-      this.app.renderer.adopt(bank.samples); // they come rendered
-      if (store.samples.size > 0 && !confirm(`Load ${file.name}? It replaces the samples and programs in memory.`)) {
+      const memory = zipToMemory(new Uint8Array(await file.arrayBuffer()));
+      this.app.renderer.adopt(memory.samples); // they come rendered
+      if (store.samples.size > 0 && !confirm(`Load ${file.name}? It replaces the samples and banks in memory.`)) {
         return;
       }
       this.app.player.allNotesOff(true);
-      store.replaceAll(bank.samples, bank.programs, bank.programIndex);
-      lcd.flash(`LOADED ${bank.samples.length} SAMPLES`);
+      store.replaceAll(memory.samples, memory.banks, memory.bankIndex, memory.programIndex);
+      lcd.flash(`LOADED ${memory.samples.length} SAMPLES`);
     } catch (e) {
       this.app.midi.logLine(`Could not load ${file.name}: ${errorText(e)}`, 'error');
-      lcd.flash('NOT A BANK FILE');
+      lcd.flash('NOT A MEMORY FILE');
     }
   }
 
   clearMemory(): void {
     const { store, lcd, player } = this.app;
-    if (confirm('Clear all samples and programs from memory? Save a bank first to keep them.')) {
+    if (confirm('Clear all samples and banks from memory? Save the memory first to keep them.')) {
       player.allNotesOff(true);
       store.replaceAll([], []);
       lcd.flash('MEMORY CLEARED');

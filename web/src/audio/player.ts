@@ -101,6 +101,11 @@ export class Player {
       case 0xb0:
         if (data[1] === 1) {
           this.modulation(data[2] / 127);
+        } else if (data[1] === 0) {
+          // bank select: the next program change's bank, here at once
+          if (data[2] < this.store.banks.length) {
+            this.store.selectBank(data[2]);
+          }
         } else if (data[1] === 64) {
           this.sustain(data[2] >= 64);
         } else if (data[1] === 120 || data[1] === 123) {
@@ -118,7 +123,7 @@ export class Player {
         this.engine.keyPressure(data[1], data[2] / 127);
         this.onPressure(data[2] / 127);
         break;
-      case 0xc0:
+      case 0xc0: // P1-P32 of the current bank
         if (data[1] < this.store.programs.length) {
           this.store.selectProgram(data[1]);
         }

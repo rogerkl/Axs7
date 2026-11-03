@@ -1,5 +1,6 @@
-// PROGRAM: the current program's name and its keygroups, each a sample over a key range with its pitch, like an
-// X7000 program ("P1:S1:L=36:H=96"). The sound is the sample's (OUT and LFO).
+// PROGRAM: the current bank and program, P1-P32 as on the X7000, the program's name and its keygroups, each a sample
+// over a key range with its pitch, like an X7000 program ("P1:S1:L=36:H=96"). The sound is the sample's (OUT and
+// LFO).
 
 import type { App, View } from '../../app/app';
 import { newKeygroup } from '../../model/mapping';
@@ -21,18 +22,23 @@ export function programView(app: App): View {
   function buildHead(): void {
     const name = h('input', { class: 'name-input', value: store.program.name, maxLength: 24,
       'aria-label': 'Program name', onChange: () => store.updateProgram({ name: name.value.trim() || 'PROGRAM' }) });
+    const bank = new ParamCell({
+      key: 'program.bank', label: 'BANK', min: 1, max: store.banks.length, coarse: 1,
+      get: () => store.bankIndex + 1, set: (v) => store.selectBank(v - 1),
+      detail: () => store.bank.name,
+    });
     const program = new ParamCell({
-      key: 'program.number', label: 'PROGRAM', min: 1, max: store.programs.length, coarse: 1,
+      key: 'program.number', label: 'PROGRAM', min: 1, max: store.programs.length, coarse: 8,
       get: () => store.programIndex + 1, set: (v) => store.selectProgram(v - 1),
       format: (v) => String(v).padStart(2, '0'),
     });
-    head.replaceChildren(program.el, name,
-      h('button', { class: 'soft', onClick: () => store.addProgram() }, 'NEW PROGRAM'),
+    head.replaceChildren(bank.el, program.el, name,
       h('button', { class: 'soft danger', onClick: () => {
-        if (confirm(`Delete ${store.program.name}? The samples stay in memory.`)) {
-          store.removeProgram();
+        if (store.program.keygroups.length === 0
+          || confirm(`Clear ${store.program.name}, take its keygroups out? The samples stay in memory.`)) {
+          store.clearProgram();
         }
-      } }, 'DELETE PROGRAM'));
+      } }, 'CLEAR PROGRAM'));
   }
 
   function kgCell(kg: Keygroup, field: 'low' | 'high' | 'root' | 'semitones' | 'cents', label: string)
@@ -106,7 +112,9 @@ export function programView(app: App): View {
           const s = store.selectedSample;
           store.addKeygroup(newKeygroup(s?.id ?? null));
         } }, 'ADD KEYGROUP'),
-        h('span', { class: 'info' }, 'Select LOW, HIGH or ROOT and play a note to set it, like on the sampler '
+        h('span', { class: 'info' }, 'A bank has 32 programs, as the sampler, and remembers which sample is in '
+          + 'each of the sampler\'s slots (BANK view). Select LOW, HIGH or ROOT and play a note to set it, like on the '
+          + 'sampler '
           + '(LOW moves on to HIGH). PITCH FIXED plays every key at the root\'s pitch, the X7000\'s CONSTANT '
           + 'PITCH. The sound is the sample\'s, see OUT and LFO. A new keygroup gets the selected sample, a bar above '
           + 'the keys selects its keygroup. Notes are named as on the sampler, C3 = MIDI 60.'))),

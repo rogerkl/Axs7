@@ -10,7 +10,7 @@ Samples are loaded or received into memory and played from the on-screen keyboar
 
 - **Memory**: samples from WAV files (the loop in a WAV `smpl` chunk is kept) or other audio files, or received
   from a slot on the sampler. Not limited like the sampler's memory, and kept in the browser between visits
-  (samples in IndexedDB, programs in localStorage).
+  (samples in IndexedDB, banks in localStorage).
 - **Edits that lose nothing**: a sample keeps its original as loaded, and its edits (RESAMPLE, NORMALIZE, 12 BIT,
   ATTACK, CROSSFADE) are settings. Whenever one of them or a point changes, the sample is rendered again from the
   original, so normalizing after moving START, or going back to the original's rate, loses nothing. What plays,
@@ -18,7 +18,7 @@ Samples are loaded or received into memory and played from the on-screen keyboar
   file starts normalized, and at the nearest sampler rate with RATE ON LOAD = SAMPLER.
 - **From the sampler**: a received sample is sent back as it came, so it gets no edits (its points, scan,
   direction and sound can still be set). It is marked FROM THE SAMPLER, and stays so in its WAV files (an `axs7`
-  chunk, which other programs skip) and banks, so loading it again keeps it unedited.
+  chunk, which other programs skip) and memory files, so loading it again keeps it unedited.
 - **START and END**: the part of a sample that is used, to take a portion out of a long one. Playing starts at
   START, a one shot ends at END, the loop ends at END at the latest (moving END pushes it back). As on the X7000,
   START may be inside the loop, after the loop start: a sample can play its end once and then loop back to a loop
@@ -43,7 +43,7 @@ Samples are loaded or received into memory and played from the on-screen keyboar
 - **AS SENT**: the sample as the sampler will have it, to hear it that way: NORMALIZE (the part between START and
   END to full level) and 12 BIT (the values the sampler keeps, rendered last). A sample is sent as it sounds, made
   12 bit if it isn't; a 12 bit one, made so or received from the sampler, is sent as it is, so a received sample
-  goes back bit for bit. WAV files and banks keep 12 bit values exact.
+  goes back bit for bit. WAV files and memory files keep 12 bit values exact.
 - **Attack**: the X7000 has no attack setting, so ATTACK renders one into the sample: what is played first fades in
   from silence, LIN or CURVE, from START (from END when reversed), ending before the loop. LENGTH 0 is off.
 - **Crossfade loop**: fades the end of a forward loop into what comes before the loop start, so the jump back to
@@ -67,6 +67,14 @@ Samples are loaded or received into memory and played from the on-screen keyboar
   FIXED for the X7000's constant pitch (every key at the root's pitch). The sound is the sample's, so every program
   playing a sample sounds the same, as on the X7000. 6-32 voices (the X7000 has 6). Parameters are 0-99 like on
   the sampler, and note names follow it: C3 = MIDI 60.
+- **Banks** (BANK): a bank is what the sampler holds at once, its 32 programs P1-P32 and which sample is in each of
+  its slots; there can be any number of banks, the samples in memory are shared by them. RECEIVE puts the slot's
+  sample in the current bank's slot, with the key ranges the sampler sends in the bank's programs by number, and
+  the sample that was in the slot leaves the bank's programs, so the bank is as the sampler is (without the
+  sampler's parameters, the slot's keygroups get the new sample). SEND puts the sample in the slot and sends its
+  key ranges from the bank's programs. PROG ◀▶ and MIDI program change pick P1-P32, BANK ▶ and MIDI bank select
+  (controller 0) the bank; the same program number in another bank. CLEAR PROGRAM empties a program. A slot's
+  sample can also be picked by hand in the BANK view. Programs from before banks go into banks 32 at a time.
 - **Transfers**: receive a sample slot from the sampler, send the selected sample to one. The slot is chosen in
   the app, with SLOT ▲▼ next to RECEIVE and SEND (also in the SAMPLE and MIDI views), nothing needs to be set on
   the sampler: the slot number goes in the dump request and in the header of a sent dump. How many slots the
@@ -113,9 +121,10 @@ Samples are loaded or received into memory and played from the on-screen keyboar
   SAMPLER). The S612 has no programs: as on the X7000, each goes in a program of its own, keys C1-C6. Its start,
   end and loop aren't read yet (its 32 bytes of settings don't decode with confidence), so it loads as a one shot
   of all of its memory.
-- **Banks**: the whole memory saved and loaded as a zip file: `bank.json` with the programs and each sample's
-  settings and edits, each sample as a WAV file with its loop (as it sounds), and the original of an edited sample
-  in `originals/`, so editing goes on from it after loading.
+- **Memory files** (SAVE and LOAD, also in the BANK view): the whole memory saved and loaded as a zip file:
+  `memory.json` with the banks and each sample's settings and edits, each sample as a WAV file with its loop (as it
+  sounds), and the original of an edited sample in `originals/`, so editing goes on from it after loading. Bank
+  files from before banks (`bank.json`) load too, their programs 32 to a bank.
 
 Editing works like on the sampler: select a parameter, then turn the data knob. Parameters also change with the
 mouse wheel, by dragging up and down, or with the arrow keys (shift for bigger steps). Double click a value to
@@ -159,8 +168,8 @@ there at first and a release runs on its tag.
   and only sends complete ones, so a received dump arrives in one piece while ACKs are sent blind at a fixed pace,
   scheduled ahead with timestamps, and a dump is sent as one message without waiting for ACKs between blocks.
   Verified on an X7000.
-- `web/src/model`: samples, programs and keygroups, rendering a sample from its original and edits, IndexedDB
-  storage, banks, and the S700's sample parameters as a sample (`s700.ts`). `web/src/app/renderer.ts` renders a sample again when its edits or points change.
+- `web/src/model`: samples, banks, programs and keygroups, rendering a sample from its original and edits, IndexedDB
+  storage, memory files, and the S700's sample parameters as a sample (`s700.ts`). `web/src/app/renderer.ts` renders a sample again when its edits or points change.
 - `web/src/audio`: the AudioWorklet, the engine's main thread side, and the player.
 - `web/src/ui`, `web/src/app`: the front panel, views and actions.
 - `spike/`: the Web MIDI test page used to verify the transfers on the sampler.
@@ -168,7 +177,7 @@ there at first and a release runs on its tag.
 ## Tests
 
     cargo test              # the engine and sample editing
-    cd web && npm test      # builds the engine, then protocol, model, banks, transfers and the Rust DSP from TypeScript
+    cd web && npm test      # builds the engine, then protocol, model, memory files, transfers and the Rust DSP from TypeScript
 
 The protocol tests use a dump received from a real X7000 and check sent dumps byte for byte against the Java
 version's encoder. The transfer tests run against a simulated sampler that delivers sysex like Chrome does.
