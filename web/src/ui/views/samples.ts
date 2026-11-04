@@ -400,6 +400,10 @@ export function samplesView(app: App): View {
     const reset = s.fromSampler ? null : h('button', { class: 'soft', onClick: () => actions.resetEdits(sample()),
       title: 'Back to the original as it was loaded: no resampling, normalizing, 12 bit, attack or crossfade' },
     'RESET EDITS');
+    const apply = s.fromSampler ? null : h('button', { class: 'soft', onClick: () => actions.applyEdits(sample()),
+      title: 'Make the sample as it sounds now its original: the edits written into the audio, and only START (or a '
+        + 'loop start before it) to END kept. The original as loaded is let go, it asks first' },
+    'APPLY EDITS');
     const showFit = () => {
       const now = sample();
       const fit = fitText(now);
@@ -418,6 +422,9 @@ export function samplesView(app: App): View {
           : `${now.data.length} SAMPLES · ${duration(now)}`);
       if (reset) {
         reset.disabled = !isEdited(now.recipe);
+      }
+      if (apply) {
+        apply.disabled = !isEdited(now.recipe) && usedStart(now) === 0 && now.end >= now.data.length;
       }
     };
     showFit();
@@ -443,6 +450,7 @@ export function samplesView(app: App): View {
             app.lcd.flash(`ADDED TO ${store.program.name}`);
           } }, 'ADD TO PROGRAM'),
         reset,
+        apply,
         h('button', { class: 'soft', onClick: () => actions.saveWav(sample()),
           title: 'The sample as it sounds, with its loop, and its settings and keygroups for loading it here again' },
         'SAVE WAV'),

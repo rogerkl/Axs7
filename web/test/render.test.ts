@@ -4,7 +4,7 @@ import { Dsp } from '../src/audio/dsp';
 import { defaultSound } from '../src/model/mapping';
 import { isTwelveBit } from '../src/model/edit';
 import { isEdited, plainRecipe, renderKey } from '../src/model/recipe';
-import { renderSample } from '../src/model/render';
+import { renderSample, writtenEdits } from '../src/model/render';
 import type { Recipe, Sample } from '../src/model/types';
 import { BW16 } from '../src/protocol/akai';
 
@@ -144,5 +144,21 @@ describe('rendering a sample from its original', () => {
     // from the sampler, the recipe doesn't count
     const received = { ...s, fromSampler: true };
     expect(renderKey({ ...received, recipe: { ...s.recipe, attackMs: 3 } })).toBe(renderKey(received));
+  });
+});
+
+describe('writing the edits', () => {
+  test('the rendered audio becomes the original, only START (or a loop start before it) to END of it', () => {
+    const data = Float32Array.from({ length: 1000 }, (_, i) => i / 1000);
+    const rendered = { data, rate: 22199.53, start: 300, end: 900, loopStart: 100, loopEnd: 800 };
+    const looped = writtenEdits(rendered, { loopMode: 'forward' });
+    expect(looped).toMatchObject({ sourceRate: 22199.53, rate: 22199.53, start: 200, end: 800, loopStart: 0,
+      loopEnd: 700, recipe: plainRecipe() });
+    expect(looped.data).toEqual(data.slice(100, 900));
+    expect(looped.source).toBe(looped.data);
+    // a one shot from START, its loop points kept inside
+    const oneShot = writtenEdits(rendered, { loopMode: 'off' });
+    expect(oneShot).toMatchObject({ start: 0, end: 600, loopStart: 0, loopEnd: 500 });
+    expect(oneShot.data[0]).toBe(data[300]);
   });
 });

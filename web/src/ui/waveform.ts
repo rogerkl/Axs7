@@ -23,6 +23,8 @@ export class Waveform {
   private overview: HTMLCanvasElement;
   private viewInfo: HTMLElement;
   private sample: Sample | null = null;
+  /** the length of the audio shown, the sample's own can have changed in place since */
+  private shownLength = 0;
   /** the part shown, in samples */
   private from = 0;
   private to = 1;
@@ -99,13 +101,14 @@ export class Waveform {
 
   /**
    * Another sample is shown whole. The same sample rendered again keeps the part shown, at a new rate the same
-   * part in time.
+   * part in time; shown whole, it is shown whole again (as when its edits are written and only a part is kept).
    */
   setSample(sample: Sample | null): void {
     const before = this.sample;
-    const shownLength = before ? before.data.length : 0;
+    const shownLength = this.shownLength;
     this.sample = sample;
-    if (!sample || sample.id !== before?.id) {
+    this.shownLength = sample?.data.length ?? 0;
+    if (!sample || sample.id !== before?.id || (this.from === 0 && this.to >= shownLength)) {
       this.from = 0;
       this.to = Math.max(1, this.length);
     } else if (sample.data.length !== shownLength && shownLength > 0) {

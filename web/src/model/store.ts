@@ -3,7 +3,7 @@
 
 import { BANK_PROGRAMS, newBank, newKeygroup, normalizeBank } from './mapping';
 import { normalizeSample } from './points';
-import type { Rendered } from './render';
+import type { Rendered, Written } from './render';
 import type { Bank, Keygroup, Program, Recipe, Sample, Sound } from './types';
 
 /** A keygroup's settings, without its id and sample */
@@ -267,6 +267,16 @@ export class Store {
     if (sample && !sample.fromSampler) {
       Object.assign(sample.recipe, patch);
       this.emit('sample', id);
+    }
+  }
+
+  /** A sample with its edits written: a new original, and audio, without edits (see writtenEdits) */
+  replaceOriginal(id: string, written: Written): void {
+    const sample = this.samples.get(id);
+    if (sample && !sample.fromSampler) {
+      Object.assign(sample, written);
+      this.emit('sample', id);
+      this.emit('audio', id);
     }
   }
 

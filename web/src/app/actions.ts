@@ -2,6 +2,8 @@
 
 import { decodeAudioFile, resampleInBrowser } from '../audio/decode';
 import { memoryToZip, zipToMemory } from '../model/memory';
+import { usedStart } from '../model/points';
+import { writtenEdits } from '../model/render';
 import { S612_KEYGROUP, diskFromSample, sampleFromDisk } from '../model/disk';
 import {
   dumpFromSample, dumpWithParams, sampleFromDump, sampleFromWav, wavFromSample, wavKeygroups, wavSlot,
@@ -160,6 +162,36 @@ export class Actions {
   resetEdits(sample: Sample): void {
     this.app.store.updateRecipe(sample.id, plainRecipe());
     this.app.lcd.flash('EDITS OFF');
+  }
+
+  /**
+   * Makes the sample as it sounds now its original: its edits written into the audio, and only the part that plays
+   * kept, from START (or a loop start before it) to END, as for a large file of which a part is wanted. The original
+   * as loaded is let go: RESET EDITS goes back to this. Asks first.
+   */
+  async applyEdits(sample: Sample): Promise<void> {
+    const { store, renderer, lcd, midi } = this.app;
+    if (sample.fromSampler) {
+      return;
+    }
+    const from = usedStart(sample);
+    const cut = from > 0 || sample.end < sample.data.length;
+    if (!confirm(`Write the edits into ${sample.name}${cut ? `, and keep only START to END of it (${
+      ((sample.end - from) / sample.rate).toFixed(2)} of ${(sample.data.length / sample.rate).toFixed(2)} s)` : ''}? `
+      + 'The original as it was loaded is let go, RESET EDITS then goes back to this. A memory file saved before '
+      + 'still has it.')) {
+      return;
+    }
+    try {
+      // as the settings are now: a render can still be on its way
+      const written = writtenEdits(await renderer.render(sample), sample);
+      renderer.adopt([{ ...sample, ...written }]); // nothing to render again
+      store.replaceOriginal(sample.id, written);
+      lcd.flash('EDITS WRITTEN');
+    } catch (e) {
+      midi.logLine(`Could not write the edits of ${sample.name}: ${errorText(e)}`, 'error');
+      lcd.flash('NOT WRITTEN, SEE MIDI');
+    }
   }
 
   /** Stops waiting for a transfer. A sent dump can't be called back, it is with the MIDI driver. */

@@ -16,7 +16,7 @@ import { crc16, findBlocks, mfmBytes, mfmCells, qdCells } from '../../src/protoc
 import { S700_BLOCK_LENGTH, writeS700Disk } from '../../src/protocol/s700disk';
 import { S612_BLOCK_LENGTH, S612_SAMPLES } from '../../src/protocol/s612disk';
 
-const SOUNDS = new URL('../../../sounds/', import.meta.url);
+const SOUNDS = new URL('../../../sounds/qd_examples/', import.meta.url);
 const S700_DISK = 'Akai S700 - El Profesor de Danza Library [for FlashFloppy and HxC]/01 CMI voice 1.qd';
 const S612_DISK = 'Akai S612 QD (revision A)/Akai S612 QD (revision A) [FF]/Akai Sound Library (Grey)/01B Trombone.qd';
 

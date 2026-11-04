@@ -66,3 +66,21 @@ export async function renderSample(s: Sample, resample: Resampler, dsp: RenderDs
   }
   return { data, rate, ...points };
 }
+
+/** What a sample becomes when its edits are written: its new original, without edits */
+export type Written = Pick<Sample, 'source' | 'sourceRate' | 'data' | 'rate' | 'start' | 'end' | 'loopStart' | 'loopEnd'
+  | 'recipe'>;
+
+/**
+ * The sample as rendered made its original: the edits are in the audio, and only the part that plays is kept, from
+ * START (or a loop start before it) to END. The points move with it.
+ *
+ * @param r the sample rendered as its settings are now
+ */
+export function writtenEdits(r: Rendered, s: Pick<Sample, 'loopMode'>): Written {
+  const from = usedStart({ ...r, loopMode: s.loopMode });
+  const data = r.data.slice(from, r.end);
+  const at = (x: number) => Math.max(0, Math.min(x - from, data.length));
+  return { source: data, sourceRate: r.rate, data, rate: r.rate, start: at(r.start), end: at(r.end),
+    loopStart: at(r.loopStart), loopEnd: at(r.loopEnd), recipe: plainRecipe() };
+}

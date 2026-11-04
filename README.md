@@ -26,7 +26,9 @@ Samples are loaded or received into memory and played from the on-screen keyboar
   ATTACK, CROSSFADE) are settings. Whenever one of them or a point changes, the sample is rendered again from the
   original, so normalizing after moving START, or going back to the original's rate, loses nothing. What plays,
   what the waveform shows and what is sent is the rendered sample. RESET EDITS goes back to the original. A loaded
-  file starts normalized, and at the nearest sampler rate with RATE ON LOAD = SAMPLER.
+  file starts normalized, and at the nearest sampler rate with RATE ON LOAD = SAMPLER. APPLY EDITS writes the edits
+  when wanted: the sample as it sounds becomes its original, and only START (or a loop start before it) to END of
+  it is kept, as for a large file of which only a part is wanted. The original as loaded is let go (it asks first).
 - **From the sampler**: a received sample is sent back as it came, so it gets no edits (its points, scan,
   direction and sound can still be set). It is marked FROM THE SAMPLER, and stays so in its WAV files (an `axs7`
   chunk, which other programs skip) and memory files, so loading it again keeps it unedited.
@@ -206,7 +208,7 @@ The protocol tests use a dump received from a real X7000 and check sent dumps by
 version's encoder. The transfer tests run against a simulated sampler that delivers sysex like Chrome does.
 The QuickDisk tests use a disk written by an S700 and one written by an S612, with their audio replaced by a test
 signal (`web/test/fixtures/make-fixtures.ts` makes them from sound libraries, which aren't in the repository). With
-the El Profesor de Danza S700 library in `sounds/`, they also read all 99 of its disks and save each one again.
+the El Profesor de Danza S700 library in `sounds/qd_examples/`, they also read all 99 of its disks and save each one again.
 
 ## License
 

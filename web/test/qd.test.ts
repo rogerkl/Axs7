@@ -398,8 +398,9 @@ describe('disks as the samplers write them', () => {
   });
 });
 
-// The El Profesor de Danza library for the S700 (99 disks), if it is in sounds/ (not in the repository)
-const LIBRARY = new URL('../../sounds/Akai S700 - El Profesor de Danza Library [for FlashFloppy and HxC].zip',
+// The El Profesor de Danza library for the S700 (99 disks), if it is in sounds/qd_examples/ (not in the repository)
+const LIBRARY = new URL(
+  '../../sounds/qd_examples/Akai S700 - El Profesor de Danza Library [for FlashFloppy and HxC].zip',
   import.meta.url);
 const HAVE_LIBRARY = existsSync(LIBRARY);
 
