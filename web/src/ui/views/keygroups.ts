@@ -115,7 +115,7 @@ export function programView(app: App): View {
         h('span', { class: 'info' }, 'A bank has 32 programs, as the sampler, and remembers which sample is in '
           + 'each of the sampler\'s slots (BANK view). Select LOW, HIGH or ROOT and play a note to set it, like on the '
           + 'sampler '
-          + '(LOW moves on to HIGH). PITCH FIXED plays every key at the root\'s pitch, the X7000\'s CONSTANT '
+          + '(LOW moves on to HIGH). PITCH FIXED plays every key at the root\'s pitch, the sampler\'s CONSTANT '
           + 'PITCH. The sound is the sample\'s, see OUT and LFO. A new keygroup gets the selected sample, a bar above '
           + 'the keys selects its keygroup. Notes are named as on the sampler, C3 = MIDI 60.'))),
     dispose: () => off.forEach((f) => f()),

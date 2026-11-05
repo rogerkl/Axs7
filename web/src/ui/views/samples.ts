@@ -87,7 +87,7 @@ export function samplesView(app: App): View {
     + '(only if the file has the sample in it), or NONE (P**). In a slot, the programs not loaded keep the slot\'s '
     + 'key ranges, now for this sample';
   const loadRow = h('div', { class: 'row load-row' },
-    h('button', { class: 'soft', title: 'WAV or other audio files, or S700/X7000 QuickDisk images (.qd)',
+    h('button', { class: 'soft', title: 'WAV or other audio files, or the sampler\'s QuickDisk images (.qd)',
       onClick: async () => actions.loadFiles(await pickFiles('.wav,.qd,audio/*', true)) }, 'LOAD WAV / QD'),
     loadRate.el, loadSlot.el, loadPrograms.el);
   const detail = h('div', { class: 'detail' });
@@ -347,7 +347,7 @@ export function samplesView(app: App): View {
       cells = [];
       detail.replaceChildren(wave.el, h('div', { class: 'empty-help' },
         h('p', {}, 'Load WAV files (several at once, the loop in a WAV file is kept, and one saved here has its '
-          + 'settings and keygroups), S700/X7000 QuickDisk images '
+          + 'settings and keygroups), the sampler\'s QuickDisk images '
           + '(.qd, with their sound and keygroups), or receive a sample from the sampler. Memory is only limited by '
           + 'the browser.'),
         samplerGroup(false)));
@@ -455,7 +455,7 @@ export function samplesView(app: App): View {
           title: 'The sample as it sounds, with its loop, and its settings and keygroups for loading it here again' },
         'SAVE WAV'),
         h('button', { class: 'soft', onClick: () => actions.saveDisk(sample()),
-          title: 'An S700/X7000 disk image (.qd) of the sample, with its sound and keygroups, for a Gotek or HxC' },
+          title: 'A disk image (.qd) of the sample for the sampler, with its sound and keygroups, for a Gotek or HxC' },
         'SAVE QD'),
         h('button', { class: 'soft danger', onClick: () => {
           if (confirm(`Delete ${sample().name}?`)) {

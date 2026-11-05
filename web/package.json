@@ -4,7 +4,7 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "description": "Axs7 virtual sampler: programs and samples in the browser, transfers to and from an Akai X7000/S700 over Web MIDI",
+  "description": "Axs7 virtual sampler: programs and samples in the browser, transfers to and from an Akai S700 or X7000 over Web MIDI",
   "scripts": {
     "engine": "./build-engine.sh",
     "dev": "npm run engine && vite",

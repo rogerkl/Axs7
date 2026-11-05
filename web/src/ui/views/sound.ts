@@ -72,7 +72,7 @@ export function outView(app: App): View {
     ['velFilter', 'VEL FILTER', (v) => `+${velFilterOctaves(v).toFixed(1)} OCT`],
     ['release', 'RELEASE', (v) => formatSeconds(releaseTime(v))],
     ['velRelease', 'VEL RELEASE', percent],
-  ], 'As on the X7000: the filter is a lowpass without resonance, velocity raises its cutoff. Release is for looping '
+  ], 'As on the sampler: the filter is a lowpass without resonance, velocity raises its cutoff. Release is for looping '
     + 'and alternating samples, a one shot stops at key off and a drum trigger plays to its end. Velocity shortens the '
     + 'release: with VEL RELEASE at 99 a hard note has none, a soft one all of it. These settings are '
     + 'the sample\'s, every program playing it sounds the same. They are not part of a sample dump.');
@@ -95,7 +95,7 @@ export function lfoView(app: App): View {
     ['lfoDelay', 'DELAY', (v) => formatSeconds(lfoDelay(v))],
     ['pressure', 'PRESSURE', cents], // at full aftertouch
   ], 'Vibrato, starting DELAY after key on. The modulation wheel adds vibrato too, at the sample\'s speed. '
-    + 'PRESSURE is the X7000\'s pressure sens: MIDI aftertouch (channel or polyphonic) adds vibrato that deep at full '
+    + 'PRESSURE is the sampler\'s pressure sens: MIDI aftertouch (channel or polyphonic) adds vibrato that deep at full '
     + 'pressure, at once, without the delay.', {
     el: h('div', { class: 'row' }, h('span', { class: 'param-label' }, 'AFTERTOUCH IN'), meter, value),
     dispose: () => {

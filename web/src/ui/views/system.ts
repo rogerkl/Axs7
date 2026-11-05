@@ -91,10 +91,10 @@ export function midiView(app: App): View {
           + 'RECEIVE ALL ON sets START to 0 and END to the most on the sampler while receiving, then back. This '
           + 'button only asks and logs them: on SYSEX CHAN first, then on the other channels, and keeps the one that '
           + 'is answered.')),
-      h('p', { class: 'info' }, 'SLOTS is how many sample slots the sampler has: 6 on a standard X7000, more '
-        + 'with a memory expansion. The same input plays the programs (also from the sampler\'s own keyboard) and '
+      h('p', { class: 'info' }, 'SLOTS is how many sample slots the sampler has: 6 on a standard one, more '
+        + 'with a memory expansion. The same input plays the programs (also from an X7000\'s own keyboard) and '
         + 'receives sample dumps. Use Chrome or Edge, from localhost or https. Filler adds pauses between blocks '
-        + 'when sending, the X7000 doesn\'t need them. A sample is sent as it sounds: normalizing and 12 bit are its '
+        + 'when sending, the sampler doesn\'t need them. A sample is sent as it sounds: normalizing and 12 bit are its '
         + 'own settings (SAMPLE view).'),
       logEl),
     dispose: () => {

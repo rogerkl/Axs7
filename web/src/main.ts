@@ -173,7 +173,7 @@ async function main(): Promise<void> {
       lcd.flash(`BANK ${store.bankIndex + 1} OF ${store.banks.length}${name}`);
     }, { title: 'Next bank, the same program number in it (NEW BANK in the BANK view)' }),
     panelButton('LOAD FILE', async () => actions.loadFiles(await pickFiles('.wav,.qd,audio/*', true)),
-      { title: 'Load WAV or other audio files into memory, or S700/X7000 QuickDisk images (.qd)' }),
+      { title: 'Load WAV or other audio files into memory, or the sampler\'s QuickDisk images (.qd)' }),
     audition,
     panelButton('PANIC', () => player.allNotesOff(true), { title: 'Stop all sound' }),
   ];
