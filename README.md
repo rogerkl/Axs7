@@ -46,8 +46,8 @@ It is a rewrite and enhancement of the Java program [Axs7Sds](https://github.com
   are in its parameters there), so a bank's program is the keygroups of the samples in its slots. A sample is in one
   slot of one bank or in none, and one put in a slot leaves the sample there in no bank, with its keygroups kept.
 - **Storage**: samples in IndexedDB; banks, settings, and each sample's bank, slot and keygroups in localStorage, so
-  a keygroup changed doesn't write the audio again. A memory file is a zip with `memory.json` (the banks, and each
-  sample's settings, edits, bank, slot and keygroups), each sample as a WAV file, and the originals of edited samples
+  a keygroup changed doesn't write the audio again. A memory file is a zip with `memory.json` (the banks, SLOTS, and
+  each sample's settings, edits, bank, slot and keygroups), each sample as a WAV file, and the originals of edited samples
   in `originals/`. Memory kept or saved before samples had their bank and slot (the banks had the slots and the
   keygroups) is moved over when it loads. WAV files saved here carry their settings, slot and key ranges as JSON in
   an `axs7` chunk, which other programs skip.

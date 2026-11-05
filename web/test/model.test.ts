@@ -2,7 +2,7 @@ import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { describe, expect, test } from 'vitest';
 import { BW16, MAX_SAMPLES, decodeHeader, encodeSamples, parseDump, samplerBandwidth } from '../src/protocol/akai';
 import { encodeWav, readWav } from '../src/protocol/wav';
-import { memoryToZip, zipToMemory } from '../src/model/memory';
+import { memoryToZip, slotsUsed, zipToMemory } from '../src/model/memory';
 import {
   dumpFromSample, sampleFromDump, sampleFromWav, samplerFit, wavFromSample, wavKeygroups, wavSlot,
 } from '../src/model/convert';
@@ -653,8 +653,8 @@ describe('memory file', () => {
       keygroups: [newKeygroup('s1', 5, { low: 36, high: 59, root: 48, cents: 5 })] }),
     sample({ id: 's2', name: 'ONE/SHOT?', loopMode: 'drum', reverse: true, rate: 22199.53, start: 40, slot: 2,
       end: 5950, sound: { ...defaultSound(), filter: 64, velFilter: 30, release: 0, lfoDepth: 12 } })];
-    const bank = zipToMemory(memoryToZip({ samples, banks, bankIndex: 1, programIndex: 5 }));
-    expect([bank.bankIndex, bank.programIndex, bank.notes]).toEqual([1, 5, undefined]);
+    const bank = zipToMemory(memoryToZip({ samples, banks, bankIndex: 1, programIndex: 5, slotCount: 16 }));
+    expect([bank.bankIndex, bank.programIndex, bank.slotCount, bank.notes]).toEqual([1, 5, 16, undefined]);
     expect(bank.banks).toEqual(banks);
     expect(bank.samples.map((s) => [s.id, s.name, s.rate, s.loopMode, s.start, s.end, s.loopStart, s.loopEnd]))
       .toEqual([['s1', 'SINE', BW16.rate, 'forward', 0, 6000, 0, 5900],
@@ -684,6 +684,17 @@ describe('memory file', () => {
     expect(memory.samples.map((s) => [s.id, s.bankId, s.slot, s.keygroups.map((k) => [k.program, k.low])]))
       .toEqual([['s1', null, null, []], ['s2', 'b', 1, [[0, 40]]]]);
     expect(memory.notes).toEqual([]);
+    // SLOTS wasn't saved then: the slots its samples are in
+    expect([memory.slotCount, slotsUsed(memory)]).toEqual([undefined, 2]);
+  });
+
+  test('the slots a memory needs: SLOTS when saved, at least the highest slot a sample of a bank is in', () => {
+    const memory = (slotCount: number | undefined, ...slots: [string | null, number | null][]) => ({ banks: [],
+      bankIndex: 0, programIndex: 0, slotCount, samples: slots.map(([bankId, slot]) => sample({ bankId, slot })) });
+    expect(slotsUsed(memory(16, ['b', 2]))).toBe(16);
+    expect(slotsUsed(memory(6, ['b', 2], ['b', 9]))).toBe(10);
+    expect(slotsUsed(memory(undefined, [null, 12], ['b', 0]))).toBe(1); // in no bank: no slot of a bank needed
+    expect(slotsUsed(memory(undefined))).toBe(0);
   });
 
   test('an edited sample keeps its original and recipe, one from the sampler is marked', () => {

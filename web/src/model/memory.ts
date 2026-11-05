@@ -26,6 +26,8 @@ export interface Memory {
   banks: Bank[];
   bankIndex: number;
   programIndex: number;
+  /** SLOTS when it was saved, how many slots the sampler had; not in files from before */
+  slotCount?: number;
   /** what couldn't be had from an older file, for the log */
   notes?: string[];
 }
@@ -60,6 +62,8 @@ interface SampleEntry {
 interface MemoryJson {
   format: string;
   version: number;
+  /** SLOTS when it was saved */
+  slotCount?: number;
   bankIndex?: number;
   programIndex: number;
   samples: SampleEntry[];
@@ -89,8 +93,8 @@ export function memoryToZip(memory: Memory): Uint8Array {
       fromSampler: s.fromSampler, start: s.start, end: s.end, loopStart: s.loopStart, loopEnd: s.loopEnd,
       loopMode: s.loopMode, reverse: s.reverse, sound: s.sound, bankId: s.bankId, slot: s.slot, keygroups: s.keygroups };
   });
-  const json: MemoryJson = { format: MEMORY_FORMAT, version: MEMORY_VERSION, bankIndex: memory.bankIndex,
-    programIndex: memory.programIndex, samples, banks: memory.banks };
+  const json: MemoryJson = { format: MEMORY_FORMAT, version: MEMORY_VERSION, slotCount: memory.slotCount,
+    bankIndex: memory.bankIndex, programIndex: memory.programIndex, samples, banks: memory.banks };
   files['memory.json'] = strToU8(JSON.stringify(json, null, 2));
   return zipSync(files, { level: 6 });
 }
@@ -139,7 +143,8 @@ export function zipToMemory(zip: Uint8Array): Memory {
   });
   const old = json.format === OLD_FORMAT ? json.programIndex ?? 0 : 0;
   const where = { bankIndex: json.bankIndex ?? Math.floor(old / BANK_PROGRAMS),
-    programIndex: json.format === OLD_FORMAT ? old % BANK_PROGRAMS : json.programIndex ?? 0 };
+    programIndex: json.format === OLD_FORMAT ? old % BANK_PROGRAMS : json.programIndex ?? 0,
+    ...(Number.isInteger(json.slotCount) && json.slotCount! > 0 ? { slotCount: json.slotCount } : {}) };
   if (json.format === MEMORY_FORMAT && json.version >= 5) {
     return { samples, banks: (json.banks ?? []).map(normalizeBank), ...where };
   }
@@ -147,4 +152,13 @@ export function zipToMemory(zip: Uint8Array): Memory {
   // version 4 the programs were a list
   const { banks, notes } = migrateBanks(json.banks ?? banksFromPrograms(json.programs ?? []), samples);
   return { samples, banks, ...where, notes };
+}
+
+/**
+ * How many slots the sampler needs for a memory: SLOTS when it was saved, at least as many as the highest slot a
+ * sample of a bank is in (a file from before SLOTS was saved has only that)
+ */
+export function slotsUsed(memory: Memory): number {
+  return Math.max(memory.slotCount ?? 0, ...memory.samples.map((s) => (s.bankId !== null && s.slot !== null ? s.slot + 1
+    : 0)));
 }

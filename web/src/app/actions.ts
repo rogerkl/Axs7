@@ -1,7 +1,7 @@
 // What the panel buttons do: load files, transfers with the sampler, banks.
 
 import { decodeAudioFile, resampleInBrowser } from '../audio/decode';
-import { memoryToZip, zipToMemory } from '../model/memory';
+import { memoryToZip, slotsUsed, zipToMemory } from '../model/memory';
 import { usedStart } from '../model/points';
 import { writtenEdits } from '../model/render';
 import { S612_KEYGROUP, diskFromSample, sampleFromDisk } from '../model/disk';
@@ -791,16 +791,20 @@ export class Actions {
     }
   }
 
-  /** The whole memory, every bank and sample, as a zip file */
+  /** The whole memory, every bank and sample, as a zip file, with SLOTS */
   saveMemory(): void {
     const { store, lcd } = this.app;
     const stamp = new Date().toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-');
     download(memoryToZip({ samples: [...store.samples.values()], banks: store.banks, bankIndex: store.bankIndex,
-      programIndex: store.programIndex }), `axs7-memory-${stamp}.zip`, 'application/zip');
+      programIndex: store.programIndex, slotCount: this.app.settings.slotCount }), `axs7-memory-${stamp}.zip`,
+    'application/zip');
     lcd.flash('MEMORY SAVED');
   }
 
-  /** A memory file, or a bank file from before banks: it replaces the memory */
+  /**
+   * A memory file, or a bank file from before banks: it replaces the memory. SLOTS is raised to the slots it was saved
+   * with, or its samples are in, if it is lower; a lower number in the file leaves it as it is.
+   */
   async loadMemory(file: File): Promise<void> {
     const { store, lcd } = this.app;
     try {
@@ -814,7 +818,15 @@ export class Actions {
       for (const note of memory.notes ?? []) {
         this.app.midi.logLine(`${file.name}: ${note}`, 'warn');
       }
-      lcd.flash(`LOADED ${memory.samples.length} SAMPLES`);
+      // a memory for a sampler with more slots needs them, its samples are in them; fewer are no matter
+      const slots = slotsUsed(memory);
+      const raised = slots > this.app.settings.slotCount;
+      if (raised) {
+        this.app.midi.logLine(`${file.name}: SLOTS set from ${this.app.settings.slotCount} to ${slots}, the sampler `
+          + `it was saved for has ${memory.slotCount === slots ? '' : 'samples in '}${slots} slots`, 'warn');
+        this.app.setSlotCount(slots);
+      }
+      lcd.flash(raised ? `LOADED ${memory.samples.length}, SLOTS ${slots}` : `LOADED ${memory.samples.length} SAMPLES`);
     } catch (e) {
       this.app.midi.logLine(`Could not load ${file.name}: ${errorText(e)}`, 'error');
       lcd.flash('NOT A MEMORY FILE');
