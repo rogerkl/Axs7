@@ -11,19 +11,18 @@ import { S700_NOT_IN_PROGRAM, S700_PROGRAMS, S700_SCAN, bandwidthRate } from '..
 import type { S700KeyRange, S700SampleParams } from '../protocol/s700disk';
 import type { Resampler } from './convert';
 import { isTwelveBit } from './edit';
-import { defaultSound, newId } from './mapping';
+import { defaultSound, newId, newKeygroup } from './mapping';
 import { usedStart } from './points';
 import { plainRecipe } from './recipe';
 import { isLooped } from './types';
-import type { Keygroup, LoopMode, Program, Sample, Sound } from './types';
+import type { Keygroup, LoopMode, Sample, Sound } from './types';
 
-/** A keygroup's settings, without its id and sample */
-export type KeyRange = Omit<Keygroup, 'id' | 'sampleId'>;
+/** A keygroup's settings, without its id, sample and program */
+export type KeyRange = Omit<Keygroup, 'id' | 'sampleId' | 'program'>;
 
 export interface SamplerSample {
+  /** with its keygroups in the programs it is in on the sampler, in no bank or slot yet */
   sample: Sample;
-  /** the sample's keygroup in each of the sampler's programs, null where it isn't in the program */
-  programs: (KeyRange | null)[];
   /** what wasn't as it should be, for the log */
   notes: string[];
 }
@@ -63,15 +62,16 @@ export function sampleFromS700Params(p: S700SampleParams, data: Float32Array, na
     points = { start: n - points.end, end: n - points.start, loopStart: n - points.loopEnd,
       loopEnd: n - points.loopStart };
   }
-  const sample: Sample = {
-    id: newId(), name, source: data, sourceRate: rate, recipe: plainRecipe(), fromSampler: true, rate, data,
-    ...points, loopMode, reverse: p.reversed, sound,
-  };
-  const programs = p.programs.map((r): KeyRange | null => (r.low > r.high ? null : {
+  const id = newId();
+  const keygroups = p.programs.flatMap((r, program): Keygroup[] => (r.low > r.high ? [] : [newKeygroup(id, program, {
     low: r.low, high: r.high, root: p.recordPitch, semitones: r.transpose,
     cents: Math.round((p.fineTune * 100) / 16), fixedPitch: r.constantPitch,
-  }));
-  return { sample, programs, notes };
+  })]));
+  const sample: Sample = {
+    id, name, source: data, sourceRate: rate, recipe: plainRecipe(), fromSampler: true, rate, data,
+    ...points, loopMode, reverse: p.reversed, sound, bankId: null, slot: null, keygroups,
+  };
+  return { sample, notes };
 }
 
 /**
@@ -149,7 +149,7 @@ export interface SamplerImage {
  *
  * @param done for the notes: 'saved' or 'sent'
  */
-export async function samplerImage(sample: Sample, programs: Program[], resample: Resampler, done: string)
+export async function samplerImage(sample: Sample, resample: Resampler, done: string)
   : Promise<SamplerImage> {
   const notes: string[] = [];
   const own = samplerBandwidth(sample.rate);
@@ -200,7 +200,7 @@ export async function samplerImage(sample: Sample, programs: Program[], resample
   }
   const loop = looped ? points.loopStart : Math.min(points.loopStart, end - 1);
 
-  const { ranges, root, cents, inProgram } = keyRanges(sample.id, programs, notes, done);
+  const { ranges, root, cents, inProgram } = keyRanges(sample.keygroups, notes, done);
   const s = sample.sound;
   const params: S700SampleParams = {
     programs: ranges, scanMode: SCAN_CODES[sample.loopMode], start: points.start, end, loop,
@@ -213,17 +213,14 @@ export async function samplerImage(sample: Sample, programs: Program[], resample
 }
 
 /** The sample's key range in each of the sampler's programs, and the root and fine tune the sampler has for it */
-function keyRanges(sampleId: string, programs: Program[], notes: string[], done: string)
+function keyRanges(keygroups: Keygroup[], notes: string[], done: string)
   : { ranges: S700KeyRange[]; root: number; cents: number; inProgram: boolean } {
-  const mine = programs.map((p) => p.keygroups.filter((k) => k.sampleId === sampleId));
-  if (mine.slice(S700_PROGRAMS).some((k) => k.length)) {
-    notes.push(`The sampler has ${S700_PROGRAMS} programs, only those are ${done}`);
-  }
+  const mine = Array.from({ length: S700_PROGRAMS }, (_, p) => keygroups.filter((k) => k.program === p));
   const first: Keygroup | undefined = mine.flat()[0];
   // the S700's nominal recording pitch goes from 24 to 96, a root outside goes in the transpose
   const root = clamp(first?.root ?? 60, 24, 96);
   const cents = first?.cents ?? 0;
-  const ranges = mine.slice(0, S700_PROGRAMS).map((keygroups, i): S700KeyRange => {
+  const ranges = mine.map((keygroups, i): S700KeyRange => {
     const k = keygroups[0];
     if (!k) {
       return S700_NOT_IN_PROGRAM;

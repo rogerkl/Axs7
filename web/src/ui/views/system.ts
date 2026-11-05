@@ -1,11 +1,12 @@
-// MIDI: ports, keyboard channel and transfer settings, with the transfer log. BANK: the banks, their slots and
-// programs, and the memory saved and loaded.
+// MIDI: ports, keyboard channel and transfer settings, with the transfer log. BANK: the banks, the samples in their
+// slots and their programs, and the memory saved and loaded.
 
 import type { App, View } from '../../app/app';
 import { MAX_SLOTS } from '../../protocol/akai';
 import { h, pickFiles } from '../dom';
 import { ParamCell } from '../param';
 import { slotCell } from '../slot';
+import type { Sample } from '../../model/types';
 
 export function midiView(app: App): View {
   const { midi, settings, player, actions } = app;
@@ -134,13 +135,35 @@ export function bankView(app: App): View {
     stats.replaceChildren(stat('SAMPLES', String(store.samples.size)), stat('BANKS', String(store.banks.length)),
       stat('MEMORY', `${mb.toFixed(mb < 10 ? 1 : 0)}MB`));
     const samples = [...store.samples.values()];
+    const bank = store.bank;
+    const inBank = store.samplesIn(bank);
+    // the sampler's slots, and any slot past them a sample of the bank is in
+    const count = Math.max(settings.slotCount, ...inBank.map((s) => s.slot! + 1));
+    /** where a sample is, for picking it */
+    const where = (s: Sample) => {
+      const b = store.banks.findIndex((x) => x.id === s.bankId);
+      return b < 0 ? ' (NO BANK)' : s.bankId === bank.id ? ` (S${String(s.slot! + 1).padStart(2, '0')})`
+        : ` (B${b + 1} S${String(s.slot! + 1).padStart(2, '0')})`;
+    };
     slots.replaceChildren(
       h('div', { class: 'list-head' }, h('span', { class: 'c-num' }, 'SLOT'), h('span', { class: 'c-name' }, 'SAMPLE')),
-      ...store.bank.slots.slice(0, settings.slotCount).map((id, i) => {
+      ...Array.from({ length: count }, (_, i) => {
+        const id = store.sampleAt(bank, i)?.id ?? null;
         const select = h('select', { class: 'sample-select', 'aria-label': `Slot ${i + 1} sample`,
-          onChange: () => store.assignSlot(i, select.value || null) },
+          title: 'The sample in this slot of the bank, with its keygroups. One picked here leaves its bank or slot; '
+            + 'the sample here before is then in no bank',
+          onChange: () => {
+            if (select.value) {
+              const out = store.place(select.value, bank, i);
+              if (out) {
+                app.lcd.flash(`${out.name} NOW IN NO BANK`);
+              }
+            } else {
+              store.clearSlot(bank, i);
+            }
+          } },
         h('option', { value: '' }, '– NONE –'),
-        ...samples.map((s) => h('option', { value: s.id, selected: s.id === id }, s.name)));
+        ...samples.map((s) => h('option', { value: s.id, selected: s.id === id }, `${s.name}${where(s)}`)));
         // the slot RECEIVE and SEND use
         return h('div', { class: `list-row${i === settings.slot ? ' selected' : ''}`, role: 'listitem',
           title: 'Click the number for RECEIVE and SEND to use this slot' },
@@ -170,10 +193,11 @@ export function bankView(app: App): View {
   return {
     el: h('div', { class: 'view view-bank' },
       h('div', { class: 'detail' }, head,
-        h('p', { class: 'info' }, 'A bank is what the sampler holds at once: its 32 programs and which sample is in '
-          + 'each of its slots. RECEIVE puts the slot\'s sample in the bank\'s slot and its key ranges in the bank\'s '
-          + 'programs, as the sampler has them; SEND puts the sample in the slot and sends its key ranges. A sample '
-          + 'picked for a slot here gets the slot\'s key ranges. Samples are in memory, shared by the banks.'),
+        h('p', { class: 'info' }, 'A bank is what the sampler holds at once: a sample in each of its slots, and its '
+          + '32 programs. As on the sampler, the key ranges are the samples\': a program plays the bank\'s samples, '
+          + 'and a sample\'s keygroups go with it to another bank or slot. A sample is in one slot of one bank, or in '
+          + 'no bank (then no program plays it): one put in a slot leaves the sample there in no bank. RECEIVE and '
+          + 'loading a file put the sample in a slot of the current bank. Samples in no bank are in memory still.'),
         slots,
         h('div', { class: 'row' },
           h('button', { class: 'soft', onClick: () => actions.receiveBank() }, 'RECEIVE BANK'),

@@ -9,12 +9,12 @@ import type { Sample } from '../src/model/types';
 const data = new Float32Array(100);
 const sample: Sample = { id: 's', name: 'S', source: data, sourceRate: 44100, recipe: plainRecipe(), fromSampler: false,
   rate: 44100, data, start: 0, end: 100, loopStart: 0, loopEnd: 100, loopMode: 'off', reverse: false,
-  sound: defaultSound() };
+  sound: defaultSound(), bankId: null, slot: null, keygroups: [] };
 
 function setup() {
   const store = new Store();
-  store.addSample(sample);
-  store.addKeygroup(newKeygroup('s', { id: 'k', low: 36, high: 48 }));
+  store.addSample(sample, store.bank, 0);
+  store.addKeygroup(newKeygroup('s', 0, { id: 'k', low: 36, high: 48 }));
   store.removeKeygroup(store.program.keygroups[0].id); // the one added for the first sample
   const played: { key: number; samples: string[] }[] = [];
   const engine = {

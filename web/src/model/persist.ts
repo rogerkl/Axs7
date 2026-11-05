@@ -1,11 +1,11 @@
-// Keeps the memory between visits: the samples in IndexedDB, the banks (small) in localStorage. localStorage writes
-// at once, so a program edited just before the page closes isn't lost, as an IndexedDB write still running then
-// would be.
+// Keeps the memory between visits: the samples in IndexedDB, the banks and each sample's bank, slot and keygroups
+// (small) in localStorage. localStorage writes at once, so a keygroup changed just before the page closes isn't lost,
+// as an IndexedDB write still running then would be; and the samples' audio isn't written again for it.
 
-import { BANK_PROGRAMS, banksFromPrograms, normalizeBank } from './mapping';
+import { BANK_PROGRAMS, banksFromPrograms, migrateBanks, normalizeBank } from './mapping';
 import { normalizeSample } from './points';
 import type { Store } from './store';
-import type { Bank, Program, Sample } from './types';
+import type { Bank, Keygroup, OldBank, Sample } from './types';
 
 const DB_NAME = 'axs7';
 const SAMPLES = 'samples';
@@ -25,14 +25,24 @@ export interface Loaded {
   problems: string[];
 }
 
+/** Where a sample is: its bank, slot and keygroups */
+interface Place {
+  bankId: string | null;
+  slot: number | null;
+  keygroups: Keygroup[];
+}
+
 interface ProgramsRecord {
-  banks?: Bank[];
+  /** before `places`, the banks had their slots and the programs' keygroups */
+  banks?: (Bank | OldBank)[];
   bankIndex?: number;
   /** before banks, the programs were a list */
-  programs?: Program[];
+  programs?: OldBank['programs'];
   programIndex: number;
   /** the samples' ids in memory order, IndexedDB gives them back by id */
   sampleOrder?: string[];
+  /** each sample's bank, slot and keygroups, by id */
+  places?: Record<string, Place>;
 }
 
 function request<T>(r: IDBRequest<T>): Promise<T> {
@@ -104,14 +114,24 @@ export class Persistence {
       return { samples, banks: [], bankIndex: 0, programIndex: 0, problems };
     }
     try {
-      if (record.banks) {
-        return { samples, banks: record.banks.map(normalizeBank), bankIndex: index(record.bankIndex),
+      if (record.places && typeof record.places === 'object') {
+        for (const sample of samples) {
+          const place = record.places[sample.id];
+          if (place) {
+            Object.assign(sample, { bankId: place.bankId, slot: place.slot, keygroups: place.keygroups });
+            normalizeSample(sample);
+          }
+        }
+        return { samples, banks: (record.banks ?? []).map(normalizeBank), bankIndex: index(record.bankIndex),
           programIndex: index(record.programIndex), problems };
       }
-      // from before banks: 32 programs to a bank
+      // the banks had the slots and the keygroups; before banks there were 32 programs to a bank
       const programIndex = index(record.programIndex);
-      return { samples, banks: banksFromPrograms(record.programs ?? []),
-        bankIndex: Math.floor(programIndex / BANK_PROGRAMS), programIndex: programIndex % BANK_PROGRAMS, problems };
+      const { banks, notes } = migrateBanks(record.banks ?? banksFromPrograms(record.programs ?? []), samples);
+      problems.push(...notes);
+      return { samples, banks, ...(record.banks ? { bankIndex: index(record.bankIndex), programIndex }
+        : { bankIndex: Math.floor(programIndex / BANK_PROGRAMS), programIndex: programIndex % BANK_PROGRAMS }),
+      problems };
     } catch (e) {
       keepUnreadable(json ?? JSON.stringify(record), `the banks (${errorText(e)})`, problems);
       return { samples, banks: [], bankIndex: 0, programIndex: 0, problems };
@@ -186,8 +206,12 @@ export class Persistence {
   }
 
   private async putPrograms(store: Store): Promise<void> {
+    const places: Record<string, Place> = {};
+    for (const s of store.samples.values()) {
+      places[s.id] = { bankId: s.bankId, slot: s.slot, keygroups: s.keygroups };
+    }
     const record: ProgramsRecord = { banks: store.banks, bankIndex: store.bankIndex, programIndex: store.programIndex,
-      sampleOrder: [...store.samples.keys()] };
+      sampleOrder: [...store.samples.keys()], places };
     localStorage.setItem(PROGRAMS_STORAGE, JSON.stringify(record));
   }
 }

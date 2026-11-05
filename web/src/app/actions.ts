@@ -5,11 +5,7 @@ import { memoryToZip, zipToMemory } from '../model/memory';
 import { usedStart } from '../model/points';
 import { writtenEdits } from '../model/render';
 import { S612_KEYGROUP, diskFromSample, sampleFromDisk } from '../model/disk';
-import {
-  dumpFromSample, dumpWithParams, sampleFromDump, sampleFromWav, wavFromSample, wavKeygroups, wavSlot,
-} from '../model/convert';
-import { byProgram } from '../model/store';
-import type { ProgramKeygroup, ProgramLoad } from '../model/store';
+import { dumpFromSample, dumpWithParams, sampleFromDump, sampleFromWav, wavFromSample } from '../model/convert';
 import { LOAD_ALL_PROGRAMS, LOAD_NO_PROGRAMS, LOAD_SLOT_FILE, LOAD_SLOT_OFF } from './settings';
 import { defaultSound, newId } from '../model/mapping';
 import { plainRecipe } from '../model/recipe';
@@ -54,23 +50,20 @@ export class Actions {
    * Loads audio files as samples. The file is kept as the original; what is loaded starts out normalized, and at
    * the nearest of the sampler's rates with RATE ON LOAD = SAMPLER, as edits that can be changed. A wav file saved
    * from a sample that came from the sampler is marked as such again, and isn't edited. A wav file saved here comes
-   * back as it was, without those edits: its points, scan mode, direction, sound, and its keygroups in the current
-   * bank's programs by number.
+   * back as it was, without those edits: its points, scan mode, direction, sound, slot and keygroups.
    *
    * An S700/X7000 disk image (.qd) brings its sample as the sampler has it, with its sound, and its keygroups in the
    * programs it was in on the sampler. An S612 disk's sample loads as a file does, in a program of its own.
    *
    * As the sampler loads a disk, a file goes in a slot of the current bank (LOAD SLOT): the slot it was saved from
    * (a wav file saved here knows it, a disk doesn't) or else the first free one, or the slot set, the next files in
-   * the slots after it; or none. Its keygroups go in the programs LOAD PROG says: all, one, or none (store
-   * addSampleToSlot).
+   * the slots after it; or none. A sample that was in that slot is left in no bank. The sample keeps the keygroups
+   * LOAD PROG says: all, those of one program, or none.
    */
   async loadFiles(files: File[]): Promise<void> {
-    const { store, lcd, renderer, settings } = this.app;
+    const { store, lcd, renderer, settings, midi } = this.app;
     let loaded = 0;
-    const load: ProgramLoad = settings.loadPrograms === LOAD_ALL_PROGRAMS ? 'all'
-      : settings.loadPrograms === LOAD_NO_PROGRAMS ? 'none' : settings.loadPrograms - 1;
-    /** where a file goes, null for no slot */
+    /** where a file goes, null for no slot of the bank */
     const slotFor = (fileSlot: number | null): number | null => {
       if (settings.loadSlot === LOAD_SLOT_OFF) {
         return null;
@@ -82,23 +75,28 @@ export class Actions {
       if (fileSlot !== null && fileSlot < settings.slotCount) {
         return fileSlot;
       }
-      const free = store.bank.slots.slice(0, settings.slotCount).indexOf(null);
-      return free >= 0 ? free : null;
+      return store.freeSlot(store.bank, settings.slotCount);
     };
-    const place = (fileName: string, sample: Sample, keygroups: ProgramKeygroup[] | null, fileSlot: number | null) => {
-      const slot = slotFor(fileSlot);
-      if (slot !== null) {
-        store.addSampleToSlot(sample, slot, keygroups, load);
-      } else if (keygroups) {
-        store.addSampleWithKeygroups(sample, keygroups, load);
-      } else {
-        store.addSample(sample);
+    const programs = (sample: Sample) => [...new Set(sample.keygroups.map((k) => k.program))].sort((a, b) => a - b)
+      .map((p) => `P${p + 1}`).join(' ');
+    const placed = (fileName: string, sample: Sample, out: Sample | null) => {
+      const bank = store.bankOf(sample);
+      midi.logLine(`${fileName}: ${bank ? `in slot ${sample.slot! + 1} of ${bank.name}, ` : ''}`
+        + `${!bank ? (settings.loadSlot === LOAD_SLOT_OFF ? 'in no bank' : `no free slot in ${store.bank.name}, in no `
+          + 'bank') : sample.keygroups.length ? `in ${programs(sample)}` : 'in no program'}`
+        + (!bank && sample.keygroups.length ? ` (its keygroups in ${programs(sample)} kept)` : '')
+        + (out ? `; ${out.name}, in that slot before, is in no bank now` : ''));
+    };
+    const place = (fileName: string, sample: Sample) => {
+      // LOAD PROG: the keygroups loaded, as the sampler's Pall, Pn and P**
+      if (settings.loadPrograms === LOAD_NO_PROGRAMS) {
+        sample.keygroups = [];
+      } else if (settings.loadPrograms !== LOAD_ALL_PROGRAMS) {
+        sample.keygroups = sample.keygroups.filter((k) => k.program === settings.loadPrograms - 1);
       }
-      const programs = store.programs.flatMap((p, i) => (p.keygroups.some((k) => k.sampleId === sample.id)
-        ? [`P${i + 1}`] : []));
-      this.app.midi.logLine(`${fileName}: ${slot === null ? (settings.loadSlot === LOAD_SLOT_OFF ? 'in no slot'
-        : `no free slot in ${store.bank.name}, in no slot`) : `in slot ${slot + 1}`} of ${store.bank.name}, `
-        + (programs.length ? `in ${programs.join(' ')}` : 'in no program'));
+      const slot = slotFor(sample.slot);
+      const out = slot === null ? store.addSample(sample) : store.addSample(sample, store.bank, slot);
+      placed(fileName, sample, out);
     };
     for (const file of files) {
       const name = store.uniqueSampleName(file.name.replace(/\.[^.]+$/, ''));
@@ -107,11 +105,11 @@ export class Actions {
         const bytes = new Uint8Array(buffer);
         const disk = isQdImage(bytes) ? sampleFromDisk(bytes, name) : null;
         for (const note of disk?.notes ?? []) {
-          this.app.midi.logLine(`${file.name}: ${note}`, 'warn');
+          midi.logLine(`${file.name}: ${note}`, 'warn');
         }
         if (disk?.format === 'S700') {
           renderer.adopt([disk.sample]); // as it is, nothing to render
-          place(file.name, disk.sample, byProgram(disk.programs), null);
+          place(file.name, disk.sample);
           loaded++;
           continue;
         }
@@ -125,7 +123,7 @@ export class Actions {
           const { rate, data } = await decodeAudioFile(buffer);
           sample = { id: newId(), name, source: data, sourceRate: rate, recipe: plainRecipe(), fromSampler: false,
             rate, data, start: 0, end: data.length, loopStart: 0, loopEnd: data.length, loopMode: 'off',
-            reverse: false, sound: defaultSound() };
+            reverse: false, sound: defaultSound(), bankId: null, slot: null, keygroups: [] };
         }
         // a wav file saved here is as it sounded, its settings with it: loaded as it is
         if (!sample.fromSampler && !wav?.meta.settings) {
@@ -138,18 +136,16 @@ export class Actions {
         renderer.adopt([sample]);
         if (disk) {
           // the S612 has no programs: the X7000 gives its sample a program of its own
-          store.addSampleToOwnProgram(sample, S612_KEYGROUP);
           const slot = slotFor(null);
-          if (slot !== null) {
-            store.setSlot(slot, sample.id);
-          }
+          const out = slot === null ? null : store.sampleAt(store.bank, slot);
+          store.addSampleToOwnProgram(sample, S612_KEYGROUP, slot);
+          placed(file.name, sample, out);
         } else {
-          // a wav file saved here: as it was in the programs (of the bank it was saved from), in the current bank's
-          place(file.name, sample, wav ? wavKeygroups(wav) : null, wav ? wavSlot(wav) : null);
+          place(file.name, sample);
         }
         loaded++;
       } catch (e) {
-        this.app.midi.logLine(`Could not load ${file.name}: ${errorText(e)}`, 'error');
+        midi.logLine(`Could not load ${file.name}: ${errorText(e)}`, 'error');
         lcd.flash(`CAN'T LOAD ${file.name}`);
       }
     }
@@ -321,7 +317,8 @@ export class Actions {
   }
 
   /**
-   * Receives a slot's sample into the slot of the bank, with its parameters, the dump logged
+   * Receives a slot's sample into the slot of the bank, with its parameters and keygroups, the dump logged. A sample
+   * in that slot of the bank before is left in no bank.
    *
    * @param label for the LCD while receiving
    * @param skipUnused a slot in no program isn't received but emptied in the bank, null returned
@@ -335,8 +332,9 @@ export class Actions {
     const reply = await this.slotParams(slot, signal);
     if (reply?.checksumOk && reply.slot === slot && inNoProgram(reply.params)) {
       if (skipUnused) {
-        midi.logLine(`Slot ${slot + 1} is in no program on the sampler (an empty slot is so too), not received`);
-        store.clearSlot(slot, bank);
+        midi.logLine(`Slot ${slot + 1} is in no program on the sampler (an empty slot is so too), not received`
+          + (store.sampleAt(bank, slot) ? `: ${store.sampleAt(bank, slot)!.name} is in no bank now` : ''));
+        store.clearSlot(bank, slot);
         return null;
       }
       midi.logLine(`Slot ${slot + 1} is in no program on the sampler`, 'warn');
@@ -384,10 +382,12 @@ export class Actions {
         midi.logLine(`${name}: ${note}`, 'warn');
       }
       sample = got.sample;
-      store.addSampleToSlot(sample, slot, byProgram(got.programs), 'all', bank);
     } else {
       sample = sampleFromDump(r, name);
-      store.addSampleToSlot(sample, slot, null, 'all', bank);
+    }
+    const out = store.addSample(sample, bank, slot);
+    if (out) {
+      midi.logLine(`${out.name}, in slot ${slot + 1} of ${bank.name} before, is in no bank now`);
     }
     return { sample, ok: r.ok };
   }
@@ -550,7 +550,7 @@ export class Actions {
   }
 
   /**
-   * Sends the selected sample to the slot. If the sampler answers a request for the slot's parameters, all of the
+   * Sends the selected sample to its slot. If the sampler answers a request for the slot's parameters, all of the
    * sample is sent if it fits, as a disk has it, then its parameters: START, END, loop, scan mode, sound and its key
    * ranges in the programs (a sample in no program keeps the slot's key ranges, root and fine tune). Else the part
    * from START to END is sent, and the log says what to set on the sampler.
@@ -569,14 +569,22 @@ export class Actions {
       lcd.flash('NO SAMPLE SELECTED');
       return;
     }
+    const slot = sample.slot;
+    if (slot === null) {
+      lcd.flash('IT HAS NO SLOT, SET ONE');
+      return;
+    }
+    if (slot >= settings.slotCount) {
+      lcd.flash(`SLOT ${slot + 1}: THE SAMPLER HAS ${settings.slotCount}`);
+      return;
+    }
     if (!this.midiReady()) {
       return;
     }
-    const slot = settings.slot;
     this.setBusy('send');
     this.abort = new AbortController();
     try {
-      const r = await this.sendSlot(sample, slot, store.bank, this.abort.signal, `SENDING SLOT ${slot + 1}`);
+      const r = await this.sendSlot(sample, slot, this.abort.signal, `SENDING SLOT ${slot + 1}`);
       lcd.release();
       if (r.cancelled) {
         lcd.flash('STOPPED WAITING');
@@ -598,8 +606,8 @@ export class Actions {
   }
 
   /**
-   * Sends the samples in the current bank's slots to those slots on the sampler, one after the other as SEND does,
-   * with their key ranges in the bank's programs. Slots without a sample here are left as they are on the sampler.
+   * Sends the samples in the current bank to their slots on the sampler, one after the other as SEND does, with
+   * their key ranges. Slots without a sample here are left as they are on the sampler.
    * A slot that fails is logged and passed over. Pressing it (or SEND) again stops it.
    */
   async sendBank(): Promise<void> {
@@ -613,10 +621,7 @@ export class Actions {
     const { lcd, settings, midi, store } = this.app;
     const bank = store.bank;
     const count = settings.slotCount;
-    const slots = bank.slots.slice(0, count).flatMap((id, slot) => {
-      const sample = id ? store.samples.get(id) : undefined;
-      return sample ? [{ slot, sample }] : [];
-    });
+    const slots = store.samplesIn(bank).filter((s) => s.slot! < count).map((sample) => ({ slot: sample.slot!, sample }));
     if (slots.length === 0) {
       lcd.flash('NO SAMPLES IN THE SLOTS');
       return;
@@ -636,8 +641,7 @@ export class Actions {
       for (const [k, { slot, sample }] of slots.entries()) {
         this.abort.signal.throwIfAborted();
         try {
-          const r = await this.sendSlot(sample, slot, bank, this.abort.signal,
-            `SEND BANK ${k + 1}/${slots.length}`);
+          const r = await this.sendSlot(sample, slot, this.abort.signal, `SEND BANK ${k + 1}/${slots.length}`);
           if (r.cancelled) {
             throw new DOMException('Cancelled', 'AbortError');
           }
@@ -674,15 +678,15 @@ export class Actions {
   }
 
   /**
-   * Sends a sample to a slot, with its parameters and its key ranges in the bank's programs if the sampler answers
-   * for them, the transfer logged
+   * Sends a sample to a slot, with its parameters and its key ranges if the sampler answers for them, the transfer
+   * logged
    *
    * @param label for the LCD while sending
    * @throws Error if it fails, the AbortError if cancelled before sending
    */
-  private async sendSlot(sample: Sample, slot: number, bank: Bank, signal: AbortSignal, label: string)
+  private async sendSlot(sample: Sample, slot: number, signal: AbortSignal, label: string)
     : Promise<{ cancelled: boolean; replies: number; numBlocks: number }> {
-    const { store, lcd, settings, midi } = this.app;
+    const { lcd, settings, midi } = this.app;
     lcd.hold(`PREPARING ${sample.name}`);
     await this.waitForAcks();
     const options = { slot, filler: { fillerPerBlock: settings.fillerPerBlock } };
@@ -690,13 +694,11 @@ export class Actions {
       id: settings.paramsId, search: false, signal })).reply;
     let dump: Dump;
     let params: S700SampleParams | null = null;
-    /** in no program here: the sampler keeps the slot's key ranges, which then play this sample */
-    let slotRanges = false;
     if (has?.checksumOk && has.slot === slot) {
-      const made = await dumpWithParams(sample, bank.programs, options, resampleInBrowser);
+      const made = await dumpWithParams(sample, options, resampleInBrowser);
       ({ dump, params } = made);
       if (!made.inProgram) {
-        slotRanges = true;
+        // in no program here: the sampler keeps the slot's key ranges, which then play this sample
         Object.assign(params, { programs: has.params.programs, recordPitch: has.params.recordPitch,
           fineTune: has.params.fineTune });
         made.notes.push('In no program here: it keeps the slot\'s key ranges, root and fine tune on the sampler');
@@ -721,11 +723,6 @@ export class Actions {
     });
     midi.logLine(`Sent ${sample.name} to slot ${slot + 1}: ${r.bytes} bytes, ${r.numBlocks} blocks, `
       + `${r.replies} replies from the sampler`);
-    if (!r.cancelled && slotRanges) {
-      store.assignSlot(slot, sample.id, bank);
-    } else if (!r.cancelled) {
-      store.setSlot(slot, sample.id, bank);
-    }
     if (params && r.cancelled) {
       midi.logLine('Stopped: the parameters weren\'t sent', 'warn');
     } else if (params) {
@@ -768,13 +765,11 @@ export class Actions {
   }
 
   /**
-   * The sample as it plays, with its loop for other programs, and its settings and keygroups in the current bank's
-   * programs for this one, marked if it came from the sampler
+   * The sample as it plays, with its loop for other programs, and its settings, slot and keygroups for this one,
+   * marked if it came from the sampler
    */
   saveWav(sample: Sample): void {
-    const { store } = this.app;
-    const slot = store.bank.slots.indexOf(sample.id);
-    download(wavFromSample(sample, store.programs, slot < 0 ? null : slot), `${sample.name}.wav`, 'audio/wav');
+    download(wavFromSample(sample), `${sample.name}.wav`, 'audio/wav');
   }
 
   /**
@@ -782,9 +777,9 @@ export class Actions {
    * it, with its sound and its keygroups in the programs. What had to be changed is logged in the MIDI view.
    */
   async saveDisk(sample: Sample): Promise<void> {
-    const { store, lcd, midi } = this.app;
+    const { lcd, midi } = this.app;
     try {
-      const { bytes, notes } = await diskFromSample(sample, store.programs, resampleInBrowser);
+      const { bytes, notes } = await diskFromSample(sample, resampleInBrowser);
       for (const note of notes) {
         midi.logLine(`${sample.name}.qd: ${note}`);
       }
@@ -816,6 +811,9 @@ export class Actions {
       }
       this.app.player.allNotesOff(true);
       store.replaceAll(memory.samples, memory.banks, memory.bankIndex, memory.programIndex);
+      for (const note of memory.notes ?? []) {
+        this.app.midi.logLine(`${file.name}: ${note}`, 'warn');
+      }
       lcd.flash(`LOADED ${memory.samples.length} SAMPLES`);
     } catch (e) {
       this.app.midi.logLine(`Could not load ${file.name}: ${errorText(e)}`, 'error');

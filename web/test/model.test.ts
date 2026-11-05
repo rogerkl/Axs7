@@ -7,15 +7,15 @@ import {
   dumpFromSample, sampleFromDump, sampleFromWav, samplerFit, wavFromSample, wavKeygroups, wavSlot,
 } from '../src/model/convert';
 import {
-  audibleKeygroups, defaultSound, newBank, newKeygroup, newProgram, normalizeProgram, voicesFor,
+  audibleKeygroups, defaultSound, migrateBanks, newBank, newKeygroup, normalizeKeygroup, voicesFor,
 } from '../src/model/mapping';
 import { noteName, parseNote } from '../src/model/notes';
 import { cutoffHz, engineParams, lfoRate, releaseTime } from '../src/model/params';
 import { isPortion, movePoint, normalizeSample, usedStart } from '../src/model/points';
 import { attackRoom, isTwelveBit, normalizeData, portionPeak, quantize12Data, to12BitCode } from '../src/model/edit';
 import { isEdited, plainRecipe } from '../src/model/recipe';
-import { Store, byProgram } from '../src/model/store';
-import type { Program, Sample } from '../src/model/types';
+import { Store } from '../src/model/store';
+import type { OldBank, Program, Sample } from '../src/model/types';
 import { fixture, testSine } from './helpers';
 
 const sample = (overrides: Partial<Sample> = {}): Sample => {
@@ -23,7 +23,7 @@ const sample = (overrides: Partial<Sample> = {}): Sample => {
   const rate = overrides.rate ?? BW16.rate;
   return { id: 's1', name: 'SINE', source: data, sourceRate: rate, recipe: plainRecipe(), fromSampler: false, rate,
     data, start: 0, end: data.length, loopStart: 0, loopEnd: 5900, loopMode: 'forward', reverse: false,
-    sound: defaultSound(), ...overrides };
+    sound: defaultSound(), bankId: null, slot: null, keygroups: [], ...overrides };
 };
 
 describe('notes', () => {
@@ -60,14 +60,15 @@ describe('params', () => {
 });
 
 describe('keygroups', () => {
+  const newProgram = (name: string): Program => ({ id: name, name, keygroups: [] });
+
   test('notes play the keygroups covering them, at the pitch from the root key', () => {
     const program = newProgram('P');
     const samples = new Map([['a', sample({ id: 'a' })], ['b', sample({ id: 'b' })]]);
     program.keygroups.push(
-      newKeygroup('a', { low: 36, high: 59, root: 48 }),
-      newKeygroup('b', { low: 60, high: 96, root: 60, semitones: 12, cents: 50 }),
-      newKeygroup(null, { low: 0, high: 127 }), // no sample, plays nothing
-      newKeygroup('missing'),
+      newKeygroup('a', 0, { low: 36, high: 59, root: 48 }),
+      newKeygroup('b', 0, { low: 60, high: 96, root: 60, semitones: 12, cents: 50 }),
+      newKeygroup('missing', 0),
     );
     expect(voicesFor(program, samples, 30)).toEqual([]);
     const [low] = voicesFor(program, samples, 60 - 12);
@@ -81,7 +82,7 @@ describe('keygroups', () => {
 
   test('constant pitch plays every key at the root\'s pitch, transposed and tuned', () => {
     const program = newProgram('P');
-    program.keygroups.push(newKeygroup('a', { root: 50, semitones: 2, fixedPitch: true }));
+    program.keygroups.push(newKeygroup('a', 0, { root: 50, semitones: 2, fixedPitch: true }));
     const samples = new Map([['a', sample({ id: 'a' })]]);
     for (const note of [36, 50, 90]) {
       expect(voicesFor(program, samples, note)[0].ratio).toBeCloseTo(2 ** (2 / 12));
@@ -90,7 +91,7 @@ describe('keygroups', () => {
 
   test('muted keygroups don\'t play, and only the soloed ones do when any is', () => {
     const program = newProgram('P');
-    const [a, b, c] = ['a', 'b', 'c'].map((id) => newKeygroup(id, { low: 36, high: 96 }));
+    const [a, b, c] = ['a', 'b', 'c'].map((id) => newKeygroup(id, 0, { low: 36, high: 96 }));
     program.keygroups.push(a, b, c);
     const samples = new Map(['a', 'b', 'c'].map((id) => [id, sample({ id })]));
     const ids = (muted: string[], soloed: string[]) =>
@@ -105,116 +106,125 @@ describe('keygroups', () => {
     expect(voices.map((v) => v.sample.id)).toEqual(['b', 'c']);
   });
 
-  test('programs from before the sound moved to the samples lose it, and keygroups their level', () => {
-    const old = { id: 'p', name: 'OLD', cutoff: 64, ampEnv: { attack: 1 },
-      keygroups: [{ id: 'k', sampleId: 's1', low: 36, high: 60, root: 48, semitones: 0, cents: 5, level: 70 }] };
-    expect(normalizeProgram(old as never)).toEqual({ id: 'p', name: 'OLD', keygroups: [
-      { id: 'k', sampleId: 's1', low: 36, high: 60, root: 48, semitones: 0, cents: 5, fixedPitch: false }] });
-    const oldSample = { ...sample(), sound: undefined } as unknown as Sample;
-    expect(normalizeSample(oldSample).sound).toEqual(defaultSound());
+  test('keygroups from before have their level left out, and a program from 0 to 31', () => {
+    const old = { id: 'k', sampleId: 'x', program: 3, low: 36, high: 60, root: 48, semitones: 0, cents: 5, level: 70 };
+    expect(normalizeKeygroup(old as never, 's1')).toEqual({ id: 'k', sampleId: 's1', program: 3, low: 36, high: 60,
+      root: 48, semitones: 0, cents: 5, fixedPitch: false });
+    expect(normalizeKeygroup({ program: 32 }, 's1')).toBeNull();
+    const oldSample = { ...sample(), sound: undefined, bankId: undefined, keygroups: undefined } as unknown as Sample;
+    expect(normalizeSample(oldSample)).toMatchObject({ sound: defaultSound(), bankId: null, slot: null, keygroups: [] });
   });
 });
 
 describe('store', () => {
-  test('a program without keygroups gets one for the first sample', () => {
+  const range = (low: number) => ({ low, high: low + 11, root: 60, semitones: 0, cents: 0, fixedPitch: false });
+  /** a sample with keygroups in programs, by number, from 0 */
+  const withKeygroups = (id: string, ...programs: number[]) => sample({ id, name: id.toUpperCase(),
+    keygroups: programs.map((p) => newKeygroup(id, p, range(36 + 12 * p))) });
+  const inPrograms = (store: Store, count = 4) => store.programs.slice(0, count)
+    .map((p) => p.keygroups.map((k) => k.sampleId));
+
+  test('a sample in the current bank, in no program there, goes in the current program if that is empty', () => {
     const store = new Store();
     const events: string[] = [];
     for (const e of ['samples', 'keygroups', 'program', 'selection'] as const) {
       store.on(e, () => events.push(e));
     }
-    store.addSample(sample());
+    store.addSample(sample(), store.bank, 0);
     expect(store.program.keygroups).toHaveLength(1);
-    expect(store.program.keygroups[0]).toMatchObject({ sampleId: 's1', low: 0, high: 127, root: 60 });
+    expect(store.program.keygroups[0]).toMatchObject({ sampleId: 's1', program: 0, low: 0, high: 127, root: 60 });
     expect(store.selectedSampleId).toBe('s1');
     expect(events).toContain('keygroups');
-    store.addSample(sample({ id: 's2' }));
+    store.addSample(sample({ id: 's2' }), store.bank, 1);
     expect(store.program.keygroups).toHaveLength(1);
+    // in no bank: no program plays it
+    store.selectProgram(3);
+    store.addSample(sample({ id: 's3', slot: 4 }));
+    expect([store.program.keygroups, store.samples.get('s3')!.slot]).toEqual([[], 4]);
   });
 
-  test('removing a sample leaves its keygroups without one, and its slots empty, in every bank', () => {
+  test('a slot of a bank has one sample: one put there takes it, the other is in no bank with its keygroups', () => {
     const store = new Store();
-    store.addSample(sample());
-    store.addSample(sample({ id: 's2' }));
-    store.setSlot(3, 's1');
+    store.addSample(withKeygroups('a', 0, 3), store.bank, 2);
+    store.addSample(withKeygroups('b', 3), store.bank, 5);
+    expect(store.samplesIn(store.bank).map((x) => [x.id, x.slot])).toEqual([['a', 2], ['b', 5]]);
+    expect(inPrograms(store)).toEqual([['a'], [], [], ['a', 'b']]);
+    // slot 3 again, as RECEIVE or a file loaded there
+    const out = store.addSample(withKeygroups('c', 1), store.bank, 2);
+    expect(out?.id).toBe('a');
+    expect(inPrograms(store)).toEqual([[], ['c'], [], ['b']]);
+    expect(store.samples.get('a')).toMatchObject({ bankId: null, slot: 2 });
+    expect(store.samples.get('a')!.keygroups.map((k) => k.program)).toEqual([0, 3]); // kept, for when it is back
+    // emptied, as an empty slot on the sampler: its sample in no bank, still in memory
+    store.clearSlot(store.bank, 5);
+    expect([inPrograms(store)[3], store.samples.get('b')!.bankId]).toEqual([[], null]);
+    // back in a bank, it plays in its programs there again
+    store.place('a', store.bank, 4);
+    expect(inPrograms(store)).toEqual([['a'], ['c'], [], ['a']]);
+  });
+
+  test('a sample moved to another bank takes its keygroups along, and the sample in that slot there leaves it', () => {
+    const store = new Store();
+    const one = store.bank;
+    store.addSample(withKeygroups('a', 0, 2), one, 0);
+    store.addSample(withKeygroups('b', 1), one, 1);
+    const two = store.addBank();
+    store.addSample(withKeygroups('c', 2), two, 0);
+    expect(inPrograms(store)).toEqual([[], [], ['c'], []]);
+    // slot 1 of bank 1 to slot 1 of bank 2, which has c: c is in no bank after
+    expect(store.place('a', two, 0)?.id).toBe('c');
+    expect(inPrograms(store)).toEqual([['a'], [], ['a'], []]);
+    expect(store.samples.get('c')!.bankId).toBeNull();
+    store.selectBank(0);
+    expect(inPrograms(store)).toEqual([[], ['b'], [], []]);
+    // a slot within the bank: the sample there leaves the bank
+    store.addSample(withKeygroups('d', 3), one, 4);
+    expect(store.place('b', one, 4)?.id).toBe('d');
+    expect(store.samplesIn(one).map((x) => [x.id, x.slot])).toEqual([['b', 4]]);
+    // to no bank, its slot kept, or a slot given while in no bank
+    store.place('b', null, null);
+    expect(store.samples.get('b')).toMatchObject({ bankId: null, slot: 4 });
+    store.place('b', null, 2);
+    expect(store.samples.get('b')).toMatchObject({ bankId: null, slot: 2 });
+    // the bank a receive began in, though another is current now
+    store.selectBank(1);
+    store.addSample(withKeygroups('e', 0), one, 3);
+    expect([store.programsOf(one)[0].keygroups.map((k) => k.sampleId), inPrograms(store)[0]]).toEqual([['e'], ['a']]);
+    expect(store.freeSlot(one, 6)).toBe(0);
+    expect(store.freeSlot(two, 1)).toBeNull();
+  });
+
+  test('removing a sample takes its keygroups along; removing a bank leaves its samples in none', () => {
+    const store = new Store();
+    store.addSample(withKeygroups('a', 0), store.bank, 0);
+    store.addSample(withKeygroups('b', 0), store.bank, 1);
+    store.removeSample('a');
+    expect([inPrograms(store)[0], store.selectedSampleId]).toEqual([['b'], 'b']);
     store.addBank();
-    store.addSampleToSlot(store.samples.get('s1')!, 0, null);
-    store.removeSample('s1');
-    expect(store.banks.map((b) => [b.programs[0].keygroups[0].sampleId, b.slots[0], b.slots[3]]))
-      .toEqual([[null, null, null], [null, null, null]]);
-    expect(store.selectedSampleId).toBe('s2');
+    store.selectBank(0);
+    store.removeBank();
+    expect(store.banks.map((b) => b.name)).toEqual(['BANK 2']);
+    expect(store.samples.get('b')).toMatchObject({ bankId: null, slot: 1 });
+    expect(store.samples.get('b')!.keygroups).toHaveLength(1);
   });
 
-  test('a received sample goes in the bank\'s slot, with the key ranges the sampler sent, the slot\'s sample before out', () => {
+  test('a keygroup\'s sample is one of its bank\'s, the keygroup goes to it; key ranges stay in order', () => {
     const store = new Store();
-    const range = { low: 36, high: 59, root: 48, semitones: 0, cents: 0, fixedPitch: false };
-    const ranges = (...at: number[]) => Array.from({ length: 32 }, (_, i) => (at.includes(i) ? range : null));
-    store.addSampleToSlot(sample({ id: 'a' }), 2, byProgram(ranges(0, 3)));
-    store.addSampleToSlot(sample({ id: 'b' }), 5, byProgram(ranges(3)));
-    expect(store.bank.slots.slice(0, 6)).toEqual([null, null, 'a', null, null, 'b']);
-    const inPrograms = () => store.programs.slice(0, 4).map((p) => p.keygroups.map((k) => k.sampleId));
-    expect(inPrograms()).toEqual([['a'], [], [], ['a', 'b']]);
-    // slot 3 again: the sampler sent other key ranges for it
-    store.addSampleToSlot(sample({ id: 'c' }), 2, byProgram(ranges(1)));
-    expect(inPrograms()).toEqual([[], ['c'], [], ['b']]);
-    expect(store.samples.has('a')).toBe(true);
-    // without the sampler's parameters: the slot's keygroups, now with the new sample
-    store.addSampleToSlot(sample({ id: 'd' }), 2, null);
-    expect(inPrograms()).toEqual([[], ['d'], [], ['b']]);
-    expect(store.bank.slots[2]).toBe('d');
-    // only in the current bank
-    store.addBank();
-    store.addSampleToSlot(sample({ id: 'e' }), 2, null);
-    expect([store.bank.slots[2], store.banks[0].slots[2]]).toEqual(['e', 'd']);
-    expect(store.program.keygroups.map((k) => k.sampleId)).toEqual(['e']); // in no program: the empty current one
-    // emptied, as an empty slot on the sampler: its sample out of the bank's programs, still in memory
-    store.addSampleToSlot(sample({ id: 'g' }), 7, byProgram(ranges(5, 6)));
-    store.clearSlot(7);
-    expect([store.bank.slots[7], store.programs[5].keygroups, store.samples.has('g')]).toEqual([null, [], true]);
-    // into the bank a receive began in, though another is current now
-    store.addSampleToSlot(sample({ id: 'f' }), 4, byProgram(ranges(0)), 'all', store.banks[0]);
-    expect([store.banks[0].slots[4], store.banks[0].programs[0].keygroups.map((k) => k.sampleId)]).toEqual(['f', ['f']]);
-    expect([store.bank.slots[4], store.programs[0].keygroups.map((k) => k.sampleId)]).toEqual([null, ['e']]);
-  });
-
-  test('loading into a slot, as the sampler loads a disk: all programs, one, or none', () => {
-    const store = new Store();
-    const range = (low: number) => ({ low, high: low + 11, root: 60, semitones: 0, cents: 0, fixedPitch: false });
-    const where = () => store.programs.slice(0, 4).map((p) => p.keygroups.map((k) => `${k.sampleId} ${k.low}`));
-    // the slot has a sample in P1 and P2
-    store.addSampleToSlot(sample({ id: 'old' }), 2, [{ program: 0, range: range(36) }, { program: 1, range: range(48) }]);
-    const file = [{ program: 0, range: range(60) }, { program: 2, range: range(72) }]; // in P1 and P3
-    // into P2, which the file hasn't: no program changes, the slot's key ranges play this sample
-    store.addSampleToSlot(sample({ id: 'a' }), 2, file, 1);
-    expect(where()).toEqual([['a 36'], ['a 48'], [], []]);
-    // into P3: only P3 from the file
-    store.addSampleToSlot(sample({ id: 'b' }), 2, file, 2);
-    expect(where()).toEqual([['b 36'], ['b 48'], ['b 72'], []]);
-    // all: as the file has them
-    store.addSampleToSlot(sample({ id: 'c' }), 2, file, 'all');
-    expect(where()).toEqual([['c 60'], [], ['c 72'], []]);
-    // none: the slot's
-    store.addSampleToSlot(sample({ id: 'd' }), 2, [{ program: 3, range: range(24) }], 'none');
-    expect(where()).toEqual([['d 60'], [], ['d 72'], []]);
-    expect(store.bank.slots[2]).toBe('d');
-    // picked by hand: the slot's key ranges are its now; NONE leaves them with the sample that was there
-    store.addSample(sample({ id: 'h' }));
-    store.assignSlot(2, 'h');
-    expect(where()).toEqual([['h 60'], [], ['h 72'], []]);
-    store.assignSlot(2, null);
-    expect([store.bank.slots[2], where()[0]]).toEqual([null, ['h 60']]);
-    // in no slot, only one program
-    store.addSampleWithKeygroups(sample({ id: 'e' }), file, 2);
-    expect(where()[2]).toEqual(['h 72', 'e 72']);
-    expect(where()[0]).toEqual(['h 60']);
-  });
-
-  test('key range stays in order', () => {
-    const store = new Store();
-    store.addKeygroup(newKeygroup(null, { id: 'k', low: 40, high: 50 }));
+    store.addSample(withKeygroups('a'), store.bank, 0);
+    store.addSample(withKeygroups('b'), store.bank, 1);
+    store.addSample(withKeygroups('c')); // in no bank
+    const kg = newKeygroup('a', 0, { id: 'k', low: 40, high: 50 });
+    expect(store.addKeygroup(newKeygroup('c', 0))).toBe(false);
+    expect(store.addKeygroup(kg)).toBe(true);
     store.updateKeygroup('k', { low: 55 });
     expect(store.selectedKeygroup).toMatchObject({ low: 55, high: 55 });
     store.updateKeygroup('k', { high: 30 });
     expect(store.selectedKeygroup).toMatchObject({ low: 30, high: 30 });
+    store.updateKeygroup('k', { sampleId: 'b' });
+    expect([store.samples.get('a')!.keygroups.length, store.samples.get('b')!.keygroups.map((k) => k.id)])
+      .toEqual([1, ['k']]); // a's own from addSample, as the current program was empty
+    store.updateKeygroup('k', { sampleId: 'c' });
+    expect(store.program.keygroups.find((k) => k.id === 'k')!.sampleId).toBe('b');
   });
 
   test('banks of 32 programs, and the same program number in another bank', () => {
@@ -223,29 +233,61 @@ describe('store', () => {
     store.selectProgram(40);
     expect(store.programIndex).toBe(31);
     store.selectProgram(4);
-    store.addKeygroup(newKeygroup(null));
+    store.addSample(sample(), store.bank, 0);
     store.addBank();
     expect([store.bankIndex, store.bank.name, store.programIndex, store.program.keygroups]).toEqual([1, 'BANK 2', 4, []]);
     store.selectBank(0);
     expect(store.program.keygroups).toHaveLength(1);
+    store.updateProgram({ name: 'LEAD' });
+    expect([store.program.name, store.banks[1].programs[4].name]).toEqual(['LEAD', 'PROGRAM 5']);
     store.clearProgram();
     expect(store.program.keygroups).toEqual([]);
     store.removeBank();
     store.removeBank();
     expect(store.banks).toHaveLength(1);
-    expect(store.uniqueSampleName('A')).toBe('A');
-    store.addSample(sample({ name: 'A' }));
-    expect(store.uniqueSampleName('A')).toBe('A 2');
+    expect(store.uniqueSampleName('SINE')).toBe('SINE 2');
+  });
+
+  test('replacing everything: a sample in a bank that isn\'t there, or in a slot taken, is in no bank', () => {
+    const store = new Store();
+    const bank = newBank('B');
+    store.replaceAll([sample({ id: 'a', bankId: bank.id, slot: 0 }), sample({ id: 'b', bankId: bank.id, slot: 0 }),
+      sample({ id: 'c', bankId: 'gone', slot: 1 }), sample({ id: 'd', bankId: bank.id, slot: 1 })], [bank]);
+    expect([...store.samples.values()].map((x) => [x.id, x.bankId && 'B', x.slot])).toEqual([['a', 'B', 0],
+      ['b', null, 0], ['c', null, 1], ['d', 'B', 1]]);
+  });
+
+  test('banks from before samples had their bank, slot and keygroups', () => {
+    const samples = ['a', 'b', 'c', 'd'].map((id) => sample({ id, name: id.toUpperCase() }));
+    const kg = (sampleId: string | null, low: number) => ({ id: `${sampleId}${low}`, sampleId, low, high: low + 5,
+      root: 60, semitones: 0, cents: 0, fixedPitch: false });
+    const old: OldBank[] = [
+      { id: 'one', name: 'ONE', slots: ['a', null, 'b'],
+        programs: [{ name: 'P', keygroups: [kg('a', 36), kg('b', 48), kg('c', 60), kg(null, 1)] }, {}, { keygroups: [kg('a', 72)] }] },
+      { id: 'two', name: 'TWO', slots: ['a', 'd'], programs: [{ keygroups: [kg('a', 40), kg('d', 50)] }] },
+    ];
+    const { banks, notes } = migrateBanks(old, samples);
+    expect(banks.map((b) => [b.id, b.name, b.programs.length, b.programs[0].name])).toEqual([['one', 'ONE', 32, 'P'],
+      ['two', 'TWO', 32, 'PROGRAM 1']]);
+    const where = samples.map((x) => [x.id, x.bankId, x.slot, x.keygroups.map((k) => `P${k.program + 1} ${k.low}`)]);
+    expect(where).toEqual([
+      ['a', 'one', 0, ['P1 36', 'P3 72']],
+      ['b', 'one', 2, ['P1 48']],
+      ['c', 'one', 1, ['P1 60']], // in a program, in no slot: in a free one
+      ['d', 'two', 1, ['P1 50']],
+    ]);
+    expect(notes).toEqual(['A was in ONE and TWO: a sample is in one bank now, it is in ONE',
+      'P1 of TWO played A, which is in ONE: that keygroup is left out']);
   });
 });
 
 describe('keygroups in the store: mute, solo, move', () => {
   const setUp = () => {
     const store = new Store();
-    store.addBank();
-    store.selectBank(0);
-    store.addKeygroup(newKeygroup('a', { low: 36, high: 59 }));
-    store.addKeygroup(newKeygroup('b', { low: 48, high: 96 }));
+    store.addSample(sample({ id: 'x' }), store.bank, 0);
+    store.removeKeygroup(store.program.keygroups[0].id);
+    store.addKeygroup(newKeygroup('x', 0, { low: 36, high: 59 }));
+    store.addKeygroup(newKeygroup('x', 0, { low: 48, high: 96 }));
     const [a, b] = store.program.keygroups;
     return { store, a, b };
   };
@@ -271,23 +313,22 @@ describe('keygroups in the store: mute, solo, move', () => {
     expect(store.muted.size).toBe(0);
   });
 
-  test('a keygroup moves to another program of this bank or another, as it is', () => {
+  test('a keygroup moves to another program of its bank, as it is', () => {
     const { store, a, b } = setUp();
     store.toggleMute(a.id);
-    expect(store.moveKeygroup(a.id, 1, 4)).toBe(true);
+    expect(store.moveKeygroup(a.id, 4)).toBe(true);
     expect(store.program.keygroups).toEqual([b]);
-    expect(store.banks[1].programs[4].keygroups).toEqual([{ ...a }]);
+    expect(store.programs[4].keygroups).toEqual([{ ...a, program: 4 }]);
     expect(store.muted.size).toBe(0);
     expect(store.selectedKeygroupId).toBe(b.id);
-    expect(store.moveKeygroup(b.id, 0, 2)).toBe(true);
-    expect(store.banks[0].programs[2].keygroups).toEqual([b]);
+    expect(store.moveKeygroup(b.id, 2)).toBe(true);
     expect(store.program.keygroups).toEqual([]);
     expect(store.selectedKeygroupId).toBeNull();
     // not to where it is, nowhere, and not a keygroup that isn't in the current program
     store.selectProgram(2);
-    expect(store.moveKeygroup(b.id, 0, 2)).toBe(false);
-    expect(store.moveKeygroup(b.id, 5, 0)).toBe(false);
-    expect(store.moveKeygroup(a.id, 0, 0)).toBe(false);
+    expect(store.moveKeygroup(b.id, 2)).toBe(false);
+    expect(store.moveKeygroup(b.id, 40)).toBe(false);
+    expect(store.moveKeygroup(a.id, 0)).toBe(false);
     expect(store.program.keygroups).toEqual([b]);
   });
 });
@@ -371,7 +412,7 @@ describe('sampler rates and resampling', () => {
 
   test('edits go to the recipe and new audio comes as its own event, keygroups keep the sample', () => {
     const store = new Store();
-    store.addSample(sample());
+    store.addSample(sample(), store.bank, 0);
     const events: string[] = [];
     store.on('sample', (id) => events.push(`sample ${id}`));
     store.on('audio', (id) => events.push(`audio ${id}`));
@@ -540,28 +581,27 @@ describe('wav', () => {
     expect(isTwelveBit(readWav(encodeWav(Float32Array.of(2047 / 2048, -1), 8000, []).buffer as ArrayBuffer)!.data)).toBe(true);
   });
 
-  test('a wav file saved here loads as it was: points, scan, direction, sound, keygroups in the programs', () => {
-    const programs = newBank('B').programs;
+  test('a wav file saved here loads as it was: points, scan, direction, sound, slot and keygroups', () => {
     const sound = { ...defaultSound(), filter: 64, velRelease: 99, lfoDepth: 12, pressure: 30 };
     const s = sample({ name: 'KICK', loopMode: 'drum', reverse: true, start: 120, end: 5800, loopStart: 300,
-      loopEnd: 5000, sound, fromSampler: true, data: quantize12Data(Float32Array.from(testSine(BW16.rate, 6000))) });
-    programs[0].keygroups.push(newKeygroup('s1', { low: 36, high: 47, root: 40, cents: -5 }));
-    programs[2].keygroups.push(newKeygroup('s1', { low: 48, high: 59, fixedPitch: true, semitones: 7 }),
-      newKeygroup('other', { low: 60 }), newKeygroup('s1', { low: 60, high: 72 }));
-    const wav = readWav(wavFromSample(s, programs, 4).buffer as ArrayBuffer)!;
+      loopEnd: 5000, sound, fromSampler: true, data: quantize12Data(Float32Array.from(testSine(BW16.rate, 6000))),
+      bankId: 'b', slot: 4, keygroups: [newKeygroup('s1', 0, { low: 36, high: 47, root: 40, cents: -5 }),
+        newKeygroup('s1', 2, { low: 48, high: 59, fixedPitch: true, semitones: 7 }),
+        newKeygroup('s1', 2, { low: 60, high: 72 })] });
+    const wav = readWav(wavFromSample(s).buffer as ArrayBuffer)!;
     expect(wavSlot(wav)).toBe(4);
     expect(wav.loops).toEqual([]); // a drum trigger has no loop for other programs
     const back = sampleFromWav(wav, 'KICK');
     expect(back).toMatchObject({ loopMode: 'drum', reverse: true, start: 120, end: 5800, loopStart: 300, loopEnd: 5000,
-      fromSampler: true, rate: BW16.rate });
+      fromSampler: true, rate: BW16.rate, bankId: null, slot: 4 });
     expect(back.sound).toEqual(sound);
     expect(back.data).toEqual(s.data);
-    const keygroups = wavKeygroups(wav)!;
-    expect(keygroups.map((k) => [k.program, k.range.low, k.range.high])).toEqual([[0, 36, 47], [2, 48, 59], [2, 60, 72]]);
-    expect(keygroups[0].range).toEqual({ low: 36, high: 47, root: 40, semitones: 0, cents: -5, fixedPitch: false });
-    // into the current bank's programs by number, two in P3
+    expect(back.keygroups.map((k) => [k.sampleId, k.program, k.low, k.high])).toEqual([[back.id, 0, 36, 47],
+      [back.id, 2, 48, 59], [back.id, 2, 60, 72]]);
+    expect(back.keygroups[0]).toMatchObject({ low: 36, high: 47, root: 40, semitones: 0, cents: -5, fixedPitch: false });
+    // in the current bank's programs by number, two in P3
     const store = new Store();
-    store.addSampleWithKeygroups(back, keygroups);
+    store.addSample(back, store.bank, back.slot);
     expect(store.programs.slice(0, 3).map((p) => p.keygroups.map((k) => [k.sampleId, k.low]))).toEqual([
       [[back.id, 36]], [], [[back.id, 48], [back.id, 60]]]);
   });
@@ -569,7 +609,7 @@ describe('wav', () => {
   test('a wav file from elsewhere, or with settings that don\'t make sense', () => {
     const data = Float32Array.from(testSine(BW16.rate, 1000));
     const plain = readWav(encodeWav(data, BW16.rate, [{ start: 100, end: 900, alternating: true }]).buffer as ArrayBuffer)!;
-    expect(wavKeygroups(plain)).toBeNull();
+    expect(wavKeygroups(plain, 'x')).toBeNull();
     expect(wavSlot(plain)).toBeNull();
     expect(sampleFromWav(plain, 'X')).toMatchObject({ start: 0, end: 1000, loopMode: 'alternating', sound: defaultSound() });
     const odd = readWav(encodeWav(data, BW16.rate, [], { settings: {
@@ -580,8 +620,8 @@ describe('wav', () => {
     const s = sampleFromWav(odd, 'X');
     expect(s).toMatchObject({ start: 0, end: 1000, loopStart: 0, loopEnd: 800, loopMode: 'off', reverse: false });
     expect(s.sound).toEqual({ ...defaultSound(), filter: 99 });
-    expect(wavKeygroups(odd)).toEqual([{ program: 4, range: { low: 127, high: 127, root: 60, semitones: 0, cents: 0,
-      fixedPitch: false } }]);
+    expect(wavKeygroups(odd, 'x')).toMatchObject([{ sampleId: 'x', program: 4, low: 127, high: 127, root: 60,
+      semitones: 0, cents: 0, fixedPitch: false }]);
   });
 
   test('reads 24 bit stereo and 32 bit float', () => {
@@ -606,24 +646,44 @@ describe('wav', () => {
 });
 
 describe('memory file', () => {
-  test('zip round trip keeps samples, loops, exact rates, sounds, banks with their programs and slots', () => {
+  test('zip round trip keeps samples, loops, exact rates, sounds, banks, and samples\' banks, slots and keygroups', () => {
     const banks = [newBank('ONE'), newBank('TWO')];
-    const program = banks[1].programs[5];
-    program.name = 'BASS ROOT';
-    program.keygroups.push(newKeygroup('s1', { low: 36, high: 59, root: 48, cents: 5 }));
-    banks[1].slots[2] = 's2';
-    const samples = [sample(), sample({ id: 's2', name: 'ONE/SHOT?', loopMode: 'drum', reverse: true, rate: 22199.53,
-      start: 40,
+    banks[1].programs[5].name = 'BASS ROOT';
+    const samples = [sample({ bankId: banks[1].id, slot: 0,
+      keygroups: [newKeygroup('s1', 5, { low: 36, high: 59, root: 48, cents: 5 })] }),
+    sample({ id: 's2', name: 'ONE/SHOT?', loopMode: 'drum', reverse: true, rate: 22199.53, start: 40, slot: 2,
       end: 5950, sound: { ...defaultSound(), filter: 64, velFilter: 30, release: 0, lfoDepth: 12 } })];
     const bank = zipToMemory(memoryToZip({ samples, banks, bankIndex: 1, programIndex: 5 }));
-    expect([bank.bankIndex, bank.programIndex]).toEqual([1, 5]);
+    expect([bank.bankIndex, bank.programIndex, bank.notes]).toEqual([1, 5, undefined]);
     expect(bank.banks).toEqual(banks);
     expect(bank.samples.map((s) => [s.id, s.name, s.rate, s.loopMode, s.start, s.end, s.loopStart, s.loopEnd]))
       .toEqual([['s1', 'SINE', BW16.rate, 'forward', 0, 6000, 0, 5900],
         ['s2', 'ONE/SHOT?', 22199.53, 'drum', 40, 5950, 0, 5900]]);
+    expect(bank.samples.map((s) => [s.bankId, s.slot, s.keygroups])).toEqual(samples.map((s) => [s.bankId, s.slot,
+      s.keygroups]));
     expect(bank.samples[1].sound).toEqual(samples[1].sound);
     expect(bank.samples.map((s) => s.reverse)).toEqual([false, true]);
     expect(bank.samples[0].data.length).toBe(6000);
+  });
+
+  test('version 4 files: the banks had the slots and the keygroups', () => {
+    const files = unzipSync(memoryToZip({ samples: [sample(), sample({ id: 's2' })], banks: [], bankIndex: 0,
+      programIndex: 0 }));
+    const json = JSON.parse(strFromU8(files['memory.json']));
+    json.version = 4;
+    for (const entry of json.samples) {
+      delete entry.bankId;
+      delete entry.slot;
+      delete entry.keygroups;
+    }
+    json.banks = [{ id: 'b', name: 'OLD', slots: [null, 's2'], programs: [{ id: 'p', name: 'KEPT', keygroups: [
+      { id: 'k', sampleId: 's2', low: 40, high: 50, root: 45, semitones: 0, cents: 0, fixedPitch: false }] }] }];
+    files['memory.json'] = strToU8(JSON.stringify(json));
+    const memory = zipToMemory(zipSync(files));
+    expect(memory.banks.map((b) => [b.id, b.name, b.programs[0].name])).toEqual([['b', 'OLD', 'KEPT']]);
+    expect(memory.samples.map((s) => [s.id, s.bankId, s.slot, s.keygroups.map((k) => [k.program, k.low])]))
+      .toEqual([['s1', null, null, []], ['s2', 'b', 1, [[0, 40]]]]);
+    expect(memory.notes).toEqual([]);
   });
 
   test('an edited sample keeps its original and recipe, one from the sampler is marked', () => {
@@ -643,7 +703,7 @@ describe('memory file', () => {
   });
 
   /** A bank file as versions before banks saved it: bank.json with a list of programs */
-  function oldBankFile(version: number, programs: Program[], programIndex: number) {
+  function oldBankFile(version: number, programs: OldBank['programs'], programIndex: number) {
     const files = unzipSync(memoryToZip({ samples: [sample()], banks: [], bankIndex: 0, programIndex: 0 }));
     const json = JSON.parse(strFromU8(files['memory.json']));
     Object.assign(json, { format: 'axs7-bank', version, programs, programIndex });
@@ -655,15 +715,16 @@ describe('memory file', () => {
   }
 
   test('bank files from before banks: their programs 32 to a bank', () => {
-    const programs = Array.from({ length: 40 }, (_, i) => newProgram(`OLD ${i + 1}`));
-    programs[33].keygroups.push(newKeygroup('s1', { low: 40 }));
+    const programs = Array.from({ length: 40 }, (_, i) => ({ name: `OLD ${i + 1}`, keygroups: i === 33
+      ? [{ sampleId: 's1', low: 40 }] : [] }));
     const { files } = oldBankFile(3, programs, 33);
     const memory = zipToMemory(zipSync(files));
     expect(memory.banks.map((b) => [b.name, b.programs.length, b.programs[0].name, b.programs[31].name]))
       .toEqual([['BANK 1', 32, 'OLD 1', 'OLD 32'], ['BANK 2', 32, 'OLD 33', 'PROGRAM 32']]);
     expect([memory.bankIndex, memory.programIndex]).toEqual([1, 1]);
-    expect(memory.banks[1].programs[1].keygroups).toMatchObject([{ sampleId: 's1', low: 40 }]);
-    expect(memory.banks[1].slots).toEqual(new Array(16).fill(null));
+    // in a program, in no slot: in the first free one of its bank
+    expect(memory.samples[0]).toMatchObject({ bankId: memory.banks[1].id, slot: 0 });
+    expect(memory.samples[0].keygroups).toMatchObject([{ sampleId: 's1', program: 1, low: 40 }]);
   });
 
   test('version 2 banks: the audio is the original', () => {

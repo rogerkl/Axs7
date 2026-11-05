@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { MidiLink } from '../src/midi/link';
 import { requestSampleParams, setSampleParams } from '../src/midi/transfer';
 import { dumpWithParams } from '../src/model/convert';
-import { defaultSound, newKeygroup, newProgram } from '../src/model/mapping';
+import { defaultSound } from '../src/model/mapping';
 import { plainRecipe } from '../src/model/recipe';
 import { inNoProgram, sampleFromDumpWithParams } from '../src/model/s700';
 import {
@@ -249,13 +249,14 @@ function x7000Dump(numSamples: number) {
 describe('a sample received with its parameters', () => {
   test('START after the loop point: the dump is START to END, the loop is lost', () => {
     const params = parseSampleParams(x7000Message()).params;
-    const { sample, programs, notes } = sampleFromDumpWithParams(x7000Dump(200), params, 'SLOT 1');
+    const { sample, notes } = sampleFromDumpWithParams(x7000Dump(200), params, 'SLOT 1');
     expect(sample).toMatchObject({ start: 0, end: 200, loopStart: 0, loopEnd: 200, loopMode: 'alternating',
       rate: BANDWIDTHS.find((b) => b.rate === 15697.6)!.rate, fromSampler: true, reverse: false });
     expect(sample.sound).toMatchObject({ filter: 90, release: 85, level: 75, lfoDepth: 0, velRelease: 0 });
     expect(sample.data[1]).toBe((7 - 2048) / 2048);
     const range = { low: 24, high: 96, root: 60, semitones: -12, cents: 0, fixedPitch: false };
-    expect(programs.slice(0, 4)).toEqual([range, null, range, null]);
+    expect(sample.keygroups).toMatchObject([{ sampleId: sample.id, program: 0, ...range },
+      { sampleId: sample.id, program: 2, ...range }]);
     expect(notes).toEqual(['LOOP 9523 is before START 32552, and the dump has START to END only: the loop is lost, '
       + 'it starts at START here.']);
   });
@@ -301,14 +302,7 @@ describe('a sample sent with its parameters', () => {
   test('a sample received with all of the memory goes back as it came, with the same parameters', async () => {
     const was = parseSampleParams(x7000Message()).params;
     const got = sampleFromDumpWithParams(x7000Dump(32752), was, 'SLOT 1');
-    const programs = got.programs.map((k, i) => {
-      const p = newProgram(`P${i + 1}`);
-      if (k) {
-        p.keygroups.push(newKeygroup(got.sample.id, k));
-      }
-      return p;
-    });
-    const { dump, params, inProgram, notes } = await dumpWithParams(got.sample, programs, { slot: 0 },
+    const { dump, params, inProgram, notes } = await dumpWithParams(got.sample, { slot: 0 },
       () => Promise.reject(new Error('should not resample')));
     expect([inProgram, notes]).toEqual([true, []]);
     expect(paramsDiffer(params, was)).toEqual([]);
@@ -324,8 +318,8 @@ describe('a sample sent with its parameters', () => {
     const data = Float32Array.from({ length: 30000 }, (_, i) => (Math.round(Math.sin(i / 20) * 1000) + 0) / 2048);
     const sample = { id: 'f', name: 'F', source: data, sourceRate: 39555.4, recipe: plainRecipe(), fromSampler: false,
       rate: 39555.4, data, start: 441, end: 28000, loopStart: 22050, loopEnd: 28000, loopMode: 'forward' as const,
-      reverse: false, sound: defaultSound() };
-    const { dump, params, inProgram } = await dumpWithParams(sample, [newProgram('P1')], { slot: 2 },
+      reverse: false, sound: defaultSound(), bankId: null, slot: null, keygroups: [] };
+    const { dump, params, inProgram } = await dumpWithParams(sample, { slot: 2 },
       () => Promise.reject(new Error('should not resample')));
     expect(inProgram).toBe(false);
     expect(params).toMatchObject({ start: 441, end: 28000, loop: 22050, scanMode: 2, bandwidth: 76 });

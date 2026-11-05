@@ -20,7 +20,7 @@ const source = Float32Array.from({ length: 10000 }, (_, i) => Math.sin(i / 5) * 
 const loaded = (recipe: Partial<Recipe> = {}, overrides: Partial<Sample> = {}): Sample => ({
   id: 's', name: 'S', source, sourceRate: 44100, recipe: { ...plainRecipe(), ...recipe }, fromSampler: false,
   rate: 44100, data: source, start: 1000, end: 9000, loopStart: 4000, loopEnd: 8000, loopMode: 'forward',
-  reverse: false, sound: defaultSound(), ...overrides,
+  reverse: false, sound: defaultSound(), bankId: null, slot: null, keygroups: [], ...overrides,
 });
 
 /** Resamples by picking samples, so where each lands is known */

@@ -30,7 +30,7 @@ function soundView(app: App, className: string, title: string, specs: SoundSpec[
       key: 'sound.sample', label: 'SAMPLE', min: 1, max: ids.length, coarse: 1,
       get: () => ids.indexOf(store.selectedSampleId ?? '') + 1,
       set: (v) => store.selectSample(ids[v - 1]),
-      format: (v) => `S${String(v).padStart(2, '0')}`,
+      format: (v) => String(v).padStart(2, '0'), // as numbered in the SAMPLE view's list
       detail: (v) => store.samples.get(ids[v - 1])?.name ?? '',
     });
     cells = specs.map(([field, label, detail]) => new ParamCell({

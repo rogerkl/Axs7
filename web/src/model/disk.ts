@@ -12,7 +12,7 @@ import { defaultSound, newId } from './mapping';
 import { plainRecipe } from './recipe';
 import { sampleFromS700Params, samplerImage } from './s700';
 import type { KeyRange, SamplerSample } from './s700';
-import type { Program, Sample } from './types';
+import type { Sample } from './types';
 
 /**
  * A sample from a disk. An S612 disk has no program data: its sample goes in a program of its own, as on the X7000,
@@ -72,9 +72,9 @@ function sampleFromS612Disk(image: Uint8Array, name: string): DiskSample {
   const sample: Sample = {
     id: newId(), name, source: data, sourceRate: S612_RATE, recipe: plainRecipe(), fromSampler: false,
     rate: S612_RATE, data, start: 0, end: data.length, loopStart: 0, loopEnd: data.length, loopMode: 'off',
-    reverse: false, sound: defaultSound(),
+    reverse: false, sound: defaultSound(), bankId: null, slot: null, keygroups: [],
   };
-  return { format: 'S612', sample, programs: [], notes };
+  return { format: 'S612', sample, notes };
 }
 
 export interface DiskImage {
@@ -89,9 +89,8 @@ export interface DiskImage {
  * mode and sound, and its keygroups in the first 32 programs. A disk has a START, so all of the sample is saved if it
  * fits, else from START (or a loop start before it). See samplerImage.
  */
-export async function diskFromSample(sample: Sample, programs: Program[], resample: Resampler)
-  : Promise<DiskImage> {
-  const { params, samples, inProgram, notes } = await samplerImage(sample, programs, resample, 'saved');
+export async function diskFromSample(sample: Sample, resample: Resampler): Promise<DiskImage> {
+  const { params, samples, inProgram, notes } = await samplerImage(sample, resample, 'saved');
   if (!inProgram) {
     notes.push('In no program: the sampler plays it from no key until it gets a key range');
   }

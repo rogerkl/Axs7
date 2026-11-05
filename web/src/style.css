@@ -552,6 +552,12 @@ button:focus-visible,
   grid-template-columns: 28px 1fr 70px;
 }
 
+/* the samples, with their bank and slot */
+.view-samples .list-head,
+.view-samples .list-row {
+  grid-template-columns: 24px 1fr 44px 50px 34px 50px;
+}
+
 .list-head {
   position: sticky;
   top: 0;
@@ -588,6 +594,21 @@ button:focus-visible,
 .c-small {
   font-size: 11px;
   text-align: right;
+}
+
+/* a sample's bank and slot, B1 S03 */
+.c-place {
+  font-size: 11px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.list-row:not(.selected) .c-place.no-bank {
+  color: var(--panel-muted);
+}
+
+.place-select {
+  max-width: 150px;
 }
 
 /* a rate that isn't one of the sampler's */

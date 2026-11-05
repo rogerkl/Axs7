@@ -127,7 +127,7 @@ async function main(): Promise<void> {
     const s = store.selectedSample;
     const sampleView = s && ['samples', 'out', 'lfo'].includes(settings.view);
     const line1 = Lcd.pair(sampleView
-      ? `S${String([...store.samples.keys()].indexOf(s.id) + 1).padStart(2, '0')} ${s.name}`
+      ? `S${s.slot === null ? '--' : String(s.slot + 1).padStart(2, '0')} ${s.name}` // its slot, as the X7000's S1:
       : `${store.banks.length > 1 ? `B${store.bankIndex + 1} ` : ''}P${String(store.programIndex + 1).padStart(2, '0')} `
         + store.program.name, voices ? `${voices}V` : '');
     const cell = dataEntry.cell;
@@ -183,8 +183,8 @@ async function main(): Promise<void> {
   const slotTitles = () => {
     receive.button.title = `Receive the sample in slot ${settings.slot + 1} from the sampler, into slot `
       + `${settings.slot + 1} of the current bank with its key ranges (again to cancel)`;
-    send.button.title = `Send the selected sample to slot ${settings.slot + 1} on the sampler, with its key ranges in `
-      + 'the current bank; it replaces what is there';
+    send.button.title = 'Send the selected sample to its slot on the sampler (SAMPLE view), with its key ranges; it '
+      + 'replaces what is there';
   };
   slotTitles();
   app.onSlot(slotTitles);

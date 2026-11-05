@@ -1,61 +1,132 @@
-import type { Bank, Keygroup, LoopMode, Program, Sample, Sound } from './types';
+import type { Bank, Keygroup, LoopMode, OldBank, OldKeygroup, Program, ProgramName, Sample, Sound } from './types';
 
 export function newId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
-export function newProgram(name: string): Program {
-  return { id: newId(), name, keygroups: [] };
-}
-
 /** The programs in a bank, as the sampler has: P1-P32 */
 export const BANK_PROGRAMS = 32;
-/** The slots a bank keeps, as many as the sampler can have (16 with a memory expansion) */
+/** The slots a bank can have, as many as the sampler can have (16 with a memory expansion) */
 export const BANK_SLOTS = 16;
 
 const programName = (i: number) => `PROGRAM ${i + 1}`;
 
-/** A bank with its 32 programs empty and no samples in its slots */
+/** A bank with its 32 programs, named PROGRAM 1-32 */
 export function newBank(name: string): Bank {
-  return { id: newId(), name, programs: Array.from({ length: BANK_PROGRAMS }, (_, i) => newProgram(programName(i))),
-    slots: new Array<string | null>(BANK_SLOTS).fill(null) };
+  return { id: newId(), name, programs: Array.from({ length: BANK_PROGRAMS },
+    (_, i): ProgramName => ({ id: newId(), name: programName(i) })) };
 }
 
-/** A bank as this version has them: its 32 programs, and its slots */
-export function normalizeBank(b: Partial<Bank>): Bank {
-  const programs = (b.programs ?? []).slice(0, BANK_PROGRAMS).map(normalizeProgram);
+/** A bank as this version has them: its name and 32 programs' names */
+export function normalizeBank(b: Partial<Bank> | OldBank): Bank {
+  const programs = (b.programs ?? []).slice(0, BANK_PROGRAMS)
+    .map((p, i): ProgramName => ({ id: p?.id ?? newId(), name: p?.name ?? programName(i) }));
   while (programs.length < BANK_PROGRAMS) {
-    programs.push(newProgram(programName(programs.length)));
+    programs.push({ id: newId(), name: programName(programs.length) });
   }
-  const slots = Array.from({ length: BANK_SLOTS }, (_, i) => b.slots?.[i] ?? null);
-  return { id: b.id ?? newId(), name: b.name ?? 'BANK', programs, slots };
-}
-
-/** Banks for the programs of a version before banks: 32 to a bank, in order */
-export function banksFromPrograms(programs: Partial<Program>[]): Bank[] {
-  const banks: Bank[] = [];
-  for (let i = 0; i === 0 || i < programs.length; i += BANK_PROGRAMS) {
-    banks.push(normalizeBank({ name: `BANK ${banks.length + 1}`, programs: programs.slice(i, i + BANK_PROGRAMS)
-      .map((p) => normalizeProgram(p)) }));
-  }
-  return banks;
+  return { id: b.id ?? newId(), name: b.name ?? 'BANK', programs };
 }
 
 /** By default over the whole keyboard, with the sample's own pitch at C3 like the sampler */
-export function newKeygroup(sampleId: string | null, init: Partial<Keygroup> = {}): Keygroup {
-  return { id: newId(), sampleId, low: 0, high: 127, root: 60, semitones: 0, cents: 0, fixedPitch: false, ...init };
+export function newKeygroup(sampleId: string, program: number, init: Partial<Keygroup> = {}): Keygroup {
+  return { id: newId(), sampleId, program, low: 0, high: 127, root: 60, semitones: 0, cents: 0, fixedPitch: false,
+    ...init };
 }
 
-/** A program as this version has them, from storage or a bank of an older version (sound settings were the program's) */
-export function normalizeProgram(p: Partial<Program>): Program {
-  return {
-    id: p.id ?? newId(),
-    name: p.name ?? 'PROGRAM',
-    keygroups: (p.keygroups ?? []).map((k) => {
-      const { id, sampleId, low, high, root, semitones, cents, fixedPitch } = newKeygroup(k.sampleId ?? null, k);
-      return { id, sampleId, low, high, root, semitones, cents, fixedPitch };
-    }),
-  };
+/** A keygroup as this version has them, for a sample (its sampleId is the sample's) */
+export function normalizeKeygroup(k: Partial<Keygroup>, sampleId: string): Keygroup | null {
+  const program = Number(k.program);
+  if (!Number.isInteger(program) || program < 0 || program >= BANK_PROGRAMS) {
+    return null;
+  }
+  const { id, low, high, root, semitones, cents, fixedPitch } = newKeygroup(sampleId, program, k);
+  return { id, sampleId, program, low, high, root, semitones, cents, fixedPitch };
+}
+
+/** The programs of a bank, each with the keygroups of the bank's samples in it, in slot order */
+export function bankPrograms(bank: Bank, samples: Iterable<Sample>): Program[] {
+  const mine = [...samples].filter((s) => s.bankId === bank.id).sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0));
+  return bank.programs.map((p, i) => ({ ...p, keygroups: mine.flatMap((s) => s.keygroups.filter((k) => k.program === i)) }));
+}
+
+/**
+ * Banks and samples from a version before samples had their bank, slot and keygroups: the banks kept the sample in
+ * each slot and the keygroups in their programs. A sample takes the first bank and slot it was in, and the keygroups
+ * of that bank that played it. One in programs but in no slot goes in a free slot of the bank. What can't be had (a
+ * sample in two banks, keygroups without a sample) is left out, and said in the notes.
+ *
+ * @param samples set in place: their bankId, slot and keygroups
+ */
+export function migrateBanks(old: OldBank[], samples: Sample[]): { banks: Bank[]; notes: string[] } {
+  const notes: string[] = [];
+  const byId = new Map(samples.map((s) => [s.id, s]));
+  for (const s of samples) {
+    s.bankId = null;
+    s.slot = null;
+    s.keygroups = [];
+  }
+  const banks = old.map((b) => normalizeBank(b));
+  const taken = new Map(banks.map((b) => [b.id, new Set<number>()]));
+  old.forEach((b, i) => {
+    const bank = banks[i];
+    (b.slots ?? []).forEach((id, slot) => {
+      const s = id ? byId.get(id) : undefined;
+      if (!s || slot >= BANK_SLOTS) {
+        return;
+      }
+      if (s.bankId === null) {
+        s.bankId = bank.id;
+        s.slot = slot;
+        taken.get(bank.id)!.add(slot);
+      } else if (s.bankId !== bank.id) {
+        notes.push(`${s.name} was in ${bankName(banks, s.bankId)} and ${bank.name}: a sample is in one bank now, it is `
+          + `in ${bankName(banks, s.bankId)}`);
+      }
+    });
+  });
+  old.forEach((b, i) => {
+    const bank = banks[i];
+    (b.programs ?? []).slice(0, BANK_PROGRAMS).forEach((p, program) => {
+      for (const k of p?.keygroups ?? []) {
+        const s = k.sampleId ? byId.get(k.sampleId) : undefined;
+        if (!s) {
+          continue;
+        }
+        if (s.bankId === null) {
+          const free = Array.from({ length: BANK_SLOTS }, (_, n) => n).find((n) => !taken.get(bank.id)!.has(n));
+          if (free === undefined) {
+            notes.push(`${s.name} played in P${program + 1} of ${bank.name}, which has no free slot for it: left out`);
+            continue;
+          }
+          s.bankId = bank.id;
+          s.slot = free;
+          taken.get(bank.id)!.add(free);
+        }
+        if (s.bankId !== bank.id) {
+          notes.push(`P${program + 1} of ${bank.name} played ${s.name}, which is in ${bankName(banks, s.bankId)}: `
+            + 'that keygroup is left out');
+          continue;
+        }
+        const kg = normalizeKeygroup({ ...(k as Partial<OldKeygroup>), sampleId: s.id, program } as Partial<Keygroup>,
+          s.id);
+        if (kg) {
+          s.keygroups.push(kg);
+        }
+      }
+    });
+  });
+  return { banks, notes: [...new Set(notes)] };
+}
+
+const bankName = (banks: Bank[], id: string | null) => banks.find((b) => b.id === id)?.name ?? 'another bank';
+
+/** Banks for the programs of a version before banks: 32 to a bank, in order */
+export function banksFromPrograms(programs: OldBank['programs'] & object): OldBank[] {
+  const banks: OldBank[] = [];
+  for (let i = 0; i === 0 || i < programs.length; i += BANK_PROGRAMS) {
+    banks.push({ name: `BANK ${banks.length + 1}`, programs: programs.slice(i, i + BANK_PROGRAMS) });
+  }
+  return banks;
 }
 
 /** A new sample's sound: a little below full level, filter open, a short release, no vibrato */

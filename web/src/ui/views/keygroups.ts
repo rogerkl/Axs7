@@ -9,6 +9,8 @@ import type { Keygroup } from '../../model/types';
 import { h } from '../dom';
 import { ParamCell, choiceCell } from '../param';
 
+const pad = (n: number) => String(n).padStart(2, '0');
+
 /** Key range and root: like on the sampler, playing a note sets them while selected */
 const noteSpec = { min: 0, max: 127, coarse: 12, format: noteName, parse: parseNote, noteInput: true,
   detail: () => 'OR PLAY KEY' };
@@ -65,32 +67,33 @@ export function programView(app: App): View {
       'aria-label': `${title}, keygroup ${store.program.keygroups.indexOf(kg) + 1}`, onClick: toggle }, label);
   }
 
-  /** Every program of every bank to move a keygroup to, by bank */
+  /** The other programs of the bank to move a keygroup to: a keygroup plays in its sample's bank */
   function moveSelect(kg: Keygroup, i: number): HTMLSelectElement {
-    const pad = (n: number) => String(n).padStart(2, '0');
     const select = h('select', { class: 'move-select', 'aria-label': `Move keygroup ${i + 1} to`,
-      title: 'Move the keygroup to another program, of this bank or another',
+      title: 'Move the keygroup to another program of the bank. To another bank, the sample goes, with all its '
+        + 'keygroups (BANK in the SAMPLE view)',
       onChange: () => {
-        const [bank, program] = select.value.split(':').map(Number);
-        if (store.moveKeygroup(kg.id, bank, program)) {
-          lcd.flash(`MOVED TO ${store.banks.length > 1 ? `B${bank + 1} ` : ''}P${pad(program + 1)}`);
+        const program = Number(select.value);
+        if (store.moveKeygroup(kg.id, program)) {
+          lcd.flash(`MOVED TO P${pad(program + 1)}`);
         }
       } },
     h('option', { value: '', disabled: true, selected: true }, 'MOVE TO…'),
-    ...store.banks.map((bank, b) => h('optgroup', { label: `B${b + 1} ${bank.name}` },
-      ...bank.programs.map((p, j) => h('option', { value: `${b}:${j}`,
-        disabled: b === store.bankIndex && j === store.programIndex }, `P${pad(j + 1)} ${p.name}`)))));
+    ...store.bank.programs.map((p, j) => h('option', { value: j, disabled: j === store.programIndex },
+      `P${pad(j + 1)} ${p.name}`)));
     return select;
   }
 
   function buildTable(): void {
     cells = [];
-    const samples = [...store.samples.values()];
+    // a keygroup plays one of the bank's samples
+    const samples = store.samplesIn(store.bank);
     const rows = store.program.keygroups.map((kg, i) => {
       const select = h('select', { class: 'sample-select', 'aria-label': `Keygroup ${i + 1} sample`,
-        onChange: () => store.updateKeygroup(kg.id, { sampleId: select.value || null }) },
-      h('option', { value: '' }, '– NO SAMPLE –'),
-      ...samples.map((s) => h('option', { value: s.id, selected: s.id === kg.sampleId }, s.name)));
+        title: 'The sample, of the bank\'s: the keygroup goes to it',
+        onChange: () => store.updateKeygroup(kg.id, { sampleId: select.value }) },
+      ...samples.map((s) => h('option', { value: s.id, selected: s.id === kg.sampleId },
+        `S${pad(s.slot! + 1)} ${s.name}`)));
       // the X7000's CONSTANT PITCH: every key plays the root's pitch
       const pitch = choiceCell(`kg.${kg.id}.pitch`, 'PITCH', ['track', 'fixed'] as const, ['TRACK', 'FIXED'],
         () => (store.program.keygroups.find((k) => k.id === kg.id)?.fixedPitch ? 'fixed' : 'track'),
@@ -112,8 +115,9 @@ export function programView(app: App): View {
       h('button', { class: 'soft small danger', title: 'Remove keygroup', 'aria-label': `Remove keygroup ${i + 1}`,
         onClick: () => store.removeKeygroup(kg.id) }, '✕'));
     });
-    table.replaceChildren(...rows,
-      ...(rows.length ? [] : [h('div', { class: 'list-empty' }, 'NO KEYGROUPS. ADD ONE FOR THE SELECTED SAMPLE.')]));
+    table.replaceChildren(...rows, ...(rows.length ? [] : [h('div', { class: 'list-empty' },
+      samples.length ? 'NO KEYGROUPS. ADD ONE FOR THE SELECTED SAMPLE.'
+        : `NO SAMPLES IN ${store.bank.name}: GIVE A SAMPLE A SLOT IN IT (SAMPLE OR BANK VIEW)`)]));
   }
 
   function markSelected(): void {
@@ -137,12 +141,17 @@ export function programView(app: App): View {
     el: h('div', { class: 'view view-keygroups' }, head, table,
       h('div', { class: 'row' },
         h('button', { class: 'soft', onClick: () => {
-          const s = store.selectedSample;
-          store.addKeygroup(newKeygroup(s?.id ?? null));
+          // the selected sample if it is in the bank, else the bank's first
+          const s = store.selectedSample?.bankId === store.bank.id ? store.selectedSample : store.samplesIn(store.bank)[0];
+          if (!s) {
+            lcd.flash(`NO SAMPLES IN ${store.bank.name}`);
+            return;
+          }
+          store.addKeygroup(newKeygroup(s.id, store.programIndex));
         } }, 'ADD KEYGROUP'),
-        h('span', { class: 'info' }, 'A bank has 32 programs, as the sampler, and remembers which sample is in '
-          + 'each of the sampler\'s slots (BANK view). Select LOW, HIGH or ROOT and play a note to set it, like on the '
-          + 'sampler '
+        h('span', { class: 'info' }, 'A bank has 32 programs, as the sampler. As on the sampler, the key ranges are '
+          + 'the samples\': a program plays the samples in the bank\'s slots, and a sample\'s keygroups go with it '
+          + 'to another bank. Select LOW, HIGH or ROOT and play a note to set it, like on the sampler '
           + '(LOW moves on to HIGH). PITCH FIXED plays every key at the root\'s pitch, the sampler\'s CONSTANT '
           + 'PITCH. The sound is the sample\'s, see OUT and LFO. A new keygroup gets the selected sample, a bar above '
           + 'the keys selects its keygroup: drag an end of it to move LOW or HIGH, or the middle to move the keygroup '

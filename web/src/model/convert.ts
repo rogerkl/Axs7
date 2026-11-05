@@ -9,13 +9,12 @@ import type { S700SampleParams } from '../protocol/s700disk';
 import { encodeWav } from '../protocol/wav';
 import type { Wav, WavLoop, WavSettings } from '../protocol/wav';
 import { isTwelveBit } from './edit';
-import { defaultSound, newId } from './mapping';
+import { BANK_PROGRAMS, BANK_SLOTS, defaultSound, newId, newKeygroup } from './mapping';
 import { plainRecipe } from './recipe';
 import { samplerImage } from './s700';
 import { isLooped } from './types';
 import { usedStart } from './points';
-import type { ProgramKeygroup } from './store';
-import type { LoopMode, Program, Sample, Sound } from './types';
+import type { Keygroup, LoopMode, Sample, Sound } from './types';
 
 /**
  * A received dump as a sample, marked as from the sampler: it is sent back as it came. The sampler ends a sample at
@@ -44,6 +43,9 @@ export function sampleFromDump(r: ParsedDump, name: string): Sample {
     loopMode: oneShot ? 'off' : r.header!.alternating ? 'alternating' : 'forward',
     reverse: false,
     sound: defaultSound(),
+    bankId: null,
+    slot: null,
+    keygroups: [],
   };
 }
 
@@ -51,15 +53,17 @@ export function sampleFromDump(r: ParsedDump, name: string): Sample {
  * A wav file as a sample, with the first loop of its smpl chunk, or as one shot without one, without edits. A wav
  * file only has whole Hz, so a rate that is one of the sampler's (like 39555 for 39555.4) gets the sampler's exact
  * rate. A file saved from a sample that came from the sampler is marked so again. A file saved here has the sample's
- * settings too (wavSettings): its points, scan mode, direction and sound come back as they were.
+ * settings too (wavSettings): its points, scan mode, direction and sound come back as they were, and its slot and
+ * keygroups (it is in no bank yet).
  */
 export function sampleFromWav(wav: Wav, name: string): Sample {
   const n = wav.data.length;
   const loop = wav.loops?.[0];
   const loopEnd = loop ? Math.min(loop.end, n) : n;
   const rate = samplerBandwidth(wav.sampleRate)?.rate ?? wav.sampleRate;
+  const id = newId();
   const sample: Sample = {
-    id: newId(),
+    id,
     name,
     source: wav.data,
     sourceRate: rate,
@@ -74,6 +78,9 @@ export function sampleFromWav(wav: Wav, name: string): Sample {
     loopMode: loop ? (loop.alternating ? 'alternating' : 'forward') : 'off',
     reverse: false,
     sound: defaultSound(),
+    bankId: null,
+    slot: wavSlot(wav),
+    keygroups: wavKeygroups(wav, id) ?? [],
   };
   const settings = wav.meta.settings;
   if (settings && typeof settings === 'object') {
@@ -103,37 +110,34 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
 /** The slot a wav file saved here was in, null if none (or for one from elsewhere) */
 export function wavSlot(wav: Wav): number | null {
   const slot = wav.meta.settings?.slot;
-  return Number.isInteger(slot) && (slot as number) >= 0 && (slot as number) < 16 ? slot as number : null;
+  return Number.isInteger(slot) && (slot as number) >= 0 && (slot as number) < BANK_SLOTS ? slot as number : null;
 }
 
-/** The keygroups in a wav file saved here, null for one from elsewhere (or before they were saved) */
-export function wavKeygroups(wav: Wav): ProgramKeygroup[] | null {
+/** The keygroups in a wav file saved here, for the sample loaded from it; null for one from elsewhere */
+export function wavKeygroups(wav: Wav, sampleId: string): Keygroup[] | null {
   const list = wav.meta.settings?.keygroups;
   if (!Array.isArray(list)) {
     return null;
   }
   const note = (v: unknown, fallback: number) => (Number.isInteger(v) ? clamp(v as number, 0, 127) : fallback);
-  return list.filter((k) => Number.isInteger(k?.program) && k.program >= 0).map((k) => ({
-    program: k.program,
-    range: { low: note(k.low, 0), high: note(k.high, 127), root: note(k.root, 60),
+  return list.filter((k) => Number.isInteger(k?.program) && k.program >= 0 && k.program < BANK_PROGRAMS)
+    .map((k) => newKeygroup(sampleId, k.program, {
+      low: note(k.low, 0), high: note(k.high, 127), root: note(k.root, 60),
       semitones: Number.isFinite(k.semitones) ? clamp(Math.round(k.semitones), -60, 60) : 0,
-      cents: Number.isFinite(k.cents) ? clamp(Math.round(k.cents), -100, 100) : 0, fixedPitch: k.fixedPitch === true },
-  }));
+      cents: Number.isFinite(k.cents) ? clamp(Math.round(k.cents), -100, 100) : 0, fixedPitch: k.fixedPitch === true,
+    }));
 }
 
 /**
  * A sample as a wav file: the audio as it plays, its loop in the smpl chunk for other programs, and in the axs7 chunk
- * its settings, its slot and its keygroups in the programs (of the current bank), so it loads here as it was
- *
- * @param slot the bank slot it is in, from 0, null if none
+ * its settings, its slot and its keygroups, so it loads here as it was
  */
-export function wavFromSample(sample: Sample, programs: Program[], slot: number | null = null): Uint8Array {
-  const keygroups = programs.flatMap((p, program) => p.keygroups.filter((k) => k.sampleId === sample.id)
-    .map(({ low, high, root, semitones, cents, fixedPitch }) => ({ program, low, high, root, semitones, cents,
-      fixedPitch })));
+export function wavFromSample(sample: Sample): Uint8Array {
+  const keygroups = sample.keygroups.map(({ program, low, high, root, semitones, cents, fixedPitch }) => ({ program,
+    low, high, root, semitones, cents, fixedPitch }));
   const settings: WavSettings = { start: sample.start, end: sample.end, loopStart: sample.loopStart,
     loopEnd: sample.loopEnd, loopMode: sample.loopMode, reverse: sample.reverse, sound: { ...sample.sound }, keygroups,
-    ...(slot === null ? {} : { slot }) };
+    ...(sample.slot === null ? {} : { slot: sample.slot }) };
   return encodeWav(sample.data, sample.rate, wavLoops(sample),
     { ...(sample.fromSampler ? { fromSampler: true } : {}), settings });
 }
@@ -267,9 +271,9 @@ export interface DumpWithParams {
  * and key ranges) with the S700's sample parameters message: all of the sample, as a disk has it, if it fits. The
  * header's loop is the parameters', so the sampler has END and the loop right if it doesn't take them.
  */
-export async function dumpWithParams(sample: Sample, programs: Program[], options: SendOptions,
-  resample: Resampler): Promise<DumpWithParams> {
-  const { params, samples, rate, inProgram, notes } = await samplerImage(sample, programs, resample, 'sent');
+export async function dumpWithParams(sample: Sample, options: SendOptions, resample: Resampler)
+  : Promise<DumpWithParams> {
+  const { params, samples, rate, inProgram, notes } = await samplerImage(sample, resample, 'sent');
   const looped = params.scanMode === S700_SCAN.looping || params.scanMode === S700_SCAN.alternating;
   const dump = buildDump({
     slot: options.slot, sampleRate: rate, numSamples: samples.length,

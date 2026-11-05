@@ -69,12 +69,27 @@ export interface Sample {
   /** plays from END back to START, the loop mirrored, the X7000's SCAN DIRECTION R */
   reverse: boolean;
   sound: Sound;
+  /** the bank it is in, by id; null for none, then no program plays it */
+  bankId: string | null;
+  /**
+   * its slot on the sampler, from 0, null for none yet. In a bank no other sample has the same slot: one put there
+   * takes it, the other is left in no bank.
+   */
+  slot: number | null;
+  /**
+   * its key ranges in the programs of its bank, as the sampler keeps them with the sample. They go with it to
+   * another bank, and are kept while it is in none.
+   */
+  keygroups: Keygroup[];
 }
 
-/** A sample mapped to a key range of a program ("P1:S1:L=36:H=96" on the X7000) */
+/** A sample's key range in a program of its bank ("P1:S1:L=36:H=96" on the X7000) */
 export interface Keygroup {
   id: string;
-  sampleId: string | null;
+  /** the sample it plays, whose keygroup it is */
+  sampleId: string;
+  /** the program, P1-P32 as 0-31 */
+  program: number;
   /** MIDI notes, C3 = 60 as on the sampler */
   low: number;
   high: number;
@@ -86,22 +101,38 @@ export interface Keygroup {
   fixedPitch: boolean;
 }
 
-/** Key ranges for samples, like an X7000 program. The sound is the samples'. */
-export interface Program {
+/** A program as a bank keeps it: its name. Its keygroups are its bank's samples'. */
+export interface ProgramName {
   id: string;
   name: string;
+}
+
+/** A program with the keygroups of its bank's samples in it, in slot order (see Store.program) */
+export interface Program extends ProgramName {
   keygroups: Keygroup[];
 }
 
 /**
- * What the sampler holds at once: its 32 programs (BANK_PROGRAMS), P1-P32, and which sample is in each of its slots.
- * Samples are in memory, shared by the banks.
+ * What the sampler holds at once: its 32 programs (BANK_PROGRAMS), P1-P32. Which sample is in each of its slots, and
+ * the key ranges, are the samples' (Sample.bankId, slot and keygroups).
  */
 export interface Bank {
   id: string;
   name: string;
   /** P1-P32, always BANK_PROGRAMS of them */
-  programs: Program[];
-  /** the sample in each of the sampler's slots (0 is slot 1), null if none is known; always BANK_SLOTS of them */
-  slots: (string | null)[];
+  programs: ProgramName[];
+}
+
+/** A keygroup of a version before samples had them: in a bank's program, its sample by id */
+export interface OldKeygroup extends Omit<Keygroup, 'program' | 'sampleId'> {
+  sampleId: string | null;
+}
+
+/** A bank of a version before samples had their bank, slot and keygroups */
+export interface OldBank {
+  id?: string;
+  name?: string;
+  programs?: { id?: string; name?: string; keygroups?: Partial<OldKeygroup>[] }[];
+  /** the sample in each slot, by id */
+  slots?: (string | null)[];
 }

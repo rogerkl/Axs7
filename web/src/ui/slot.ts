@@ -1,5 +1,5 @@
-// The sample slot on the sampler that RECEIVE asks for and SEND replaces. It is chosen here, the slot number goes in
-// the dump request and in the header of a sent dump. How many slots there are is a setting (6 on a standard X7000,
+// The sample slot on the sampler that RECEIVE asks for, into the same slot of the current bank. It is chosen here, the
+// slot number goes in the dump request. SEND sends a sample to its own slot (Sample.slot). How many slots there are is a setting (6 on a standard X7000,
 // more with a memory expansion).
 
 import type { App } from '../app/app';
@@ -30,6 +30,7 @@ export function slotStepper(app: App): HTMLElement {
   const value = cell.el.querySelector('.param-value')!;
   value.before(h('button', { class: 'slot-step', 'aria-label': 'Next sampler slot', onClick: step(1) }, '▲'));
   value.after(h('button', { class: 'slot-step', 'aria-label': 'Previous sampler slot', onClick: step(-1) }, '▼'));
-  cell.el.title = 'The sample slot on the sampler that RECEIVE gets and SEND replaces';
+  cell.el.title = 'The sample slot on the sampler that RECEIVE gets, into the same slot of the current bank. SEND '
+    + 'sends a sample to its own slot';
   return cell.el;
 }

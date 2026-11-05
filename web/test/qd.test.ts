@@ -8,10 +8,17 @@ import {
 } from '../src/protocol/s700disk';
 import { S612_KEYGROUP, diskFromSample, sampleFromDisk } from '../src/model/disk';
 import { S612_BLOCK_LENGTH, S612_SAMPLES, readS612Disk } from '../src/protocol/s612disk';
-import { defaultSound, newKeygroup, newProgram } from '../src/model/mapping';
+import { defaultSound, newKeygroup } from '../src/model/mapping';
 import { plainRecipe } from '../src/model/recipe';
 import { Store } from '../src/model/store';
 import type { Keygroup, Sample } from '../src/model/types';
+
+/** A sample's key range in each of the sampler's 32 programs, null where it has none */
+const rangesOf = (s: Sample) => Array.from({ length: 32 }, (_, p) => {
+  const k = s.keygroups.find((g) => g.program === p);
+  return k ? { low: k.low, high: k.high, root: k.root, semitones: k.semitones, cents: k.cents,
+    fixedPitch: k.fixedPitch } : null;
+});
 
 interface BlockParams {
   programs?: [number, number, number, number][];
@@ -147,7 +154,7 @@ describe('samples from disks', () => {
   });
 
   test('its keygroups in the programs it is in: root at its recording pitch, tuned, transposed', () => {
-    const { programs } = sampleFromDisk(image, 'PAD');
+    const programs = rangesOf(sampleFromDisk(image, 'PAD').sample);
     expect(programs).toHaveLength(32);
     expect(programs[0]).toEqual({ low: 24, high: 99, root: 62, semitones: 0, cents: 50, fixedPitch: false });
     expect(programs[1]).toBeNull();
@@ -155,10 +162,10 @@ describe('samples from disks', () => {
     expect(programs.slice(3).every((p) => p === null)).toBe(true);
   });
 
-  test('the store puts them in the current bank\'s programs by number', () => {
+  test('in a slot of the current bank, they are in its programs by number', () => {
     const store = new Store();
-    const { sample, programs } = sampleFromDisk(image, 'PAD');
-    store.addSampleToPrograms(sample, programs);
+    const { sample } = sampleFromDisk(image, 'PAD');
+    store.addSample(sample, store.bank, 0);
     expect(store.programs).toHaveLength(32);
     expect(store.programs[0].keygroups).toMatchObject([{ sampleId: sample.id, low: 24, high: 99, root: 62 }]);
     expect(store.programs[1].keygroups).toEqual([]);
@@ -202,12 +209,12 @@ describe('S612 disks', () => {
     expect(disk.crcOk).toBe(true);
     expect(disk.samples).toEqual(ramp.subarray(0, 0x7e00));
     expect(disk.settings[4]).toBe(2);
-    const { format, sample, programs, notes } = sampleFromDisk(qdImage(s612Block(ramp)), 'VIBES');
+    const { format, sample, notes } = sampleFromDisk(qdImage(s612Block(ramp)), 'VIBES');
     expect(format).toBe('S612');
     expect(sample).toMatchObject({ rate: 31250, sourceRate: 31250, fromSampler: false, start: 0, end: 32256,
       loopMode: 'off', reverse: false });
     expect(sample.data[7]).toBe(ramp[7] / 2048);
-    expect(programs).toEqual([]);
+    expect(sample.keygroups).toEqual([]);
     expect(notes[0]).toMatch(/^S612 disk: its start, end and loop aren't read/);
   });
 
@@ -223,10 +230,10 @@ describe('S612 disks', () => {
   test('each in a program of its own, keys 36-96 as on the X7000, or the current program if it is empty', () => {
     const store = new Store();
     const first = sampleFromDisk(qdImage(s612Block(ramp)), 'Vibes').sample;
-    store.addSampleToOwnProgram(first, S612_KEYGROUP);
+    store.addSampleToOwnProgram(first, S612_KEYGROUP, 0);
     expect(store.programIndex).toBe(0);
     const second = { ...first, id: 'two', name: 'Marimba' };
-    store.addSampleToOwnProgram(second, S612_KEYGROUP);
+    store.addSampleToOwnProgram(second, S612_KEYGROUP, 1);
     expect(store.programs.slice(0, 3).map((p) => p.name)).toEqual(['PROGRAM 1', 'MARIMBA', 'PROGRAM 3']);
     expect(store.programIndex).toBe(1);
     expect(store.program.keygroups).toMatchObject([{ sampleId: 'two', low: 36, high: 96, root: 60 }]);
@@ -246,15 +253,11 @@ const fileSample = (overrides: Partial<Sample> = {}): Sample => {
   const rate = overrides.rate ?? 44100;
   return { id: 'f', name: 'F', source: data, sourceRate: rate, recipe: plainRecipe(), fromSampler: false, rate, data,
     start: 0, end: data.length, loopStart: 0, loopEnd: data.length, loopMode: 'off', reverse: false,
-    sound: defaultSound(), ...overrides };
+    sound: defaultSound(), bankId: null, slot: null, keygroups: [], ...overrides };
 };
-const programsWith = (...keygroups: (Partial<Keygroup> | null)[]) => keygroups.map((k, i) => {
-  const p = newProgram(`P${i + 1}`);
-  if (k) {
-    p.keygroups.push(newKeygroup('f', k));
-  }
-  return p;
-});
+/** Keygroups of the sample 'f' in P1, P2 … (none where null) */
+const keygroupsIn = (...ranges: (Partial<Keygroup> | null)[]) => ranges.flatMap((k, i) => (k ? [newKeygroup('f', i,
+  k)] : []));
 
 describe('saving disks', () => {
   test('the block is built as the S700 builds it, and goes on a track as the S700 writes one', () => {
@@ -271,10 +274,10 @@ describe('saving disks', () => {
   test('a sample from a file: at the sampler\'s rate, 12 bit, its points moved, its keygroups', async () => {
     const data = Float32Array.from({ length: 30000 }, (_, i) => Math.sin(i / 20) * 0.5);
     const sample = fileSample({ data, loopMode: 'forward', start: 441, loopStart: 22050, loopEnd: 30000,
-      sound: { ...defaultSound(), filter: 70, lfoDepth: 12 } });
-    const programs = programsWith({ low: 36, high: 59, root: 48, semitones: 0, cents: 25 }, null,
-      { low: 60, high: 127, root: 62, semitones: -12, cents: 25 }, { low: 0, high: 127, fixedPitch: true, semitones: 7, cents: 25 });
-    const { bytes, notes } = await diskFromSample(sample, programs, pick);
+      sound: { ...defaultSound(), filter: 70, lfoDepth: 12 }, keygroups: keygroupsIn(
+        { low: 36, high: 59, root: 48, semitones: 0, cents: 25 }, null, { low: 60, high: 127, root: 62, semitones: -12,
+          cents: 25 }, { low: 0, high: 127, fixedPitch: true, semitones: 7, cents: 25 }) });
+    const { bytes, notes } = await diskFromSample(sample, pick);
     expect(notes).toEqual(['Resampled from 44100 to 39555.4 Hz (16khz)']);
     const disk = readS700Disk(bytes);
     expect(disk.crcOk).toBe(true);
@@ -289,7 +292,7 @@ describe('saving disks', () => {
       { low: 0, high: 99, transpose: 7, constantPitch: true, audioTrigger: null }]);
     // loaded again it plays the same, each key at the same pitch
     const back = sampleFromDisk(bytes, 'F');
-    expect(back.programs[2]).toMatchObject({ root: 48, semitones: -26, cents: 25 });
+    expect(rangesOf(back.sample)[2]).toMatchObject({ root: 48, semitones: -26, cents: 25 });
     expect(back.sample.data[1000]).toBeCloseTo(Math.sin(Math.round((1000 * 44100) / 39555.4) / 20) * 0.5, 2);
   });
 
@@ -298,9 +301,9 @@ describe('saving disks', () => {
       const image = qdImage(s700Block(ramp, { programs: [[24, 99, 0, 0xbc]], start: 100, end: 30000, loop: 20000,
         bytes: [50, 10, 64, 88, 87, 90, 3, 62, 60, reversed, 57, 50, 3] }));
       const store = new Store();
-      const { sample, programs } = sampleFromDisk(image, 'X');
-      store.addSampleToPrograms(sample, programs);
-      const saved = await diskFromSample(store.samples.get(sample.id)!, store.programs, noResample);
+      const { sample } = sampleFromDisk(image, 'X');
+      store.addSample(sample, store.bank, 0);
+      const saved = await diskFromSample(store.samples.get(sample.id)!, noResample);
       expect(saved.notes).toEqual([]);
       const again = readS700Disk(saved.bytes);
       expect(again.params).toEqual(readS700Disk(image).params);
@@ -311,18 +314,15 @@ describe('saving disks', () => {
   test('too long: from START, truncated; what the sampler can\'t have is noted', async () => {
     const data = Float32Array.from({ length: 50000 }, (_, i) => ((i % 100) - 50) / 64);
     const sample = fileSample({ data, rate: 39555.4, start: 10000, end: 50000, loopStart: 12000, loopEnd: 45000,
-      loopMode: 'forward' });
-    const programs = [...programsWith({ low: 100, high: 120 }), ...new Array(32).fill(null).map(() => newProgram('X'))];
-    programs[32].keygroups.push(newKeygroup('f'));
-    const { bytes, notes } = await diskFromSample(sample, programs, noResample);
+      loopMode: 'forward', keygroups: keygroupsIn({ low: 100, high: 120 }) });
+    const { bytes, notes } = await diskFromSample(sample, noResample);
     expect(notes).toEqual(['Too long for the sampler: saved from START to END',
       'Truncated from 40000 to 32752 samples, 0.83 s',
-      'The sampler has 32 programs, only those are saved',
       'Program 1: the key range is above the sampler\'s keys, left out']);
     const disk = readS700Disk(bytes);
     expect(disk.params).toMatchObject({ start: 0, end: 32752, loop: 2000 });
     expect(disk.samples[0]).toBe(Math.trunc(data[10000] * 2047 + 2048) - 2048);
-    const nowhere = await diskFromSample(fileSample({ rate: 39555.4, data: new Float32Array(10000) }), [], noResample);
+    const nowhere = await diskFromSample(fileSample({ rate: 39555.4, data: new Float32Array(10000) }), noResample);
     expect(nowhere.notes).toEqual(['In no program: the sampler plays it from no key until it gets a key range']);
   });
 });
@@ -343,9 +343,9 @@ const S700_WRITTEN = 144453 + (4 + S700_BLOCK_LENGTH + 8) * 16;
 /** The disk loaded into memory, then saved from there */
 async function savedAgain(bytes: Uint8Array, name: string) {
   const store = new Store();
-  const { sample, programs } = sampleFromDisk(bytes, name);
-  store.addSampleToPrograms(sample, programs);
-  return diskFromSample(store.samples.get(sample.id)!, store.programs, noResample);
+  const { sample } = sampleFromDisk(bytes, name);
+  store.addSample(sample, store.bank, 0);
+  return diskFromSample(store.samples.get(sample.id)!, noResample);
 }
 
 // Disks the samplers wrote, with the audio replaced by the ramp (test/fixtures/make-fixtures.ts makes them from the
@@ -362,7 +362,8 @@ describe('disks as the samplers write them', () => {
     expect(disk).toMatchObject({ crcOk: true, skipped: 0 });
     expect(same(disk.samples, ramp, 32752)).toBe(true);
     expect(disk.samples.subarray(32752).every((v) => v === 0)).toBe(true); // silent after the sampler's samples
-    const { format, sample, programs, notes } = sampleFromDisk(s700, 'CMI');
+    const { format, sample, notes } = sampleFromDisk(s700, 'CMI');
+    const programs = rangesOf(sample);
     expect(format).toBe('S700');
     expect(notes).toEqual([]);
     expect(sample).toMatchObject({ rate: 15697.6, start: 0, end: 32752, loopStart: 32735, loopMode: 'forward' });
@@ -390,11 +391,11 @@ describe('disks as the samplers write them', () => {
     // the settings start where they do on every factory disk: their first two words add up to FEFFh
     const word = (at: number) => disk.settings[at] | (disk.settings[at + 1] << 8);
     expect(word(0) + word(2)).toBe(0xfeff);
-    const { format, sample, programs } = sampleFromDisk(s612, 'TROMBONE');
+    const { format, sample } = sampleFromDisk(s612, 'TROMBONE');
     expect(format).toBe('S612');
     expect(sample).toMatchObject({ rate: 31250, start: 0, end: S612_SAMPLES, loopMode: 'off' });
     expect(sample.data[7]).toBe(ramp[7] / 2048);
-    expect(programs).toEqual([]);
+    expect(sample.keygroups).toEqual([]);
   });
 });
 

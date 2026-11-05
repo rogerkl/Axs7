@@ -2,7 +2,7 @@
 // the X7000, START may be inside the loop or the loop may start before it: a sample can play its end once, then loop
 // back to a loop start far before it.
 
-import { defaultSound } from './mapping';
+import { defaultSound, normalizeKeygroup } from './mapping';
 import { plainRecipe } from './recipe';
 import { isLooped } from './types';
 import type { Sample } from './types';
@@ -64,6 +64,14 @@ export function normalizeSample(sample: Sample): Sample {
   sample.sourceRate ??= sample.rate;
   sample.recipe = { ...plainRecipe(), ...sample.recipe };
   sample.fromSampler = !!sample.fromSampler;
+  // from before samples had their bank, slot and keygroups
+  sample.bankId = typeof sample.bankId === 'string' ? sample.bankId : null;
+  sample.slot = Number.isInteger(sample.slot) && (sample.slot as number) >= 0 ? sample.slot : null;
+  sample.keygroups = (Array.isArray(sample.keygroups) ? sample.keygroups : [])
+    .flatMap((k) => normalizeKeygroup(k, sample.id) ?? []);
+  if (sample.slot === null) {
+    sample.bankId = null;
+  }
   return Object.assign(sample, order({
     start: sample.start ?? 0, end: sample.end ?? len, loopStart: sample.loopStart, loopEnd: sample.loopEnd,
   }, len));

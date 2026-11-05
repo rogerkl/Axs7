@@ -101,26 +101,63 @@ export function samplesView(app: App): View {
   let detailRefresh: (() => void)[] = [];
   /** the shown sample's point cells, to select the one whose marker is grabbed on the waveform */
   let pointCells: Partial<Record<PointName, ParamCell>> = {};
+  /** the shown sample's bank and slot, made again when they or the banks change */
+  let placeEl: HTMLElement | null = null;
 
-  /** The sampler slot with what to do with it: receive from it, and send the selected sample to it */
-  function samplerGroup(withSend: boolean): HTMLElement {
+  /** With memory empty: the sampler slot to receive from (SLOT on the panel) */
+  function receiveGroup(): HTMLElement {
     const slot = slotCell(app, 'samples.slot', 'compact');
-    const send = withSend ? h('button', { class: 'soft', onClick: () => actions.send() }) : null;
     const receive = h('button', { class: 'soft', onClick: () => actions.receive() });
     const texts = () => {
       const n = app.settings.slot + 1;
-      if (send) {
-        send.textContent = `SEND TO SLOT ${n}`;
-        send.title = `Send this sample to slot ${n} on the sampler, it replaces what is there`;
-      }
       receive.textContent = `RECEIVE FROM SLOT ${n}`;
-      receive.title = `Receive the sample in slot ${n} on the sampler into memory. The sampler sends from its `
-        + 'START point, set START to 0 on it to get all of the sample';
+      receive.title = `Receive the sample in slot ${n} on the sampler into slot ${n} of the current bank`;
     };
     texts();
     detailOff.push(slot.dispose, app.onSlot(texts));
     return h('div', { class: 'sampler-group', role: 'group', 'aria-label': 'Sampler' },
-      h('span', { class: 'group-title' }, 'SAMPLER'), slot.cell.el, send, receive);
+      h('span', { class: 'group-title' }, 'SAMPLER'), slot.cell.el, receive);
+  }
+
+  /**
+   * The sample's bank and slot, and sending it to its slot. A sample is in one slot of one bank, or in no bank: one
+   * put in a slot takes it from the sample there, which is then in no bank.
+   */
+  function placeGroup(s: Sample): HTMLElement {
+    const { store } = app;
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const sample = () => store.samples.get(s.id) ?? s;
+    const told = (out: Sample | null) => out && app.lcd.flash(`${out.name} NOW IN NO BANK`);
+    const bank = store.bankOf(s);
+    const bankSelect = h('select', { class: 'place-select', 'aria-label': 'Bank of the sample',
+      title: 'The bank the sample is in: programs play the samples of their bank. In no bank, no program plays it',
+      onChange: () => {
+        const to = store.banks.find((b) => b.id === bankSelect.value) ?? null;
+        const slot = sample().slot ?? (to && store.freeSlot(to, app.settings.slotCount)) ?? 0;
+        told(store.place(s.id, to, to ? slot : sample().slot));
+      } },
+    h('option', { value: '', selected: !bank }, '– NO BANK –'),
+    ...store.banks.map((b, i) => h('option', { value: b.id, selected: b === bank }, `B${i + 1} ${b.name}`)));
+    const count = Math.max(app.settings.slotCount, (s.slot ?? 0) + 1);
+    const slotSelect = h('select', { class: 'place-select', 'aria-label': 'Slot of the sample',
+      title: 'Its slot on the sampler, SEND sends it there. In its bank, the sample in that slot is put out of it',
+      onChange: () => {
+        const slot = slotSelect.value === '' ? null : Number(slotSelect.value);
+        told(store.place(s.id, slot === null ? null : bank, slot));
+      } },
+    ...(bank ? [] : [h('option', { value: '', selected: s.slot === null }, '– NO SLOT –')]),
+    ...Array.from({ length: count }, (_, slot) => {
+      const there = bank ? store.sampleAt(bank, slot) : null;
+      return h('option', { value: slot, selected: slot === s.slot },
+        `S${pad(slot + 1)}${there && there.id !== s.id ? ` ${there.name}` : ''}`);
+    }));
+    const send = h('button', { class: 'soft', disabled: s.slot === null, onClick: () => actions.send(),
+      title: s.slot === null ? 'Give it a slot to send it' : `Send this sample to slot ${s.slot + 1} on the sampler, it `
+        + 'replaces what is there' }, s.slot === null ? 'SEND' : `SEND TO SLOT ${s.slot + 1}`);
+    const label = (text: string, el: HTMLElement) => h('label', { class: 'port' },
+      h('span', { class: 'param-label' }, text), el);
+    return h('div', { class: 'sampler-group', role: 'group', 'aria-label': 'Bank and slot' },
+      h('span', { class: 'group-title' }, 'SAMPLER'), label('BANK', bankSelect), label('SLOT', slotSelect), send);
   }
 
   /** A fade's length in ms, 0 is off, up to the room there is for it */
@@ -319,7 +356,16 @@ export function samplesView(app: App): View {
     samplerFit(s).fits ? h('span', { class: 'c-small' }, duration(s))
       : h('span', { class: 'c-small off-rate', title: 'Too long for the sampler' }, `${duration(s)}!`),
     h('span', { class: 'c-small', title: s.reverse ? 'Plays backwards' : undefined },
-      (s.reverse ? '◀' : '') + LOOP_NAMES[LOOP_MODES.indexOf(s.loopMode)]));
+      (s.reverse ? '◀' : '') + LOOP_NAMES[LOOP_MODES.indexOf(s.loopMode)]),
+    placeText(s));
+  }
+
+  /** Its bank and slot: B1 S03, or – S03 in no bank */
+  function placeText(s: Sample): HTMLElement {
+    const bank = app.store.banks.findIndex((b) => b.id === s.bankId);
+    const slot = s.slot === null ? '–' : `S${String(s.slot + 1).padStart(2, '0')}`;
+    return h('span', { class: `c-place${bank < 0 ? ' no-bank' : ''}`, title: bank < 0 ? 'In no bank: no program plays it'
+      : `In slot ${s.slot! + 1} of ${app.store.banks[bank].name}` }, `${bank < 0 ? '–' : `B${bank + 1}`} ${slot}`);
   }
 
   function buildList(): void {
@@ -327,7 +373,7 @@ export function samplesView(app: App): View {
     list.replaceChildren(
       h('div', { class: 'list-head' }, h('span', { class: 'c-num' }, '#'), h('span', { class: 'c-name' }, 'NAME'),
         h('span', { class: 'c-small' }, 'RATE'), h('span', { class: 'c-small' }, 'LENGTH'),
-        h('span', { class: 'c-small' }, 'LOOP')),
+        h('span', { class: 'c-small' }, 'LOOP'), h('span', { class: 'c-place', title: 'Bank and slot' }, 'SLOT')),
       ...samples.map(row),
       ...(samples.length ? [] : [h('div', { class: 'list-empty' }, 'MEMORY EMPTY')]));
     list.querySelector('.selected')?.scrollIntoView({ block: 'nearest' });
@@ -348,10 +394,11 @@ export function samplesView(app: App): View {
       detail.replaceChildren(wave.el, h('div', { class: 'empty-help' },
         h('p', {}, 'Load WAV files (several at once, the loop in a WAV file is kept, and one saved here has its '
           + 'settings and keygroups), the sampler\'s QuickDisk images '
-          + '(.qd, with their sound and keygroups), or receive a sample from the sampler. Memory is only limited by '
-          + 'the browser.'),
-        samplerGroup(false)));
+          + '(.qd, with their sound and keygroups), or receive a sample from the sampler. A sample goes in a slot of '
+          + 'the current bank. Memory is only limited by the browser.'),
+        receiveGroup()));
       side.replaceChildren();
+      placeEl = null;
       return;
     }
     const id = s.id;
@@ -444,10 +491,10 @@ export function samplesView(app: App): View {
       h('div', { class: 'params' }, ...cells.map((c) => c.el)),
       h('div', { class: 'row' },
         audition,
-        h('button', { class: 'soft', title: 'Add a keygroup for this sample to the program',
+        h('button', { class: 'soft', title: 'Add a keygroup for this sample to the current program, of its bank',
           onClick: () => {
-            store.addKeygroup(newKeygroup(id));
-            app.lcd.flash(`ADDED TO ${store.program.name}`);
+            app.lcd.flash(store.addKeygroup(newKeygroup(id, store.programIndex)) ? `ADDED TO ${store.program.name}`
+              : `NOT IN ${store.bank.name}: GIVE IT A SLOT THERE`);
           } }, 'ADD TO PROGRAM'),
         reset,
         apply,
@@ -463,7 +510,8 @@ export function samplesView(app: App): View {
           }
         } }, 'DELETE')),
       ...edits);
-    side.replaceChildren(asSentGroup(s), samplerGroup(true));
+    placeEl = placeGroup(s);
+    side.replaceChildren(asSentGroup(s), placeEl);
   }
 
   function refresh(id?: string): void {
@@ -496,6 +544,16 @@ export function samplesView(app: App): View {
       }
       detail.dataset.sample = store.selectedSampleId ?? '';
       buildDetail();
+    }),
+    // a bank or slot changed, or the banks
+    store.on('programs', () => {
+      buildList();
+      const s = store.selectedSample;
+      if (placeEl && s) {
+        const now = placeGroup(s);
+        placeEl.replaceWith(now);
+        placeEl = now;
+      }
     }),
     store.on('sample', refresh),
     // rendered again: new audio, and new points at a new rate
