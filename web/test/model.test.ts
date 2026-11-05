@@ -6,7 +6,9 @@ import { memoryToZip, zipToMemory } from '../src/model/memory';
 import {
   dumpFromSample, sampleFromDump, sampleFromWav, samplerFit, wavFromSample, wavKeygroups, wavSlot,
 } from '../src/model/convert';
-import { defaultSound, newBank, newKeygroup, newProgram, normalizeProgram, voicesFor } from '../src/model/mapping';
+import {
+  audibleKeygroups, defaultSound, newBank, newKeygroup, newProgram, normalizeProgram, voicesFor,
+} from '../src/model/mapping';
 import { noteName, parseNote } from '../src/model/notes';
 import { cutoffHz, engineParams, lfoRate, releaseTime } from '../src/model/params';
 import { isPortion, movePoint, normalizeSample, usedStart } from '../src/model/points';
@@ -84,6 +86,23 @@ describe('keygroups', () => {
     for (const note of [36, 50, 90]) {
       expect(voicesFor(program, samples, note)[0].ratio).toBeCloseTo(2 ** (2 / 12));
     }
+  });
+
+  test('muted keygroups don\'t play, and only the soloed ones do when any is', () => {
+    const program = newProgram('P');
+    const [a, b, c] = ['a', 'b', 'c'].map((id) => newKeygroup(id, { low: 36, high: 96 }));
+    program.keygroups.push(a, b, c);
+    const samples = new Map(['a', 'b', 'c'].map((id) => [id, sample({ id })]));
+    const ids = (muted: string[], soloed: string[]) =>
+      audibleKeygroups(program.keygroups, new Set(muted), new Set(soloed)).map((k) => k.sampleId);
+    expect(ids([], [])).toEqual(['a', 'b', 'c']);
+    expect(ids([b.id], [])).toEqual(['a', 'c']);
+    expect(ids([b.id], [a.id])).toEqual(['a']);
+    expect(ids([], [a.id, c.id])).toEqual(['a', 'c']);
+    expect(ids([a.id], [a.id])).toEqual(['a']); // solo wins
+    expect(ids([], ['in another program'])).toEqual(['a', 'b', 'c']);
+    const voices = voicesFor(program, samples, 60, audibleKeygroups(program.keygroups, new Set([a.id]), new Set()));
+    expect(voices.map((v) => v.sample.id)).toEqual(['b', 'c']);
   });
 
   test('programs from before the sound moved to the samples lose it, and keygroups their level', () => {
@@ -217,6 +236,59 @@ describe('store', () => {
     expect(store.uniqueSampleName('A')).toBe('A');
     store.addSample(sample({ name: 'A' }));
     expect(store.uniqueSampleName('A')).toBe('A 2');
+  });
+});
+
+describe('keygroups in the store: mute, solo, move', () => {
+  const setUp = () => {
+    const store = new Store();
+    store.addBank();
+    store.selectBank(0);
+    store.addKeygroup(newKeygroup('a', { low: 36, high: 59 }));
+    store.addKeygroup(newKeygroup('b', { low: 48, high: 96 }));
+    const [a, b] = store.program.keygroups;
+    return { store, a, b };
+  };
+
+  test('mute and solo change what plays, and are let go when a keygroup leaves the program', () => {
+    const { store, a, b } = setUp();
+    const events: string[] = [];
+    store.on('program', () => events.push('program'));
+    store.toggleMute(a.id);
+    expect(store.audibleKeygroups).toEqual([b]);
+    store.toggleSolo(a.id);
+    expect(store.audibleKeygroups).toEqual([a]);
+    store.toggleSolo(a.id);
+    store.toggleMute(a.id);
+    expect(store.audibleKeygroups).toEqual([a, b]);
+    expect(events).toHaveLength(4);
+    store.toggleSolo(b.id);
+    store.removeKeygroup(b.id);
+    expect(store.soloed.size).toBe(0);
+    expect(store.audibleKeygroups).toEqual([a]);
+    store.toggleMute(a.id);
+    store.replaceAll([], []);
+    expect(store.muted.size).toBe(0);
+  });
+
+  test('a keygroup moves to another program of this bank or another, as it is', () => {
+    const { store, a, b } = setUp();
+    store.toggleMute(a.id);
+    expect(store.moveKeygroup(a.id, 1, 4)).toBe(true);
+    expect(store.program.keygroups).toEqual([b]);
+    expect(store.banks[1].programs[4].keygroups).toEqual([{ ...a }]);
+    expect(store.muted.size).toBe(0);
+    expect(store.selectedKeygroupId).toBe(b.id);
+    expect(store.moveKeygroup(b.id, 0, 2)).toBe(true);
+    expect(store.banks[0].programs[2].keygroups).toEqual([b]);
+    expect(store.program.keygroups).toEqual([]);
+    expect(store.selectedKeygroupId).toBeNull();
+    // not to where it is, nowhere, and not a keygroup that isn't in the current program
+    store.selectProgram(2);
+    expect(store.moveKeygroup(b.id, 0, 2)).toBe(false);
+    expect(store.moveKeygroup(b.id, 5, 0)).toBe(false);
+    expect(store.moveKeygroup(a.id, 0, 0)).toBe(false);
+    expect(store.program.keygroups).toEqual([b]);
   });
 });
 

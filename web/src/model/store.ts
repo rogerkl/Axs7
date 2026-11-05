@@ -1,7 +1,7 @@
 // The memory: samples, and banks of the sampler's 32 programs and its slots, with events for whoever shows or keeps
 // them.
 
-import { BANK_PROGRAMS, newBank, newKeygroup, normalizeBank } from './mapping';
+import { BANK_PROGRAMS, audibleKeygroups, newBank, newKeygroup, normalizeBank } from './mapping';
 import { normalizeSample } from './points';
 import type { Rendered, Written } from './render';
 import type { Bank, Keygroup, Program, Recipe, Sample, Sound } from './types';
@@ -41,6 +41,12 @@ export class Store {
   programIndex = 0;
   selectedSampleId: string | null = null;
   selectedKeygroupId: string | null = null;
+  /**
+   * Keygroups muted and soloed, by id, to listen to some of a program where keygroups overlap. Only for playing here:
+   * not kept, saved or sent.
+   */
+  readonly muted = new Set<string>();
+  readonly soloed = new Set<string>();
   private listeners = new Map<StoreEvent, Set<Listener>>();
 
   on(event: StoreEvent, listener: Listener): () => void {
@@ -374,6 +380,7 @@ export class Store {
 
   /** Takes the current program's keygroups out, the samples stay in memory */
   clearProgram(): void {
+    this.program.keygroups.forEach((k) => this.forgetKeygroup(k.id));
     this.program.keygroups = [];
     this.selectedKeygroupId = null;
     this.emit('keygroups');
@@ -419,6 +426,7 @@ export class Store {
     const index = keygroups.findIndex((k) => k.id === id);
     if (index >= 0) {
       keygroups.splice(index, 1);
+      this.forgetKeygroup(id);
       if (this.selectedKeygroupId === id) {
         this.selectedKeygroupId = keygroups[Math.min(index, keygroups.length - 1)]?.id ?? null;
       }
@@ -428,8 +436,61 @@ export class Store {
     }
   }
 
+  /**
+   * Moves a keygroup of the current program to another program, of this bank or another (from 0)
+   *
+   * @returns false if there is no such keygroup or program, or it is the current one
+   */
+  moveKeygroup(id: string, bankIndex: number, programIndex: number): boolean {
+    const target = this.banks[bankIndex]?.programs[programIndex];
+    const keygroups = this.program.keygroups;
+    const index = keygroups.findIndex((k) => k.id === id);
+    if (!target || target === this.program || index < 0) {
+      return false;
+    }
+    target.keygroups.push(...keygroups.splice(index, 1));
+    this.forgetKeygroup(id);
+    if (this.selectedKeygroupId === id) {
+      this.selectedKeygroupId = keygroups[Math.min(index, keygroups.length - 1)]?.id ?? null;
+    }
+    this.emit('programs');
+    this.emit('keygroups');
+    this.emit('program');
+    this.emit('selection');
+    return true;
+  }
+
+  /** The current program's keygroups that play: the soloed ones if any is, else all but the muted ones */
+  get audibleKeygroups(): Keygroup[] {
+    return audibleKeygroups(this.program.keygroups, this.muted, this.soloed);
+  }
+
+  toggleMute(id: string): void {
+    this.toggle(this.muted, id);
+  }
+
+  toggleSolo(id: string): void {
+    this.toggle(this.soloed, id);
+  }
+
+  private toggle(set: Set<string>, id: string): void {
+    if (!set.delete(id)) {
+      set.add(id);
+    }
+    this.emit('keygroups');
+    this.emit('program');
+  }
+
+  /** A keygroup that leaves its program isn't muted or soloed any more */
+  private forgetKeygroup(id: string): void {
+    this.muted.delete(id);
+    this.soloed.delete(id);
+  }
+
   /** Replaces everything, as when loading a memory file */
   replaceAll(samples: Sample[], banks: Bank[], bankIndex = 0, programIndex = 0): void {
+    this.muted.clear();
+    this.soloed.clear();
     // samples kept from before start and end points get them
     this.samples = new Map(samples.map((s) => [s.id, normalizeSample(s)]));
     this.banks = banks.length ? banks.map(normalizeBank) : [newBank('BANK 1')];

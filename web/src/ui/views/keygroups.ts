@@ -1,6 +1,6 @@
 // PROGRAM: the current bank and program, P1-P32 as on the X7000, the program's name and its keygroups, each a sample
 // over a key range with its pitch, like an X7000 program ("P1:S1:L=36:H=96"). The sound is the sample's (OUT and
-// LFO).
+// LFO). A keygroup can be muted or soloed to hear it alone, and moved to another program.
 
 import type { App, View } from '../../app/app';
 import { newKeygroup } from '../../model/mapping';
@@ -14,7 +14,7 @@ const noteSpec = { min: 0, max: 127, coarse: 12, format: noteName, parse: parseN
   detail: () => 'OR PLAY KEY' };
 
 export function programView(app: App): View {
-  const { store } = app;
+  const { store, lcd } = app;
   const head = h('div', { class: 'row program-row' });
   const table = h('div', { class: 'kg-table', role: 'table', 'aria-label': 'Keygroups' });
   let cells: ParamCell[] = [];
@@ -59,6 +59,30 @@ export function programView(app: App): View {
     return cell;
   }
 
+  /** Mute or solo: a button that is lit while on */
+  function listenButton(kg: Keygroup, label: string, on: boolean, title: string, toggle: () => void): HTMLElement {
+    return h('button', { class: `soft small listen${on ? ' on' : ''}`, 'aria-pressed': on, title,
+      'aria-label': `${title}, keygroup ${store.program.keygroups.indexOf(kg) + 1}`, onClick: toggle }, label);
+  }
+
+  /** Every program of every bank to move a keygroup to, by bank */
+  function moveSelect(kg: Keygroup, i: number): HTMLSelectElement {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const select = h('select', { class: 'move-select', 'aria-label': `Move keygroup ${i + 1} to`,
+      title: 'Move the keygroup to another program, of this bank or another',
+      onChange: () => {
+        const [bank, program] = select.value.split(':').map(Number);
+        if (store.moveKeygroup(kg.id, bank, program)) {
+          lcd.flash(`MOVED TO ${store.banks.length > 1 ? `B${bank + 1} ` : ''}P${pad(program + 1)}`);
+        }
+      } },
+    h('option', { value: '', disabled: true, selected: true }, 'MOVE TO…'),
+    ...store.banks.map((bank, b) => h('optgroup', { label: `B${b + 1} ${bank.name}` },
+      ...bank.programs.map((p, j) => h('option', { value: `${b}:${j}`,
+        disabled: b === store.bankIndex && j === store.programIndex }, `P${pad(j + 1)} ${p.name}`)))));
+    return select;
+  }
+
   function buildTable(): void {
     cells = [];
     const samples = [...store.samples.values()];
@@ -81,6 +105,10 @@ export function programView(app: App): View {
       },
       h('span', { class: 'kg-num' }, `KG${String(i + 1).padStart(2, '0')}`),
       select, ...rowCells.map((c) => c.el),
+      listenButton(kg, 'M', store.muted.has(kg.id), 'Mute: not played', () => store.toggleMute(kg.id)),
+      listenButton(kg, 'S', store.soloed.has(kg.id), 'Solo: only the soloed keygroups are played',
+        () => store.toggleSolo(kg.id)),
+      moveSelect(kg, i),
       h('button', { class: 'soft small danger', title: 'Remove keygroup', 'aria-label': `Remove keygroup ${i + 1}`,
         onClick: () => store.removeKeygroup(kg.id) }, '✕'));
     });
@@ -117,7 +145,10 @@ export function programView(app: App): View {
           + 'sampler '
           + '(LOW moves on to HIGH). PITCH FIXED plays every key at the root\'s pitch, the sampler\'s CONSTANT '
           + 'PITCH. The sound is the sample\'s, see OUT and LFO. A new keygroup gets the selected sample, a bar above '
-          + 'the keys selects its keygroup. Notes are named as on the sampler, C3 = MIDI 60.'))),
+          + 'the keys selects its keygroup: drag an end of it to move LOW or HIGH, or the middle to move the keygroup '
+          + 'with its ROOT. M mutes a keygroup and S solos it, to hear one of overlapping keygroups alone (only here, '
+          + 'they aren\'t saved or sent). MOVE TO moves a keygroup to another program. Notes are named as on the '
+          + 'sampler, C3 = MIDI 60.'))),
     dispose: () => off.forEach((f) => f()),
   };
 }

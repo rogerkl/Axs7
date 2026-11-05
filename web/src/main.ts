@@ -237,11 +237,19 @@ async function main(): Promise<void> {
         app.showView('program');
       }
     },
+    moveKeygroup: (id, range) => {
+      store.updateKeygroup(id, range);
+      const kg = store.program.keygroups.find((k) => k.id === id);
+      if (kg) {
+        lcd.flash(`${noteName(kg.low)}-${noteName(kg.high)} ROOT ${noteName(kg.root)}`);
+      }
+    },
   });
   player.onNotes = (down) => keyboard.setDown(down);
   player.onNoteOn = (note) => dataEntry.note(note);
   const updateKeyboard = () => keyboard.setKeygroups(store.program, store.selectedKeygroupId,
-    new Map([...store.samples.values()].map((s) => [s.id, s.name])));
+    new Map([...store.samples.values()].map((s) => [s.id, s.name])),
+    { audible: new Set(store.audibleKeygroups.map((k) => k.id)), soloed: store.soloed });
   const memoryEl = h('span', { class: 'plate-value' });
   const voicesEl = h('span', { class: 'plate-value' }, '0');
   const octaveEl = h('span', { class: 'plate-value' });

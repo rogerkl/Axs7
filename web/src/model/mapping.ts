@@ -74,10 +74,23 @@ export interface VoiceStart {
   gain: number;
 }
 
-/** @returns what a note plays in a program: one voice for each keygroup with a sample covering the note */
-export function voicesFor(program: Program, samples: Map<string, Sample>, note: number): VoiceStart[] {
+/**
+ * The keygroups that play, to listen to some of a program: the soloed ones if any is, else all but the muted ones
+ */
+export function audibleKeygroups(keygroups: Keygroup[], muted: ReadonlySet<string>, soloed: ReadonlySet<string>)
+  : Keygroup[] {
+  return keygroups.some((k) => soloed.has(k.id)) ? keygroups.filter((k) => soloed.has(k.id))
+    : keygroups.filter((k) => !muted.has(k.id));
+}
+
+/**
+ * @returns what a note plays in a program: one voice for each keygroup with a sample covering the note, of the
+ *   keygroups given (all of the program's if not)
+ */
+export function voicesFor(program: Program, samples: Map<string, Sample>, note: number,
+  keygroups = program.keygroups): VoiceStart[] {
   const voices: VoiceStart[] = [];
-  for (const keygroup of program.keygroups) {
+  for (const keygroup of keygroups) {
     const sample = keygroup.sampleId ? samples.get(keygroup.sampleId) : undefined;
     if (sample && note >= keygroup.low && note <= keygroup.high) {
       // constant pitch plays every key at the root's pitch

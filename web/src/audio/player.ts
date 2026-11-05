@@ -32,7 +32,9 @@ export class Player {
       this.engine.noteOff(note); // retrigger
       this.sustained.delete(note);
     }
-    this.engine.noteOn(note, velocity / 127, voicesFor(this.store.program, this.store.samples, note));
+    // muted keygroups don't play, nor the others when some are soloed
+    this.engine.noteOn(note, velocity / 127, voicesFor(this.store.program, this.store.samples, note,
+      this.store.audibleKeygroups));
     this.down.add(note);
     this.onNotes(this.down);
   }

@@ -884,6 +884,23 @@ button.soft.danger {
   width: 180px;
 }
 
+/* mute and solo, lit while on */
+button.soft.listen {
+  min-width: 26px;
+  margin-bottom: 1px;
+}
+
+button.soft.listen.on {
+  background: var(--lcd);
+  border-color: var(--lcd-lo);
+  color: var(--lcd-ink);
+  font-weight: 700;
+}
+
+.move-select {
+  width: 120px;
+}
+
 .log {
   margin: 0;
   max-height: 170px;
@@ -950,6 +967,20 @@ button.soft.danger {
 .kg-band {
   position: relative;
   margin-bottom: 3px;
+  touch-action: none;
+  user-select: none;
+}
+
+.kg-band[data-drag="move"],
+.kg-band[data-drag="move"] .kg-bar {
+  cursor: grabbing !important;
+}
+
+.kg-band[data-drag="low"],
+.kg-band[data-drag="low"] .kg-bar,
+.kg-band[data-drag="high"],
+.kg-band[data-drag="high"] .kg-bar {
+  cursor: ew-resize !important;
 }
 
 .kg-bar {
@@ -975,6 +1006,15 @@ button.soft.danger {
 
 .kg-bar.empty {
   background: #4a4a4e;
+}
+
+/* muted, or another keygroup soloed */
+.kg-bar.silent {
+  opacity: 0.35;
+}
+
+.kg-bar.solo {
+  box-shadow: inset 0 0 0 1px var(--lcd);
 }
 
 .kg-bar.cut-left {
