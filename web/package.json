@@ -14,12 +14,12 @@
     "test": "npm run engine && vitest run"
   },
   "dependencies": {
-    "fflate": "0.8.2"
+    "fflate": "0.8.3"
   },
   "devDependencies": {
     "@types/node": "22.15.21",
     "typescript": "5.8.3",
-    "vite": "6.3.5",
-    "vitest": "3.1.4"
+    "vite": "6.4.5",
+    "vitest": "4.1.12"
   }
 }
