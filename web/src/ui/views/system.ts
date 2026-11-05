@@ -142,8 +142,8 @@ export function bankView(app: App): View {
     /** where a sample is, for picking it */
     const where = (s: Sample) => {
       const b = store.banks.findIndex((x) => x.id === s.bankId);
-      return b < 0 ? ' (NO BANK)' : s.bankId === bank.id ? ` (S${String(s.slot! + 1).padStart(2, '0')})`
-        : ` (B${b + 1} S${String(s.slot! + 1).padStart(2, '0')})`;
+      const slot = s.slot === null ? '' : `S${String(s.slot + 1).padStart(2, '0')}`;
+      return b < 0 ? ` (NO BANK${slot ? `, ${slot}` : ''})` : s.bankId === bank.id ? ` (${slot})` : ` (B${b + 1} ${slot})`;
     };
     slots.replaceChildren(
       h('div', { class: 'list-head' }, h('span', { class: 'c-num' }, 'SLOT'), h('span', { class: 'c-name' }, 'SAMPLE')),

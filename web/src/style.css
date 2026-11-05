@@ -661,6 +661,40 @@ button:focus-visible,
   color: var(--blue-hi);
 }
 
+/* the programs a sample is in, under its bank and slot */
+.programs-group {
+  align-items: center;
+}
+
+.program-links {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.program-link {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 3px 6px;
+  border: 0;
+  border-top: 1px solid var(--bay-line);
+  background: none;
+  text-align: left;
+  font: 600 11.5px/1.3 "Courier New", ui-monospace, monospace;
+  text-transform: uppercase;
+  color: inherit;
+}
+
+button.program-link {
+  cursor: pointer;
+}
+
+button.program-link:hover {
+  background: #2a2a2d;
+  color: var(--blue-hi);
+}
+
 .empty-help {
   display: flex;
   flex-direction: column;

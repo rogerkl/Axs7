@@ -10,6 +10,7 @@ import { samplerFit } from '../../model/convert';
 import { attackRoom, isTwelveBit, portionPeak } from '../../model/edit';
 import { isEdited } from '../../model/recipe';
 import { isLooped } from '../../model/types';
+import { noteName } from '../../model/notes';
 import type { LoopMode, Sample } from '../../model/types';
 import { h, pickFiles } from '../dom';
 import { ParamCell, choiceCell, dataEntry } from '../param';
@@ -103,6 +104,8 @@ export function samplesView(app: App): View {
   let pointCells: Partial<Record<PointName, ParamCell>> = {};
   /** the shown sample's bank and slot, made again when they or the banks change */
   let placeEl: HTMLElement | null = null;
+  /** the programs the shown sample has keygroups in, made again when they change */
+  let programsEl: HTMLElement | null = null;
 
   /** With memory empty: the sampler slot to receive from (SLOT on the panel) */
   function receiveGroup(): HTMLElement {
@@ -117,6 +120,37 @@ export function samplesView(app: App): View {
     detailOff.push(slot.dispose, app.onSlot(texts));
     return h('div', { class: 'sampler-group', role: 'group', 'aria-label': 'Sampler' },
       h('span', { class: 'group-title' }, 'SAMPLER'), slot.cell.el, receive);
+  }
+
+  /**
+   * The programs the sample has keygroups in, with their key ranges: in its bank, or kept while it is in none. A
+   * program in its bank opens in the PROGRAM view.
+   */
+  function programsGroup(s: Sample): HTMLElement {
+    const { store } = app;
+    const bankIndex = store.banks.findIndex((b) => b.id === s.bankId);
+    const bank = store.banks[bankIndex];
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const programs = [...new Set(s.keygroups.map((k) => k.program))].sort((a, b) => a - b);
+    const note = h('span', { class: 'info' }, programs.length === 0 ? 'IN NO PROGRAM'
+      : bank ? `IN ${bank.name}` : 'IN NO BANK: KEPT, NO PROGRAM PLAYS THEM UNTIL IT IS IN ONE');
+    const rows = programs.map((p) => {
+      const keygroups = s.keygroups.filter((k) => k.program === p);
+      const ranges = keygroups.map((k) => `${noteName(k.low)}-${noteName(k.high)}`).join(' ');
+      const label = `P${pad(p + 1)}${bank ? ` ${bank.programs[p].name}` : ''}`;
+      return bank
+        ? h('button', { class: 'program-link', title: `Open P${p + 1} in the PROGRAM view`, onClick: () => {
+          store.selectBank(bankIndex);
+          store.selectProgram(p);
+          store.selectKeygroup(keygroups[0].id);
+          app.showView('program');
+        } }, h('span', { class: 'c-name' }, label), h('span', { class: 'c-small' }, ranges))
+        : h('div', { class: 'program-link' }, h('span', { class: 'c-name' }, label),
+          h('span', { class: 'c-small' }, ranges));
+    });
+    return h('div', { class: 'sampler-group programs-group', role: 'group', 'aria-label': 'Programs of the sample' },
+      h('span', { class: 'group-title' }, 'PROGRAMS'), note, ...(rows.length ? [h('div', { class: 'program-links' },
+        ...rows)] : []));
   }
 
   /**
@@ -399,6 +433,7 @@ export function samplesView(app: App): View {
         receiveGroup()));
       side.replaceChildren();
       placeEl = null;
+      programsEl = null;
       return;
     }
     const id = s.id;
@@ -511,7 +546,8 @@ export function samplesView(app: App): View {
         } }, 'DELETE')),
       ...edits);
     placeEl = placeGroup(s);
-    side.replaceChildren(asSentGroup(s), placeEl);
+    programsEl = programsGroup(s);
+    side.replaceChildren(asSentGroup(s), placeEl, programsEl);
   }
 
   function refresh(id?: string): void {
@@ -527,6 +563,16 @@ export function samplesView(app: App): View {
     const index = [...store.samples.keys()].indexOf(id ?? '');
     if (s && rows[index]) {
       rows[index].replaceWith(row(s, index));
+    }
+  }
+
+  /** The shown sample's programs again */
+  function showPrograms(): void {
+    const s = store.selectedSample;
+    if (programsEl && s) {
+      const now = programsGroup(s);
+      programsEl.replaceWith(now);
+      programsEl = now;
     }
   }
 
@@ -554,7 +600,11 @@ export function samplesView(app: App): View {
         placeEl.replaceWith(now);
         placeEl = now;
       }
+      showPrograms();
     }),
+    // keygroups added, moved or changed, a program renamed
+    store.on('keygroups', showPrograms),
+    store.on('program', showPrograms),
     store.on('sample', refresh),
     // rendered again: new audio, and new points at a new rate
     store.on('audio', (id) => {
