@@ -45,8 +45,11 @@ async function main(): Promise<void> {
   player.channel = settings.channel;
   const lcd = new Lcd();
   const midi = new MidiController(settings, player);
+  const chassis = h('div', { class: 'chassis' });
   const bay = h('main', { class: 'bay', 'aria-live': 'off' });
   let view: View | null = null;
+  /** the page open in the bay, none for only playing */
+  let current: ViewName | null = null;
   let voices = 0;
   const sectionButtons = new Map<ViewName, ReturnType<typeof panelButton>>();
   const slotListeners = new Set<() => void>();
@@ -73,15 +76,18 @@ async function main(): Promise<void> {
       slotListeners.add(listener);
       return () => slotListeners.delete(listener);
     },
+    get view() {
+      return current;
+    },
     showView(name) {
       view?.dispose();
-      const section = SECTIONS.find(([n]) => n === name) ?? SECTIONS[0];
-      view = section[2](app);
-      bay.replaceChildren(view.el);
-      settings.view = section[0];
-      saveSettings(settings);
+      const section = SECTIONS.find(([n]) => n === name);
+      view = section ? section[2](app) : null;
+      current = section?.[0] ?? null;
+      bay.replaceChildren(...(view ? [view.el] : []));
+      chassis.classList.toggle('playing', !view);
       for (const [n, b] of sectionButtons) {
-        b.setLed(n === section[0]);
+        b.setLed(n === current);
       }
       lcd.render();
     },
@@ -125,7 +131,7 @@ async function main(): Promise<void> {
   lcd.status = () => {
     // a sample's settings show the sample, the rest the program, like the X7000's S1: and P1:
     const s = store.selectedSample;
-    const sampleView = s && ['samples', 'out', 'lfo'].includes(settings.view);
+    const sampleView = s && current && ['samples', 'out', 'lfo'].includes(current);
     const line1 = Lcd.pair(sampleView
       ? `S${s.slot === null ? '--' : String(s.slot + 1).padStart(2, '0')} ${s.name}` // its slot, as the X7000's S1:
       : `${store.banks.length > 1 ? `B${store.bankIndex + 1} ` : ''}P${String(store.programIndex + 1).padStart(2, '0')} `
@@ -207,7 +213,9 @@ async function main(): Promise<void> {
   const stripButtons = h('div', { class: 'strip-buttons' });
   for (const [name, label] of SECTIONS) {
     band.append(h('div', { class: 'strip-cell' }, label));
-    const b = panelButton(label, () => app.showView(name), { led: true, printed: false });
+    // the lit one again closes its page, for only playing
+    const b = panelButton(label, () => app.showView(current === name ? null : name),
+      { led: true, printed: false, title: `${label} page, again to close it and only play` });
     sectionButtons.set(name, b);
     stripButtons.append(b.el);
   }
@@ -233,7 +241,7 @@ async function main(): Promise<void> {
     noteOff: (n) => player.noteOff(n),
     selectKeygroup: (id) => {
       store.selectKeygroup(id);
-      if (settings.view !== 'program') {
+      if (current !== 'program') {
         app.showView('program');
       }
     },
@@ -268,7 +276,8 @@ async function main(): Promise<void> {
       h('span', {}, 'KEYS'), octaveEl));
   const lower = h('section', { class: 'lower', 'aria-label': 'Keyboard' }, plate, keyboard.el);
 
-  document.getElementById('app')!.append(h('div', { class: 'chassis' }, top, bay, lower));
+  chassis.append(top, bay, lower);
+  document.getElementById('app')!.append(chassis);
 
   for (const event of ['samples', 'sample', 'programs', 'program', 'keygroups', 'selection'] as const) {
     store.on(event, () => {
@@ -280,7 +289,7 @@ async function main(): Promise<void> {
   updateKeyboard();
   updatePlate();
   showOctave();
-  app.showView(settings.view);
+  app.showView(null); // it starts for playing, a page button opens a page
 
   // ---- audio starts with the first gesture, browsers don't allow it before
   const startAudio = () => {

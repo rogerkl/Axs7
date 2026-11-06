@@ -35,7 +35,6 @@ export interface Settings {
   fillerPerBlock: number;
   volume: number;
   polyphony: number;
-  view: ViewName;
 }
 
 const KEY = 'axs7.settings';
@@ -49,7 +48,6 @@ const VERSION = 2;
 const DEFAULTS: Settings = {
   version: VERSION, midiIn: null, midiOut: null, channel: 0, slot: 0, slotCount: 6,
   loadRate: 'sampler', loadSlot: 0, loadPrograms: 0, paramsChannel: 0, paramsId: 0x41, wholeSample: true, ackIntervalMs: 50, lookaheadMs: 1500, fillerPerBlock: 0, volume: 0.8, polyphony: 16,
-  view: 'samples',
 };
 
 export function loadSettings(): Settings {
@@ -59,6 +57,8 @@ export function loadSettings(): Settings {
       // version 1 saved its default KEEP with any other setting, chosen or not. SAMPLER is the default now.
       delete stored.loadRate;
     }
+    // the page that was open, kept before it started for playing
+    delete (stored as { view?: unknown }).view;
     return { ...DEFAULTS, ...stored, version: VERSION };
   } catch {
     return { ...DEFAULTS };

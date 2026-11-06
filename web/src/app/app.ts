@@ -17,7 +17,10 @@ export interface App {
   midi: MidiController;
   actions: Actions;
   renderer: Renderer;
-  showView(view: ViewName): void;
+  /** the page open, null when none is, for only playing */
+  readonly view: ViewName | null;
+  /** @param view null to close the page */
+  showView(view: ViewName | null): void;
   saveSettings(): void;
   /** @param slot from 0, the sampler slot transfers use */
   setSlot(slot: number): void;
