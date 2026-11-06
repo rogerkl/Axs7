@@ -165,23 +165,23 @@ async function main(): Promise<void> {
   });
   const knob = new Knob((steps, coarse) => dataEntry.nudge(steps, coarse));
 
-  const audition = panelButton('PLAY SMP', () => {}, { title: 'Hold to play the selected sample at its own pitch' });
-  audition.button.addEventListener('pointerdown', () => actions.auditionStart(store.selectedSample));
-  for (const type of ['pointerup', 'pointerleave', 'pointercancel']) {
-    audition.button.addEventListener(type, () => actions.auditionStop());
-  }
+  // the next or previous bank, around, the same program number in it
+  const stepBank = (step: number) => {
+    const n = store.banks.length;
+    store.selectBank((store.bankIndex + step + n) % n);
+    const name = store.bank.name === `BANK ${store.bankIndex + 1}` ? '' : ` ${store.bank.name}`;
+    lcd.flash(`BANK ${store.bankIndex + 1} OF ${n}${name}`);
+  };
   const smallButtons = [
-    panelButton('PROG ◀', () => store.selectProgram(store.programIndex - 1), { title: 'Previous program' }),
-    panelButton('PROG ▶', () => store.selectProgram(store.programIndex + 1), { title: 'Next program' }),
-    panelButton('BANK ▶', () => {
-      store.selectBank((store.bankIndex + 1) % store.banks.length);
-      const name = store.bank.name === `BANK ${store.bankIndex + 1}` ? '' : ` ${store.bank.name}`;
-      lcd.flash(`BANK ${store.bankIndex + 1} OF ${store.banks.length}${name}`);
-    }, { title: 'Next bank, the same program number in it (NEW BANK in the BANK view)' }),
     panelButton('LOAD FILE', async () => actions.loadFiles(await pickFiles('.wav,.qd,audio/*', true)),
       { title: 'Load WAV or other audio files into memory, or the sampler\'s QuickDisk images (.qd)' }),
-    audition,
+    panelButton('PROG ◀', () => store.selectProgram(store.programIndex - 1), { title: 'Previous program' }),
+    panelButton('PROG ▶', () => store.selectProgram(store.programIndex + 1), { title: 'Next program' }),
     panelButton('PANIC', () => player.allNotesOff(true), { title: 'Stop all sound' }),
+    panelButton('BANK ◀', () => stepBank(-1),
+      { title: 'Previous bank, the same program number in it (NEW BANK in the BANK view)' }),
+    panelButton('BANK ▶', () => stepBank(1),
+      { title: 'Next bank, the same program number in it (NEW BANK in the BANK view)' }),
   ];
 
   const receive = panelButton('RECEIVE', () => actions.receive(), { led: true });
