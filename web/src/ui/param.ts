@@ -17,7 +17,10 @@ export interface ParamSpec {
   parse?(text: string): number | null;
   /** steps for coarse changes (shift), by default a twentieth of the range */
   coarse?: number;
-  /** the value is a note, which can also be set by playing it while the cell is selected, like on the sampler */
+  /**
+   * the value is a note, which can also be set by playing it once the cell is selected, like on the sampler: one
+   * note, then the cell only takes the knob and the like, until it is selected again
+   */
   noteInput?: boolean;
   /** the key of the cell to select after a played note has set this one, like LOW moving on to HIGH */
   noteNext?: string;
@@ -25,16 +28,20 @@ export interface ParamSpec {
 
 class DataEntry {
   cell: ParamCell | null = null;
+  /** the selected cell takes a played note: it takes notes and hasn't had one since it was selected */
+  listening = false;
   private key: string | null = null;
   /** the cells by key, to find where a played note moves on to */
   private cells = new Map<string, WeakRef<ParamCell>>();
   onChange: (cell: ParamCell | null) => void = () => {};
 
   select(cell: ParamCell | null): void {
-    this.cell?.el.classList.remove('selected');
+    this.cell?.el.classList.remove('selected', 'listening');
     this.cell = cell;
     this.key = cell?.spec.key ?? null;
+    this.listening = cell?.spec.noteInput === true;
     cell?.el.classList.add('selected');
+    cell?.el.classList.toggle('listening', this.listening);
     this.onChange(cell);
   }
 
@@ -44,6 +51,7 @@ class DataEntry {
     if (cell.spec.key === this.key) {
       this.cell = cell;
       cell.el.classList.add('selected');
+      cell.el.classList.toggle('listening', this.listening);
     }
   }
 
@@ -53,15 +61,23 @@ class DataEntry {
     }
   }
 
-  /** A played note, sets the selected cell if it takes notes, and moves on to the next cell if it has one */
+  /**
+   * A played note: sets the selected cell if it is listening for one, and moves on to the next cell if it has one.
+   * Without one, the cell stops listening, so playing on doesn't change it again.
+   */
   note(note: number): void {
     const cell = this.cell;
-    if (cell?.el.isConnected && cell.spec.noteInput) {
-      cell.setValue(note);
-      const next = cell.spec.noteNext ? this.cells.get(cell.spec.noteNext)?.deref() : undefined;
-      if (next?.el.isConnected) {
-        this.select(next);
-      }
+    if (!this.listening || !cell?.el.isConnected || !cell.spec.noteInput) {
+      return;
+    }
+    this.listening = false;
+    cell.el.classList.remove('listening');
+    cell.setValue(note); // may build the cell again, which takes over the selection
+    const next = cell.spec.noteNext ? this.cells.get(cell.spec.noteNext)?.deref() : undefined;
+    if (next?.el.isConnected) {
+      this.select(next);
+    } else if (this.cell) {
+      this.onChange(this.cell);
     }
   }
 

@@ -767,8 +767,8 @@ button.program-link:hover {
   color: var(--blue-hi);
 }
 
-/* a selected note parameter is set by playing a key */
-.param.note-input.selected .param-label::after {
+/* a selected note parameter is set by playing a key, until a key has set it */
+.param.note-input.selected.listening .param-label::after {
   content: " ♪";
 }
 

@@ -7,13 +7,13 @@ import { newKeygroup } from '../../model/mapping';
 import { noteName, parseNote } from '../../model/notes';
 import type { Keygroup } from '../../model/types';
 import { h } from '../dom';
-import { ParamCell, choiceCell } from '../param';
+import { ParamCell, choiceCell, dataEntry } from '../param';
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
-/** Key range and root: like on the sampler, playing a note sets them while selected */
+/** Key range and root: like on the sampler, a note played once one is selected sets it */
 const noteSpec = { min: 0, max: 127, coarse: 12, format: noteName, parse: parseNote, noteInput: true,
-  detail: () => 'OR PLAY KEY' };
+  detail: () => (dataEntry.listening ? 'OR PLAY KEY' : '') };
 
 export function programView(app: App): View {
   const { store, lcd } = app;
@@ -152,7 +152,7 @@ export function programView(app: App): View {
         h('span', { class: 'info' }, 'A bank has 32 programs, as the sampler. As on the sampler, the key ranges are '
           + 'the samples\': a program plays the samples in the bank\'s slots, and a sample\'s keygroups go with it '
           + 'to another bank. Select LOW, HIGH or ROOT and play a note to set it, like on the sampler '
-          + '(LOW moves on to HIGH). PITCH FIXED plays every key at the root\'s pitch, the sampler\'s CONSTANT '
+          + '(LOW moves on to HIGH). It takes one note, select it again for another. PITCH FIXED plays every key at the root\'s pitch, the sampler\'s CONSTANT '
           + 'PITCH. The sound is the sample\'s, see OUT and LFO. A new keygroup gets the selected sample, a bar above '
           + 'the keys selects its keygroup: drag an end of it to move LOW or HIGH, or the middle to move the keygroup '
           + 'with its ROOT. M mutes a keygroup and S solos it, to hear one of overlapping keygroups alone (only here, '

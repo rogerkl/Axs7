@@ -10,6 +10,8 @@ export const KEYBOARD_HIGH = 96;
 const BLACK_WIDTH = 0.6;
 /** How near a bar's end (in px) a drag moves that end, not the whole keygroup */
 const BAR_END = 7;
+/** How far (in px) the pointer moves before a dragged end goes to the key under it */
+const DRAG_START = 4;
 
 type KeyRange = Pick<Keygroup, 'low' | 'high' | 'root'>;
 type BarDrag = 'low' | 'high' | 'move';
@@ -107,7 +109,10 @@ export class Keyboard {
 
   /** Dragging bars: on the band, as the bars are drawn again while their keygroup changes */
   private dragBars(): void {
-    let drag: { id: string; part: BarDrag; from: number; was: KeyRange } | null = null;
+    // an end goes to the key under the pointer once the pointer has moved off the key it was pressed on, or a few
+    // pixels: pressed near the end, it can be over the black key next to it, which a click shouldn't make the end.
+    // The middle moves the keygroup by as many keys as the pointer has moved.
+    let drag: { id: string; part: BarDrag; from: number; x: number; started: boolean; was: KeyRange } | null = null;
     const barOf = (e: PointerEvent) => {
       const bar = (e.target as HTMLElement).closest<HTMLElement>('.kg-bar');
       const kg = bar && this.program?.keygroups.find((k) => k.id === bar.dataset.id);
@@ -122,7 +127,7 @@ export class Keyboard {
       this.band.setPointerCapture(e.pointerId);
       const { low, high, root } = hit.kg;
       drag = { id: hit.kg.id, part: this.barPart(hit.bar, hit.kg, e.clientX), from: this.noteAt(e.clientX),
-        was: { low, high, root } };
+        x: e.clientX, started: false, was: { low, high, root } };
       this.band.dataset.drag = drag.part;
       this.handlers.selectKeygroup(hit.kg.id);
     });
@@ -134,14 +139,19 @@ export class Keyboard {
         }
         return;
       }
-      const moved = this.noteAt(e.clientX) - drag.from;
+      const at = this.noteAt(e.clientX);
+      drag.started ||= at !== drag.from || Math.abs(e.clientX - drag.x) >= DRAG_START;
+      if (!drag.started) {
+        return;
+      }
+      const moved = at - drag.from;
       const { low, high, root } = drag.was;
       const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
       let range: Partial<KeyRange>;
       if (drag.part === 'low') {
-        range = { low: clamp(low + moved, 0, high) };
+        range = { low: clamp(at, 0, high) };
       } else if (drag.part === 'high') {
-        range = { high: clamp(high + moved, low, 127) };
+        range = { high: clamp(at, low, 127) };
       } else {
         // all three together, as far as they all stay on MIDI notes
         const by = clamp(moved, -Math.min(low, root), 127 - Math.max(high, root));
