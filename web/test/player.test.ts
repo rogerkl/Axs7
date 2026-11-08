@@ -21,9 +21,8 @@ function setup() {
     start: () => Promise.resolve(),
     noteOn: (key: number, _v: number, voices: { sample: Sample }[]) =>
       played.push({ key, samples: voices.map((v) => v.sample.id) }),
-    noteOff: () => {},
+    noteOff: (key: number, velocity: number) => played.push({ key, samples: [`off ${Math.round(velocity * 127)}`] }),
     pressure: (amount: number) => played.push({ key: -1, samples: [`pressure ${amount.toFixed(2)}`] }),
-    keyPressure: (key: number, amount: number) => played.push({ key, samples: [`key pressure ${amount.toFixed(2)}`] }),
   } as unknown as AudioEngine;
   return { store, player: new Player(store, engine), played };
 }
@@ -39,14 +38,24 @@ describe('player', () => {
     expect(played[1]).toEqual({ key: 84, samples: ['s'] });
   });
 
-  test('channel and polyphonic aftertouch from MIDI reach the engine', () => {
+  test('channel aftertouch from MIDI reaches the engine, polyphonic doesn\'t, as on the X7000', () => {
     const { player, played } = setup();
     const seen: number[] = [];
     player.onPressure = (v) => seen.push(Math.round(v * 127));
     player.midi(Uint8Array.of(0xd0, 127));
     player.midi(Uint8Array.of(0xa0, 60, 64));
-    expect(played).toEqual([{ key: -1, samples: ['pressure 1.00'] }, { key: 60, samples: ['key pressure 0.50'] }]);
-    expect(seen).toEqual([127, 64]);
+    expect(played).toEqual([{ key: -1, samples: ['pressure 1.00'] }]);
+    expect(seen).toEqual([127]);
+  });
+
+  test('a note off\'s velocity reaches the engine, 64 for a note on at velocity 0', () => {
+    const { player, played } = setup();
+    player.midi(Uint8Array.of(0x90, 60, 100));
+    player.midi(Uint8Array.of(0x80, 60, 20));
+    player.midi(Uint8Array.of(0x90, 62, 100));
+    player.midi(Uint8Array.of(0x90, 62, 0));
+    expect(played.filter((p) => p.samples[0]?.startsWith('off'))).toEqual([{ key: 60, samples: ['off 20'] },
+      { key: 62, samples: ['off 64'] }]);
   });
 
   test('notes from MIDI go the same way, on the keyboard channel', () => {

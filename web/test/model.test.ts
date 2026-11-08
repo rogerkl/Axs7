@@ -10,7 +10,7 @@ import {
   audibleKeygroups, defaultSound, migrateBanks, newBank, newKeygroup, normalizeKeygroup, voicesFor,
 } from '../src/model/mapping';
 import { noteName, parseNote } from '../src/model/notes';
-import { cutoffHz, engineParams, lfoRate, releaseTime } from '../src/model/params';
+import { cutoffHz, engineParams, levelDb, lfoDelay, lfoDepth, lfoRate, releaseTime } from '../src/model/params';
 import { isPortion, movePoint, normalizeSample, usedStart } from '../src/model/points';
 import { attackRoom, isTwelveBit, normalizeData, portionPeak, quantize12Data, to12BitCode } from '../src/model/edit';
 import { isEdited, plainRecipe } from '../src/model/recipe';
@@ -41,20 +41,41 @@ describe('notes', () => {
 
 describe('params', () => {
   test('a sample\'s 0-99 sound to physical units, in the engine\'s layout', () => {
-    expect(releaseTime(0)).toBeCloseTo(0.005);
-    expect(releaseTime(99)).toBeCloseTo(10.005);
-    expect(cutoffHz(99)).toBeCloseTo(20000);
-    expect(cutoffHz(0)).toBeCloseTo(20);
-    expect(lfoRate(0)).toBeCloseTo(0.5);
-    expect(lfoRate(99)).toBeCloseTo(20);
+    // as measured on the X7000
+    expect(releaseTime(0)).toBeCloseTo(0.018, 3);
+    expect(releaseTime(25)).toBeCloseTo(0.095, 3); // 0.090 measured
+    expect(releaseTime(50)).toBeCloseTo(0.57, 3);
+    expect(releaseTime(80)).toBeCloseTo(4.56, 2);
+    expect(releaseTime(84)).toBeCloseTo(5.7, 2); // the steps at the top: 22.8 s over 5, 4, 3, 2
+    expect(releaseTime(88)).toBeCloseTo(7.6, 2);
+    expect(releaseTime(90)).toBeCloseTo(11.4, 2);
+    expect(releaseTime(99)).toBeCloseTo(11.4, 2);
+    expect(lfoRate(0)).toBe(0);
+    expect(lfoRate(60)).toBeCloseTo(5.45, 2);
+    expect(lfoDepth(10)).toBe(0);
+    expect(lfoDepth(20)).toBeCloseTo(0.091, 3);
+    expect(lfoDepth(50)).toBeCloseTo(0.219, 3);
+    expect(lfoDepth(99)).toBeCloseTo(0.475, 3);
+    expect(lfoDelay(99)).toBeCloseTo(2.35);
+    expect(cutoffHz(0)).toBeCloseTo(306, 0);
+    expect(cutoffHz(30)).toBeCloseTo(1019, -1);
+    expect(cutoffHz(60)).toBeCloseTo(3394, -1);
+    expect(cutoffHz(99)).toBeCloseTo(16200, -2);
+    expect(levelDb(99)).toBeCloseTo(0);
+    expect(levelDb(0)).toBeCloseTo(-34.2);
     const p = engineParams({ ...defaultSound(), velFilter: 99, lfoDepth: 99, lfoDelay: 99, pressure: 50 });
     expect(p.length).toBe(16);
-    expect(p[0]).toBeCloseTo((80 / 99) ** 2); // level
-    expect(p[2]).toBeCloseTo(20000); // cutoff, open by default
-    expect(p[3]).toBeCloseTo(6); // octaves the cutoff rises at full velocity
-    expect(p[7]).toBeCloseTo(1); // a semitone of vibrato
-    expect(p[8]).toBeCloseTo(4); // seconds before it
-    expect(p[9]).toBeCloseTo((50 / 99) ** 2); // semitones of vibrato at full aftertouch
+    expect(p[0]).toBeCloseTo(10 ** ((-34.2 * 19) / 99 / 20)); // level
+    expect(p[2]).toBeCloseTo(cutoffHz(99)); // cutoff, open by default
+    expect(p[3]).toBeCloseTo(99 / 17.29); // octaves the cutoff moves from velocity 64 to 0 or 128
+    expect(p[10]).toBeCloseTo(cutoffHz(0)); // its range
+    expect(p[11]).toBeCloseTo(cutoffHz(99));
+    expect(p[4]).toBeCloseTo(releaseTime(30)); // release
+    expect(p[7]).toBe(7); // the vibrato's steps
+    expect(p[8]).toBeCloseTo(2.35); // seconds a step as it comes in
+    expect(p[9]).toBeCloseTo(50 / 99); // the pressure sens
+    expect(p[12]).toBeCloseTo(releaseTime(0)); // the release's range
+    expect(p[13]).toBeCloseTo(11.4);
     expect(defaultSound().pressure).toBe(0);
   });
 });

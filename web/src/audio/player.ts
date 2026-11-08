@@ -10,7 +10,8 @@ export const BEND_RANGE = 2;
 
 export class Player {
   private down = new Set<number>();
-  private sustained = new Set<number>();
+  /** notes let go while the pedal holds them, with their note off velocity (0..1) */
+  private sustained = new Map<number, number>();
   private pedal = false;
   /** 0 for omni, 1-16 */
   channel = 0;
@@ -19,7 +20,7 @@ export class Player {
   onNoteOn: (note: number) => void = () => {};
   onBend: (value: number) => void = () => {};
   onModulation: (value: number) => void = () => {};
-  /** aftertouch from MIDI, 0..1, the highest of channel and key pressure */
+  /** channel aftertouch from MIDI, 0..1 */
   onPressure: (value: number) => void = () => {};
 
   constructor(private store: Store, private engine: AudioEngine) {}
@@ -39,14 +40,15 @@ export class Player {
     this.onNotes(this.down);
   }
 
-  noteOff(note: number): void {
+  /** @param velocity the note off's, 0-127: how fast the key came up, which VEL>RELEASE follows */
+  noteOff(note: number, velocity = 64): void {
     if (!this.down.delete(note)) {
       return;
     }
     if (this.pedal) {
-      this.sustained.add(note);
+      this.sustained.set(note, velocity / 127);
     } else {
-      this.engine.noteOff(note);
+      this.engine.noteOff(note, velocity / 127);
     }
     this.onNotes(this.down);
   }
@@ -54,8 +56,8 @@ export class Player {
   sustain(on: boolean): void {
     this.pedal = on;
     if (!on) {
-      for (const note of this.sustained) {
-        this.engine.noteOff(note);
+      for (const [note, velocity] of this.sustained) {
+        this.engine.noteOff(note, velocity);
       }
       this.sustained.clear();
     }
@@ -94,11 +96,11 @@ export class Player {
         if (data[2] > 0) {
           this.noteOn(data[1], data[2]);
         } else {
-          this.noteOff(data[1]);
+          this.noteOff(data[1]); // a note on at velocity 0: on the X7000 a note off at 64
         }
         break;
       case 0x80:
-        this.noteOff(data[1]);
+        this.noteOff(data[1], data[2]);
         break;
       case 0xb0:
         if (data[1] === 1) {
@@ -117,13 +119,9 @@ export class Player {
       case 0xe0:
         this.bend(Math.max(-1, ((data[2] << 7) + data[1] - 8192) / 8191));
         break;
-      case 0xd0: // channel aftertouch, vibrato as deep as each sample's PRESSURE
+      case 0xd0: // channel aftertouch, vibrato as deep as each sample's PRESSURE (the X7000 ignores polyphonic)
         this.engine.pressure(data[1] / 127);
         this.onPressure(data[1] / 127);
-        break;
-      case 0xa0: // polyphonic aftertouch, the same for one key
-        this.engine.keyPressure(data[1], data[2] / 127);
-        this.onPressure(data[2] / 127);
         break;
       case 0xc0: // P1-P32 of the current bank
         if (data[1] < this.store.programs.length) {

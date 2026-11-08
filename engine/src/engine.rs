@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use crate::params::*;
-use crate::voice::{Controls, NoteOn, Voice};
+use crate::voice::{Controls, NoteOn, Voice, NOTE_OFF_VELOCITY};
 
 pub const MAX_VOICES: usize = 32;
 /// The longest block the engine renders, AudioWorklets use 128
@@ -107,9 +107,10 @@ impl Engine {
         voices.iter().enumerate().min_by_key(|(_, v)| v.started).map_or(0, |(i, _)| i)
     }
 
-    pub fn note_off(&mut self, key: u32) {
+    /// @param velocity the note off's, 0..1 (NOTE_OFF_VELOCITY without one)
+    pub fn note_off(&mut self, key: u32, velocity: f32) {
         for v in self.voices.iter_mut().filter(|v| v.active && !v.released && v.key == key) {
-            v.release();
+            v.release(velocity);
         }
     }
 
@@ -119,7 +120,7 @@ impl Engine {
             if hard {
                 v.active = false;
             } else {
-                v.release();
+                v.release(NOTE_OFF_VELOCITY);
             }
         }
     }
@@ -144,13 +145,6 @@ impl Engine {
     /// Channel aftertouch, 0..1, for all voices
     pub fn set_pressure(&mut self, amount: f32) {
         self.pressure = amount.clamp(0.0, 1.0);
-    }
-
-    /// Polyphonic aftertouch, 0..1, for the voices playing a key
-    pub fn set_key_pressure(&mut self, key: u32, amount: f32) {
-        for v in self.voices.iter_mut().filter(|v| v.active && v.key == key) {
-            v.key_pressure = amount.clamp(0.0, 1.0);
-        }
     }
 
     pub fn set_volume(&mut self, volume: f32) {
@@ -200,7 +194,7 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::voice::LoopMode;
+    use crate::voice::{velocity_gain, LoopMode};
 
     const SR: f32 = 48000.0;
 
@@ -257,7 +251,8 @@ mod tests {
         let out = render(&mut engine, 0.4);
         assert!((frequency(&out[2400..], SR) - 880.0).abs() < 1.0);
         let peak = out[2400..].iter().fold(0.0f32, |m, x| m.max(x.abs()));
-        assert!((peak - DEFAULT_PARAMS[LEVEL]).abs() < 0.02, "{peak}");
+        let level = DEFAULT_PARAMS[LEVEL] * velocity_gain(1.0, DEFAULT_PARAMS[VEL_LEVEL]);
+        assert!((peak - level).abs() < 0.02, "{peak} {level}");
     }
 
     #[test]
@@ -280,7 +275,7 @@ mod tests {
         let out = render(&mut engine, 2.0);
         assert_eq!(engine.active_voices(), 1);
         assert!(out[out.len() - 2400..].iter().any(|x| x.abs() > 0.3), "still sounding after 2 s");
-        engine.note_off(60);
+        engine.note_off(60, NOTE_OFF_VELOCITY);
         render(&mut engine, 0.5); // default release 0.3 s
         assert_eq!(engine.active_voices(), 0);
     }
@@ -326,7 +321,7 @@ mod tests {
         engine.set_sample(1, (0..48000).map(|i| i as f32 / 48000.0).collect(), SR);
         let mut p = DEFAULT_PARAMS;
         p[LEVEL] = 1.0;
-        p[VEL_LEVEL] = 0.0;
+        p[VEL_LEVEL] = 1.0; // at full velocity: all of LEVEL
         engine.set_params(0, p);
         let mut n = note(60, 1.0, LoopMode::Off, 48000);
         n.reverse = true;
@@ -344,7 +339,8 @@ mod tests {
         engine.set_sample(1, vec![0.25; 40000], 39555.4);
         let out = render(&mut engine, 0.05);
         assert_eq!(engine.active_voices(), 1, "the same length: it plays on");
-        assert!((out[out.len() - 1] - 0.25 * DEFAULT_PARAMS[LEVEL]).abs() < 0.01, "with the new audio");
+        let level = DEFAULT_PARAMS[LEVEL] * velocity_gain(1.0, DEFAULT_PARAMS[VEL_LEVEL]);
+        assert!((out[out.len() - 1] - 0.25 * level).abs() < 0.01, "with the new audio");
         engine.set_sample(1, vec![0.25; 20000], 39555.4);
         assert_eq!(engine.active_voices(), 0, "another length: it stops");
     }
@@ -391,6 +387,7 @@ mod tests {
         let mut engine = engine_with_sine(40000);
         let mut p = DEFAULT_PARAMS;
         p[CUTOFF] = 100.0; // far below 440 Hz
+        p[VEL_LEVEL] = 1.0; // all of LEVEL at full velocity
         engine.set_params(0, p);
         engine.note_on(note(60, 1.0, LoopMode::Off, 40000));
         let quiet = render(&mut engine, 0.2);
@@ -402,81 +399,103 @@ mod tests {
     }
 
     #[test]
-    fn velocity_opens_the_filter() {
+    fn velocity_moves_the_cutoff_either_way_from_velocity_64() {
         let level_at = |velocity: f32| {
             let mut engine = engine_with_sine(40000);
             let mut p = DEFAULT_PARAMS;
-            p[CUTOFF] = 100.0;
-            p[VEL_FILTER] = 5.0; // up to 3.2 kHz at full velocity
-            p[VEL_LEVEL] = 0.0;
+            p[LEVEL] = 1.0;
+            p[VEL_LEVEL] = 1.0;
+            p[CUTOFF] = 110.0; // two octaves under the 440 Hz tone at velocity 64
+            p[VEL_FILTER] = 4.0;
             engine.set_params(0, p);
             let mut n = note(60, 1.0, LoopMode::Off, 40000);
             n.velocity = velocity;
             engine.note_on(n);
             let out = render(&mut engine, 0.2);
-            peak(&out[out.len() / 2..])
+            peak(&out[out.len() / 2..]) / velocity_gain(velocity, 1.0)
         };
-        assert!(level_at(0.0) < 0.05, "soft: the cutoff stays at 100 Hz");
-        assert!(level_at(1.0) > 0.4, "hard: it rises above the tone");
+        let soft = level_at(0.0);
+        // (what is left is the 6 poles ringing at the lowest cutoff from the key on)
+        assert!(soft < 0.01, "soft: lower still: {soft}");
+        let middle = level_at(64.0 / 127.0);
+        assert!(middle < 0.001, "at 64: the set cutoff, 72 dB down at the tone: {middle}");
+        let hard = level_at(1.0);
+        assert!(hard > 0.95, "hard: 4 octaves up, above the tone: {hard}");
     }
 
     #[test]
-    fn a_one_shot_stops_at_key_off_a_drum_trigger_plays_on() {
-        for (mode, playing) in [(LoopMode::Off, 0), (LoopMode::Drum, 1)] {
+    fn a_one_shot_releases_at_key_off_a_drum_trigger_plays_on() {
+        for (mode, release, playing) in [(LoopMode::Off, 0.005, 0), (LoopMode::Off, 0.3, 1), (LoopMode::Drum, 0.005, 1)] {
             let mut engine = engine_with_sine(40000); // 1 s
+            let mut p = DEFAULT_PARAMS;
+            p[RELEASE] = release;
+            engine.set_params(0, p);
             engine.note_on(note(60, 1.0, mode, 40000));
             render(&mut engine, 0.1);
-            engine.note_off(60);
+            engine.note_off(60, NOTE_OFF_VELOCITY);
             render(&mut engine, 0.05);
-            assert_eq!(engine.active_voices(), playing, "{mode:?}");
+            assert_eq!(engine.active_voices(), playing, "{mode:?} with a release of {release} s");
         }
     }
 
     #[test]
-    fn harder_notes_get_a_shorter_release_with_velocity_to_release() {
-        let time_to_silence = |velocity: f32| {
+    fn the_note_off_velocity_changes_the_release_with_velocity_to_release() {
+        let time_to_silence = |off_velocity: f32| {
             let mut engine = engine_with_sine(4000);
             let mut p = DEFAULT_PARAMS;
             p[RELEASE] = 1.0;
-            p[VEL_RELEASE] = 1.0;
+            p[VEL_RELEASE] = 2.0; // two doublings either way
+            p[RELEASE_MIN] = 0.1;
+            p[RELEASE_MAX] = 3.0;
             engine.set_params(0, p);
             let mut n = note(60, 1.0, LoopMode::Forward, 4000);
-            n.velocity = velocity;
             n.loop_start = 1000;
             engine.note_on(n);
             render(&mut engine, 0.05);
-            engine.note_off(60);
+            engine.note_off(60, off_velocity);
             let mut blocks = 0;
-            while engine.active_voices() > 0 && blocks < 1000 {
+            while engine.active_voices() > 0 && blocks < 10000 {
                 engine.process(128);
                 blocks += 1;
             }
-            blocks as f32 * 128.0 / SR
+            // to -80 dB (the envelope's floor): 4/3 of the time to -60 dB
+            blocks as f32 * 128.0 / SR * 0.75
         };
-        // as on the X7000 (release high, velocity to release 99): a hard note has no release, a soft one a long one
-        let soft = time_to_silence(0.3);
-        let hard = time_to_silence(1.0);
-        assert!((soft - 0.7 * 1.33).abs() < 0.1, "-80 dB of a 1 s release (-60 dB) is 1.33 s, 70 % of it: {soft}");
-        assert!(hard < 0.05, "{hard}");
+        // as on the X7000: a key coming up slowly gets a longer release, a quick one a shorter
+        let middle = time_to_silence(NOTE_OFF_VELOCITY);
+        let slow = time_to_silence(32.0 / 127.0);
+        let fast = time_to_silence(1.0);
+        assert!((middle - 1.0).abs() < 0.05, "at 64 the release as set: {middle}");
+        assert!((slow - 2.0).abs() < 0.1, "half way down: a doubling: {slow}");
+        assert!((fast - 0.26).abs() < 0.03, "at 127 nearly two halvings: {fast}");
+        assert!((time_to_silence(0.0) - 3.0).abs() < 0.1, "at most RELEASE_MAX");
+    }
+
+    /// Hz from the lowest to the highest a 440 Hz tone goes with a vibrato of some steps
+    fn spread_of(steps: u32) -> f32 {
+        let d = crate::voice::vibrato_depth(steps) / 12.0;
+        440.0 * (d.exp2() - (-d).exp2())
     }
 
     #[test]
-    fn vibrato_starts_after_its_delay() {
+    fn vibrato_comes_in_a_step_at_a_time() {
         let mut engine = engine_with_sine(400000);
         let mut p = DEFAULT_PARAMS;
         p[LFO_RATE] = 5.0;
-        p[LFO_DEPTH] = 1.0; // a semitone
-        p[LFO_DELAY] = 0.5;
+        p[LFO_DEPTH] = 7.0; // the deepest, ±0.475 semitones
+        p[LFO_DELAY] = 0.1; // a step every 0.1 s
         engine.set_params(0, p);
         engine.note_on(note(60, 1.0, LoopMode::Off, 400000));
-        let out = render(&mut engine, 1.2);
-        assert!(frequency_spread(&out[2400..(0.45 * SR) as usize]) < 1.0, "steady before the delay");
-        assert!(frequency_spread(&out[(0.8 * SR) as usize..]) > 30.0, "a semitone either way after it");
+        let out = render(&mut engine, 1.4);
+        let at = |from: f32, to: f32| frequency_spread(&out[(from * SR) as usize..(to * SR) as usize]);
+        assert!(at(0.05, 0.095) < 1.0, "steady before the first step");
+        let full = at(0.8, 1.4);
+        assert!((full - spread_of(7)).abs() < 1.5, "all 7 steps after 0.7 s: {full} Hz, {}", spread_of(7));
     }
 
     #[test]
     fn aftertouch_adds_vibrato_as_deep_as_the_sounds_pressure_sens() {
-        let spread_with = |pressure_depth: f32, channel: f32, key: Option<(u32, f32)>| {
+        let spread_with = |pressure_depth: f32, channel: f32| {
             let mut engine = engine_with_sine(400000);
             let mut p = DEFAULT_PARAMS;
             p[PRESSURE_DEPTH] = pressure_depth;
@@ -484,17 +503,14 @@ mod tests {
             engine.set_params(0, p);
             engine.note_on(note(60, 1.0, LoopMode::Off, 400000));
             engine.set_pressure(channel);
-            if let Some((k, amount)) = key {
-                engine.set_key_pressure(k, amount);
-            }
             let out = render(&mut engine, 0.6);
             frequency_spread(&out[2400..])
         };
-        assert!(spread_with(1.0, 0.0, None) < 1.0, "no pressure, no vibrato");
-        assert!(spread_with(0.0, 1.0, None) < 1.0, "no pressure sens, no vibrato");
-        assert!(spread_with(1.0, 1.0, None) > 30.0, "a semitone either way, at once");
-        assert!(spread_with(1.0, 0.0, Some((60, 1.0))) > 30.0, "polyphonic aftertouch on the key");
-        assert!(spread_with(1.0, 0.0, Some((61, 1.0))) < 1.0, "on another key it does nothing");
+        assert!(spread_with(1.0, 0.0) < 1.0, "no pressure, no vibrato");
+        assert!(spread_with(0.0, 1.0) < 1.0, "no pressure sens, no vibrato");
+        assert!((spread_with(1.0, 1.0) - spread_of(7)).abs() < 1.5, "the deepest, at once");
+        let half = spread_with(0.5, 1.0);
+        assert!((half - spread_of(3)).abs() < 1.5, "half the sens: 3 steps of 7, as measured: {half}");
     }
 
     #[test]
@@ -507,6 +523,7 @@ mod tests {
             frequency_spread(&out[2400..])
         };
         assert!(spread_with(0.0) < 1.0);
-        assert!(spread_with(1.0) > 15.0, "half a semitone either way");
+        assert!((spread_with(1.0) - spread_of(7)).abs() < 1.5, "the deepest, whatever the pressure sens");
+        assert!((spread_with(0.5) - spread_of(4)).abs() < 1.5, "a step a sixteenth: 64 of 127 is 4");
     }
 }

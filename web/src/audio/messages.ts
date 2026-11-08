@@ -10,14 +10,14 @@ export type EngineMessage =
     type: 'noteOn'; key: number; velocity: number; params: number; sample: number; ratio: number;
     start: number; end: number; loopStart: number; loopEnd: number; loopMode: number; reverse: boolean; gain: number;
   }
-  | { type: 'noteOff'; key: number }
+  /** velocity: the note off's, 0..1 */
+  | { type: 'noteOff'; key: number; velocity: number }
   | { type: 'allNotesOff'; hard: boolean }
   | { type: 'bend'; semitones: number }
   | { type: 'modulation'; amount: number }
   /** channel aftertouch, 0..1 */
   | { type: 'pressure'; amount: number }
   /** polyphonic aftertouch, 0..1 */
-  | { type: 'keyPressure'; key: number; amount: number }
   | { type: 'volume'; volume: number }
   | { type: 'polyphony'; voices: number };
 

@@ -9,6 +9,9 @@ import { engineParams } from '../model/params';
 import type { Store } from '../model/store';
 import type { Sample } from '../model/types';
 
+/** A note off without a velocity, MIDI's 64: VEL>RELEASE leaves the release as it is */
+export const NOTE_OFF_VELOCITY = 64 / 127;
+
 export class AudioEngine {
   private ctx: AudioContext | null = null;
   private node: AudioWorkletNode | null = null;
@@ -178,8 +181,9 @@ export class AudioEngine {
     }
   }
 
-  noteOff(key: number): void {
-    this.post({ type: 'noteOff', key });
+  /** @param velocity the note off's, 0..1: the middle (64) without one, which leaves the release as it is */
+  noteOff(key: number, velocity = NOTE_OFF_VELOCITY): void {
+    this.post({ type: 'noteOff', key, velocity });
   }
 
   allNotesOff(hard = false): void {
@@ -197,11 +201,6 @@ export class AudioEngine {
   /** Channel aftertouch, 0..1 */
   pressure(amount: number): void {
     this.post({ type: 'pressure', amount });
-  }
-
-  /** Polyphonic aftertouch on a key, 0..1 */
-  keyPressure(key: number, amount: number): void {
-    this.post({ type: 'keyPressure', key, amount });
   }
 
   volume(volume: number): void {

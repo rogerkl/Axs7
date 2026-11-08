@@ -14,10 +14,11 @@ export interface Sound {
   velLevel: number;
   /** lowpass cutoff, no resonance */
   filter: number;
-  /** how much velocity raises the cutoff */
+  /** how much velocity moves the cutoff, up over 64, down under it */
   velFilter: number;
-  /** for looping and alternating samples */
+  /** after key off: for every scan mode but drum trigger (a one shot too, as measured on the X7000) */
   release: number;
+  /** how much the note off's velocity changes the release */
   velRelease: number;
   lfoSpeed: number;
   lfoDepth: number;

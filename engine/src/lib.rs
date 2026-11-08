@@ -93,8 +93,8 @@ pub unsafe extern "C" fn engine_note_on(engine: *mut Engine, key: u32, velocity:
 /// # Safety
 /// see `engine_params`
 #[no_mangle]
-pub unsafe extern "C" fn engine_note_off(engine: *mut Engine, key: u32) {
-    (*engine).note_off(key);
+pub unsafe extern "C" fn engine_note_off(engine: *mut Engine, key: u32, velocity: f32) {
+    (*engine).note_off(key, velocity);
 }
 
 /// # Safety
@@ -125,15 +125,6 @@ pub unsafe extern "C" fn engine_set_modulation(engine: *mut Engine, amount: f32)
 #[no_mangle]
 pub unsafe extern "C" fn engine_set_pressure(engine: *mut Engine, amount: f32) {
     (*engine).set_pressure(amount);
-}
-
-/// Polyphonic aftertouch on a key, 0..1
-///
-/// # Safety
-/// see `engine_params`
-#[no_mangle]
-pub unsafe extern "C" fn engine_set_key_pressure(engine: *mut Engine, key: u32, amount: f32) {
-    (*engine).set_key_pressure(key, amount);
 }
 
 /// # Safety

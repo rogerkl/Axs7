@@ -1,5 +1,5 @@
-//! Resonant 2-pole lowpass, a state variable filter with trapezoidal integration (zero delay feedback), which
-//! stays stable while the cutoff is modulated.
+//! Lowpass filters: a resonant 2-pole state variable filter with trapezoidal integration (zero delay feedback), which
+//! stays stable while the cutoff is modulated, and the X7000's filter built from three of them.
 
 #[derive(Clone, Debug, Default)]
 pub struct Lowpass {
@@ -42,6 +42,37 @@ impl Lowpass {
     }
 }
 
+/// The Q of each 2-pole section of a 6th order Butterworth lowpass: 1 / (2 cos θ) for its poles at θ = 15°, 45°, 75°
+const BUTTERWORTH6_Q: [f32; 3] = [0.517_638_1, core::f32::consts::FRAC_1_SQRT_2, 1.931_851_6];
+
+/// 6-pole Butterworth lowpass: 36 dB per octave, flat to the cutoff and no resonance. The X7000's filter measures as
+/// one (a switched capacitor filter, its clock 50 times the cutoff): 3 dB down at the cutoff, 36 at twice it, 72 at
+/// four times.
+#[derive(Clone, Debug, Default)]
+pub struct Butterworth6 {
+    sections: [Lowpass; 3],
+}
+
+impl Butterworth6 {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn reset(&mut self) {
+        self.sections.iter_mut().for_each(Lowpass::reset);
+    }
+
+    pub fn set(&mut self, cutoff: f32, sample_rate: f32) {
+        for (section, q) in self.sections.iter_mut().zip(BUTTERWORTH6_Q) {
+            section.set(cutoff, q, sample_rate);
+        }
+    }
+
+    pub fn process(&mut self, x: f32) -> f32 {
+        self.sections.iter_mut().fold(x, |y, section| section.process(y))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,6 +105,35 @@ mod tests {
     fn resonance_peaks_at_the_cutoff() {
         assert!((gain_at(1000.0, 1000.0, 0.707) - 0.707).abs() < 0.02);
         assert!((gain_at(1000.0, 1000.0, 10.0) - 10.0).abs() < 0.5);
+    }
+
+    /// Gain of the 6-pole filter for a sine, after it has settled
+    fn butterworth_gain(frequency: f32, cutoff: f32) -> f32 {
+        let mut f = Butterworth6::new();
+        f.set(cutoff, SR);
+        let mut peak: f32 = 0.0;
+        for i in 0..(SR as usize / 2) {
+            // the phase in f64: in f32 it is too coarse after a while for 70 dB down
+            let y = f.process((2.0 * core::f64::consts::PI * frequency as f64 * i as f64 / SR as f64).sin() as f32);
+            if i > SR as usize / 4 {
+                peak = peak.max(y.abs());
+            }
+        }
+        peak
+    }
+
+    #[test]
+    fn butterworth_is_flat_then_falls_36_db_an_octave() {
+        let db = |g: f32| 20.0 * g.log10();
+        assert!(db(butterworth_gain(250.0, 1000.0)).abs() < 0.1, "flat below the cutoff");
+        assert!((db(butterworth_gain(1000.0, 1000.0)) + 3.0).abs() < 0.3, "3 dB down at the cutoff");
+        assert!((db(butterworth_gain(2000.0, 1000.0)) + 36.1).abs() < 1.0, "36 dB at an octave above");
+        // 73.4 at 48 kHz: the bilinear transform, matched at the cutoff, is a little steeper above it
+        let two = db(butterworth_gain(4000.0, 1000.0));
+        assert!((two + 73.4).abs() < 0.5, "72 dB at two: {two}");
+        for f in [500.0, 700.0, 900.0] {
+            assert!(butterworth_gain(f, 1000.0) <= 1.001, "no resonance peak at {f} Hz");
+        }
     }
 
     #[test]

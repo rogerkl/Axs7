@@ -3,7 +3,8 @@
 
 import type { App, View } from '../../app/app';
 import {
-  cutoffHz, formatHz, formatSeconds, lfoDelay, lfoDepth, lfoRate, releaseTime, velFilterOctaves,
+  cutoffHz, formatHz, formatSeconds, levelDb, lfoDelay, lfoDepth, lfoRate, pressureSteps, releaseTime, velFilterOctaves,
+  velLevelRange, velReleaseDoublings, vibratoStep,
 } from '../../model/params';
 import type { Sound } from '../../model/types';
 import { h } from '../dom';
@@ -62,24 +63,24 @@ function soundView(app: App, className: string, title: string, specs: SoundSpec[
   };
 }
 
-const percent = (v: number) => `${Math.round((v / 99) * 100)}%`;
-
 export function outView(app: App): View {
   return soundView(app, 'view-out', 'OUT', [
-    ['level', 'LEVEL'],
-    ['velLevel', 'VEL LEVEL', percent],
+    ['level', 'LEVEL', (v) => `${levelDb(v).toFixed(1)}DB`],
+    ['velLevel', 'VEL LEVEL', (v) => `${Math.round(velLevelRange(v))}DB RANGE`],
     ['filter', 'FILTER', (v) => formatHz(cutoffHz(v))],
-    ['velFilter', 'VEL FILTER', (v) => `+${velFilterOctaves(v).toFixed(1)} OCT`],
+    ['velFilter', 'VEL FILTER', (v) => `±${velFilterOctaves(v).toFixed(1)} OCT`],
     ['release', 'RELEASE', (v) => formatSeconds(releaseTime(v))],
-    ['velRelease', 'VEL RELEASE', percent],
-  ], 'As on the sampler: the filter is a lowpass without resonance, velocity raises its cutoff. Release is for looping '
-    + 'and alternating samples, a one shot stops at key off and a drum trigger plays to its end. Velocity shortens the '
-    + 'release: with VEL RELEASE at 99 a hard note has none, a soft one all of it. These settings are '
+    ['velRelease', 'VEL RELEASE', (v) => `×${(2 ** velReleaseDoublings(v)).toFixed(1)} SLOW OFF`],
+  ], 'As measured on the sampler: LEVEL 0 is 34 dB under 99, not silent. The filter is a steep lowpass (36 dB an '
+    + 'octave) without resonance, a velocity over 64 raises its cutoff, under 64 lowers it. The release fades a sample '
+    + 'out after key off, a one shot too (the manual has it for looping only), a drum trigger plays to its end. VEL RELEASE '
+    + 'follows the note off\'s velocity, how fast the key comes up: over 64 shortens the release, under 64 makes it '
+    + 'longer (the screen and computer keyboard send 64). These settings are '
     + 'the sample\'s, every program playing it sounds the same. They are not part of a sample dump.');
 }
 
 export function lfoView(app: App): View {
-  const cents = (v: number) => `±${Math.round(lfoDepth(v) * 100)} CENTS`;
+  const cents = (semitones: number) => `±${Math.round(semitones * 100)} CENTS`;
   // what comes in, to see that the keyboard sends aftertouch at all (the X7000's doesn't)
   const meter = h('div', { class: 'pressure-meter' }, h('div', { class: 'pressure-fill' }));
   const value = h('span', { class: 'info' }, 'NONE YET');
@@ -90,13 +91,15 @@ export function lfoView(app: App): View {
     value.textContent = String(Math.round(v * 127));
   };
   return soundView(app, 'view-lfo', 'LFO', [
-    ['lfoSpeed', 'SPEED', (v) => formatHz(lfoRate(v))],
-    ['lfoDepth', 'DEPTH', cents],
-    ['lfoDelay', 'DELAY', (v) => formatSeconds(lfoDelay(v))],
-    ['pressure', 'PRESSURE', cents], // at full aftertouch
-  ], 'Vibrato, starting DELAY after key on. The modulation wheel adds vibrato too, at the sample\'s speed. '
-    + 'PRESSURE is the sampler\'s pressure sens: MIDI aftertouch (channel or polyphonic) adds vibrato that deep at full '
-    + 'pressure, at once, without the delay.', {
+    ['lfoSpeed', 'SPEED', (v) => (v ? formatHz(lfoRate(v)) : 'OFF')],
+    ['lfoDepth', 'DEPTH', (v) => cents(lfoDepth(v))],
+    ['lfoDelay', 'DELAY', (v) => `${formatSeconds(lfoDelay(v))} A STEP`],
+    ['pressure', 'PRESSURE', (v) => cents(vibratoStep(pressureSteps(v)))], // at full aftertouch
+  ], 'Vibrato as measured on the sampler: a sine from key on, in 8 depths 6.4 cents apart, up to ±47 cents. DELAY '
+    + 'brings it in a step at a time. The modulation wheel adds a step for each sixteenth of its travel, at the '
+    + 'sample\'s speed. PRESSURE is the sampler\'s pressure sens, for MIDI channel aftertouch: at 99 it adds a step for '
+    + 'each sixteenth of the pressure, at once, without the delay, at 50 half as many. Polyphonic aftertouch does '
+    + 'nothing, as on the sampler. PRESSURE isn\'t sent with the sample: set it on the sampler.', {
     el: h('div', { class: 'row' }, h('span', { class: 'param-label' }, 'AFTERTOUCH IN'), meter, value),
     dispose: () => {
       app.player.onPressure = previous;

@@ -1,15 +1,15 @@
 //! One playing note, like an X7000 voice: a sample read at a pitch ratio, with vibrato from its own LFO, through
-//! a lowpass whose cutoff rises with velocity, at a level that can follow velocity. A looping sample fades out over
-//! its release time after key off, a one shot stops at key off, a drum trigger plays to its end. A reversed voice
+//! a lowpass whose cutoff follows velocity, at a level that can follow velocity. A looping sample fades out over
+//! its release time after key off, a one shot too (as measured on the X7000), a drum trigger plays to its end. A reversed voice
 //! plays from END back to START, and its loop mirrored: it plays back into the loop and repeats it there.
 
 use crate::envelope::{Adsr, Envelope};
-use crate::filter::Lowpass;
+use crate::filter::Butterworth6;
 use crate::params::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoopMode {
-    /// one shot: plays to the end, or until key off
+    /// one shot: plays to the end, or until key off and its release
     Off,
     Forward,
     Alternating,
@@ -60,11 +60,30 @@ pub struct NoteOn {
 const CONTROL_PERIOD: u32 = 16;
 /// short enough to sound instant, long enough not to click
 const ATTACK: f32 = 0.002;
-const ONE_SHOT_RELEASE: f32 = 0.005;
-/// the vibrato fades in over this after its delay
-const LFO_FADE: f32 = 0.15;
-/// semitones of vibrato the modulation wheel adds at full
-const MOD_DEPTH: f32 = 0.5;
+/// the shortest release, against clicks
+const MIN_RELEASE: f32 = 0.005;
+// The X7000's vibrato, as measured (tools/x7000-lab): a sine, its depth in 8 steps, 6.4 cents apart. DEPTH picks a
+// step and the LFO comes in a step at a time up to it; the modulation wheel and channel aftertouch add a step for
+// each sixteenth of their range, aftertouch scaled by the pressure sens.
+/// semitones between the vibrato's steps
+const VIBRATO_STEP: f32 = 0.064;
+/// semitones the first step has more
+const VIBRATO_FIRST: f32 = 0.027;
+const VIBRATO_STEPS: u32 = 7;
+
+/// Semitones either way for a number of vibrato steps
+pub fn vibrato_depth(steps: u32) -> f32 {
+    if steps == 0 {
+        0.0
+    } else {
+        VIBRATO_FIRST + VIBRATO_STEP * steps.min(VIBRATO_STEPS) as f32
+    }
+}
+
+/// The steps of a controller (0..1): one for each sixteenth of its range
+fn controller_steps(value: f32) -> u32 {
+    ((value.clamp(0.0, 1.0) * 127.0).round() as u32 / 16).min(VIBRATO_STEPS)
+}
 
 /// What the player's hands do to all voices
 #[derive(Clone, Copy, Debug)]
@@ -73,7 +92,7 @@ pub struct Controls {
     pub bend: f64,
     /// the modulation wheel, 0..1, adds vibrato
     pub modulation: f32,
-    /// channel aftertouch, 0..1, adds vibrato as deep as the sound's PRESSURE_DEPTH
+    /// channel aftertouch, 0..1, adds vibrato by the sound's pressure sens (PRESSURE_DEPTH)
     pub pressure: f32,
 }
 
@@ -82,7 +101,38 @@ impl Default for Controls {
         Controls { bend: 1.0, modulation: 0.0, pressure: 0.0 }
     }
 }
-const FLAT_Q: f32 = core::f32::consts::FRAC_1_SQRT_2;
+
+// The level with velocity, measured on the X7000 (tools/x7000-lab): in dB, a mix of a level that doesn't follow
+// velocity and one that rises in a straight line in dB with it, by how much velocity to level there is. At full
+// velocity with the most, the level is LEVEL's.
+/// dB under LEVEL with no velocity to level
+const VEL_LEVEL_NONE_DB: f32 = -7.7;
+/// dB under LEVEL at MIDI velocity 1 with the most velocity to level, rising to 0 at 127
+const VEL_LEVEL_SOFTEST_DB: f32 = -40.3;
+/// The MIDI velocity at which velocity doesn't move the cutoff, nor the note off velocity the release
+const VEL_PIVOT: f32 = 64.0;
+/// A note off without a velocity: the middle one, which leaves the release as it is
+pub const NOTE_OFF_VELOCITY: f32 = VEL_PIVOT / 127.0;
+
+/// Gain for a velocity (0..1) with an amount of velocity to level (0..1)
+pub fn velocity_gain(velocity: f32, amount: f32) -> f32 {
+    let midi = (velocity * 127.0).clamp(1.0, 127.0);
+    let line = VEL_LEVEL_SOFTEST_DB * (1.0 - (midi - 1.0) / 126.0);
+    let db = (1.0 - amount) * VEL_LEVEL_NONE_DB + amount * line;
+    10f32.powf(db / 20.0)
+}
+
+/// The release for a note off velocity (0..1): RELEASE at 64, VEL_RELEASE doublings longer at 0, shorter at 128
+pub fn velocity_release(off_velocity: f32, p: &Params) -> f32 {
+    let deflection = (VEL_PIVOT - off_velocity * 127.0) / 64.0;
+    (p[RELEASE] * (p[VEL_RELEASE] * deflection).exp2()).clamp(p[RELEASE_MIN], p[RELEASE_MAX].max(p[RELEASE_MIN]))
+}
+
+/// The cutoff for a velocity (0..1): CUTOFF at velocity 64, VEL_FILTER octaves lower at 0 and higher at 128
+pub fn velocity_cutoff(velocity: f32, p: &Params) -> f32 {
+    let deflection = (velocity * 127.0 - VEL_PIVOT) / 64.0;
+    (p[CUTOFF] * (p[VEL_FILTER] * deflection).exp2()).clamp(p[CUTOFF_MIN], p[CUTOFF_MAX].max(p[CUTOFF_MIN]))
+}
 
 #[derive(Clone, Debug)]
 pub struct Voice {
@@ -105,11 +155,11 @@ pub struct Voice {
     len: usize,
     gain: f32,
     velocity: f32,
+    /// the note off's velocity, 0..1
+    off_velocity: f32,
     amp: Envelope,
-    filter: Lowpass,
+    filter: Butterworth6,
     lfo_phase: f32,
-    /// polyphonic aftertouch on this voice's key, 0..1
-    pub key_pressure: f32,
     /// samples since key on
     age: u32,
     control: u32,
@@ -134,10 +184,10 @@ impl Default for Voice {
             len: 0,
             gain: 1.0,
             velocity: 1.0,
+            off_velocity: NOTE_OFF_VELOCITY,
             amp: Envelope::new(),
-            filter: Lowpass::new(),
+            filter: Butterworth6::new(),
             lfo_phase: 0.0,
-            key_pressure: 0.0,
             age: 0,
             control: 0,
         }
@@ -190,18 +240,20 @@ impl Voice {
         }
         self.gain = note.gain;
         self.velocity = note.velocity.clamp(0.0, 1.0);
+        self.off_velocity = NOTE_OFF_VELOCITY;
         self.filter.reset();
         self.lfo_phase = 0.0;
-        self.key_pressure = 0.0;
         self.age = 0;
         self.control = 0;
         self.amp.trigger();
     }
 
-    /// Key off. A drum trigger plays on to its end.
-    pub fn release(&mut self) {
+    /// Key off, with the note off's velocity (0..1). A drum trigger plays on to its end.
+    pub fn release(&mut self, off_velocity: f32) {
         if self.loop_mode != LoopMode::Drum {
             self.released = true;
+            // a caller without one (NaN from a missing argument in JS) gets the middle
+            self.off_velocity = if off_velocity.is_finite() { off_velocity.clamp(0.0, 1.0) } else { NOTE_OFF_VELOCITY };
             self.amp.release();
         }
     }
@@ -251,29 +303,24 @@ impl Voice {
 
     /// Adds the voice's output to `out`
     pub fn render(&mut self, out: &mut [f32], data: &[f32], p: &Params, controls: &Controls, sample_rate: f32) {
-        // the X7000's release is for looping sounds, a one shot stops at key off. Velocity shortens it, as on the
-        // sampler: with the most velocity to release a hard note has none, a soft one all of it.
-        let release = if self.loop_mode.looping() {
-            let vr = p[VEL_RELEASE].clamp(0.0, 1.0);
-            (p[RELEASE] * (1.0 - vr * self.velocity)).max(ONE_SHOT_RELEASE)
-        } else {
-            ONE_SHOT_RELEASE
-        };
+        // for one shots too: the X7000's manual has it for looping sounds, but it releases a one shot just the same.
+        // The note off's velocity changes it.
+        let release = velocity_release(self.off_velocity, p).max(MIN_RELEASE);
         self.amp.set(&Adsr { attack: ATTACK, decay: 0.001, sustain: 1.0, release }, sample_rate);
-        let vl = p[VEL_LEVEL].clamp(0.0, 1.0);
-        let level = p[LEVEL] * self.gain * (1.0 - vl + vl * self.velocity * self.velocity);
-        // the cutoff rises with velocity
-        self.filter.set(p[CUTOFF] * (p[VEL_FILTER] * self.velocity).exp2(), FLAT_Q, sample_rate);
+        let level = p[LEVEL] * self.gain * velocity_gain(self.velocity, p[VEL_LEVEL].clamp(0.0, 1.0));
+        self.filter.set(velocity_cutoff(self.velocity, p), sample_rate);
         let period = self.period();
         let wrap_at = (self.loop_start + period) as f64;
         let read = |voice: &Voice, i: i64| voice.index(i).map_or(0.0, |j| data[voice.sample_at(j)]);
         for o in out.iter_mut() {
             if self.control == 0 {
+                // the LFO's own depth comes in a step at a time, the wheel's and aftertouch's at once
                 let t = self.age as f32 / sample_rate;
-                let fade = ((t - p[LFO_DELAY]) / LFO_FADE).clamp(0.0, 1.0);
-                // the LFO's own depth after its delay, the wheel and aftertouch at once
-                let pressure = controls.pressure.max(self.key_pressure);
-                let depth = p[LFO_DEPTH] * fade + controls.modulation * MOD_DEPTH + pressure * p[PRESSURE_DEPTH];
+                let full = p[LFO_DEPTH].clamp(0.0, VIBRATO_STEPS as f32) as u32;
+                let lfo = if p[LFO_DELAY] > 0.0 { ((t / p[LFO_DELAY]) as u32).min(full) } else { full };
+                let pressure = (controller_steps(controls.pressure) as f32 * p[PRESSURE_DEPTH].clamp(0.0, 1.0)) as u32;
+                let depth = vibrato_depth(lfo) + vibrato_depth(controller_steps(controls.modulation))
+                    + vibrato_depth(pressure);
                 let vibrato = depth * (2.0 * core::f32::consts::PI * self.lfo_phase).sin();
                 self.current_step = self.step * controls.bend * ((vibrato / 12.0) as f64).exp2();
                 self.lfo_phase = (self.lfo_phase + CONTROL_PERIOD as f32 * p[LFO_RATE] / sample_rate).fract();
@@ -306,6 +353,34 @@ impl Voice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn db(gain: f32) -> f32 {
+        20.0 * gain.log10()
+    }
+
+    #[test]
+    fn velocity_gain_as_measured_on_the_x7000() {
+        // dB under LEVEL at MIDI velocities 1, 64 and 127 with VEL>LEVEL 0, 50 and 99 (tools/x7000-lab, vellevel)
+        for (amount, measured) in [(0, [-7.7, -7.7, -7.7]), (50, [-24.6, -14.2, -4.0]), (99, [-40.3, -20.1, 0.0])] {
+            for (velocity, want) in [1.0, 64.0, 127.0].into_iter().zip(measured) {
+                let got = db(velocity_gain(velocity / 127.0, amount as f32 / 99.0));
+                assert!((got - want).abs() < 0.6, "VEL>LEVEL {amount} velocity {velocity}: {got} dB, measured {want}");
+            }
+        }
+    }
+
+    #[test]
+    fn velocity_cutoff_turns_at_64_within_the_range() {
+        let mut p = DEFAULT_PARAMS;
+        p[CUTOFF] = 1000.0;
+        p[VEL_FILTER] = 2.0;
+        p[CUTOFF_MIN] = 300.0;
+        p[CUTOFF_MAX] = 3000.0;
+        assert!((velocity_cutoff(64.0 / 127.0, &p) - 1000.0).abs() < 0.01);
+        assert!((velocity_cutoff(96.0 / 127.0, &p) - 2000.0).abs() < 1.0, "half way up: an octave");
+        assert_eq!(velocity_cutoff(1.0, &p), 3000.0, "the top");
+        assert_eq!(velocity_cutoff(0.0, &p), 300.0, "the bottom");
+    }
 
     fn note(len: usize, loop_start: usize, loop_end: usize, loop_mode: LoopMode) -> NoteOn {
         NoteOn {
@@ -419,10 +494,10 @@ mod tests {
     #[test]
     fn a_drum_trigger_ignores_key_off() {
         let mut drum = voice(100, 0, 0, LoopMode::Drum);
-        drum.release();
+        drum.release(NOTE_OFF_VELOCITY);
         assert!(!drum.released);
         let mut one_shot = voice(100, 0, 0, LoopMode::Off);
-        one_shot.release();
+        one_shot.release(NOTE_OFF_VELOCITY);
         assert!(one_shot.released);
     }
 }
