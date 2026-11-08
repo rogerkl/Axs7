@@ -10,3 +10,6 @@ dist/
 
 # sample libraries to test with, not ours to publish
 /sounds/
+
+# the lab scripts, built
+/tools/x7000-lab/build/
