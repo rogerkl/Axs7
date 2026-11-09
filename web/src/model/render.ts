@@ -84,3 +84,41 @@ export function writtenEdits(r: Rendered, s: Pick<Sample, 'loopMode'>): Written 
   return { source: data, sourceRate: r.rate, data, rate: r.rate, start: at(r.start), end: at(r.end),
     loopStart: at(r.loopStart), loopEnd: at(r.loopEnd), recipe: plainRecipe() };
 }
+
+/** A sample trimmed: its original and audio, and the points in them */
+export type Trimmed = Pick<Sample, 'source' | 'data' | 'start' | 'end' | 'loopStart' | 'loopEnd'>;
+
+/**
+ * Why the part of a sample that doesn't play can't be cut off with its edits as they are, null if it can. Resampled,
+ * the points aren't in the original's samples; crossfaded, the crossfade takes audio from before the loop, which may
+ * be outside the part that plays. APPLY EDITS writes those in and keeps only the part that plays.
+ */
+export function trimBlocked(s: Sample): 'RESAMPLED' | 'CROSSFADED' | null {
+  if (s.fromSampler) {
+    return null; // played as it came
+  }
+  if (Math.abs(s.rate - s.sourceRate) > 0.01) {
+    return 'RESAMPLED';
+  }
+  return s.recipe.crossfadeMs > 0 && s.loopMode === 'forward' ? 'CROSSFADED' : null;
+}
+
+/** Samples that don't play: before START (or a loop start before it), and after END */
+export function unplayed(s: Pick<Sample, 'data' | 'start' | 'end' | 'loopStart' | 'loopMode'>): { before: number;
+  after: number } {
+  return { before: usedStart(s), after: Math.max(0, s.data.length - s.end) };
+}
+
+/**
+ * The sample with only the part that plays, from START (or a loop start before it) to END, of its original and of
+ * its audio alike: the rest is let go. Its edits stay and render the same from it (see trimBlocked), and a sample
+ * from the sampler plays as it came. Points outside it, a one shot's loop, come inside.
+ */
+export function trimmed(s: Sample): Trimmed {
+  const from = usedStart(s);
+  const to = s.end;
+  const source = s.source.slice(from, to);
+  const data = s.data === s.source ? source : s.data.slice(from, to);
+  const at = (x: number) => Math.max(0, Math.min(x - from, to - from));
+  return { source, data, start: at(s.start), end: at(s.end), loopStart: at(s.loopStart), loopEnd: at(s.loopEnd) };
+}

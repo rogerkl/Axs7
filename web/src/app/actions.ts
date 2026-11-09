@@ -3,7 +3,7 @@
 import { decodeAudioFile, resampleInBrowser } from '../audio/decode';
 import { memoryToZip, slotsUsed, zipToMemory } from '../model/memory';
 import { usedStart } from '../model/points';
-import { writtenEdits } from '../model/render';
+import { trimBlocked, trimmed, unplayed, writtenEdits } from '../model/render';
 import { S612_KEYGROUP, diskFromSample, sampleFromDisk } from '../model/disk';
 import { dumpFromSample, dumpWithParams, sampleFromDump, sampleFromWav, wavFromSample } from '../model/convert';
 import { LOAD_ALL_PROGRAMS, LOAD_NO_PROGRAMS, LOAD_SLOT_FILE, LOAD_SLOT_OFF } from './settings';
@@ -188,6 +188,49 @@ export class Actions {
       midi.logLine(`Could not write the edits of ${sample.name}: ${errorText(e)}`, 'error');
       lcd.flash('NOT WRITTEN, SEE MIDI');
     }
+  }
+
+  /**
+   * Cuts off what doesn't play: the audio before START (or a loop start before it) and after END, of the original too,
+   * for a sampler or a player with little memory. A sample from the sampler may be trimmed too: the part that plays
+   * stays as it came. Edits stay as they are; a resampled or crossfaded sample is trimmed by APPLY EDITS. Asks first.
+   */
+  trim(sample: Sample): void {
+    const { store, renderer, lcd } = this.app;
+    const blocked = trimBlocked(sample);
+    if (blocked) {
+      lcd.flash(`${blocked}: APPLY EDITS TRIMS IT`);
+      return;
+    }
+    const { before, after } = unplayed(sample);
+    if (!before && !after) {
+      lcd.flash('NOTHING TO TRIM');
+      return;
+    }
+    const seconds = (n: number) => (n / sample.rate).toFixed(2);
+    if (!confirm(`Keep only the part of ${sample.name} that plays, ${seconds(sample.end - before)} of `
+      + `${seconds(sample.data.length)} s: START${usedStart(sample) < sample.start ? ' (the loop start before '
+        + 'it)' : ''} to END? The rest is let go, from the original too. A memory file saved before still has it.`)) {
+      return;
+    }
+    const t = trimmed(sample);
+    renderer.adopt([{ ...sample, ...t }]); // as rendered: the same audio, cut
+    store.trimSample(sample.id, t);
+    lcd.flash(`TRIMMED TO ${seconds(t.data.length)}S`);
+  }
+
+  /**
+   * Lets a sample from the sampler be edited like a loaded one. It is then sent and saved as edited, no longer as it
+   * came, and keeps none of the sampler's mark: receive it again for that. Asks first.
+   */
+  allowEdits(sample: Sample): void {
+    if (!sample.fromSampler || !confirm(`Allow editing ${sample.name}'s audio (resampling, normalizing, attack, `
+      + 'crossfade, writing edits)? It is then sent and saved as edited, not as it came from the sampler, and that '
+      + 'can\'t be switched back: receive it again for the sampler\'s own.')) {
+      return;
+    }
+    this.app.store.allowEdits(sample.id);
+    this.app.lcd.flash('EDITS ALLOWED');
   }
 
   /** Stops waiting for a transfer. A sent dump can't be called back, it is with the MIDI driver. */

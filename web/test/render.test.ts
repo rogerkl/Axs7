@@ -4,7 +4,8 @@ import { Dsp } from '../src/audio/dsp';
 import { defaultSound } from '../src/model/mapping';
 import { isTwelveBit } from '../src/model/edit';
 import { isEdited, plainRecipe, renderKey } from '../src/model/recipe';
-import { renderSample, writtenEdits } from '../src/model/render';
+import { renderSample, trimBlocked, trimmed, unplayed, writtenEdits } from '../src/model/render';
+import { Store } from '../src/model/store';
 import type { Recipe, Sample } from '../src/model/types';
 import { BW16 } from '../src/protocol/akai';
 
@@ -160,5 +161,58 @@ describe('writing the edits', () => {
     const oneShot = writtenEdits(rendered, { loopMode: 'off' });
     expect(oneShot).toMatchObject({ start: 0, end: 600, loopStart: 0, loopEnd: 500 });
     expect(oneShot.data[0]).toBe(data[300]);
+  });
+});
+
+describe('trimming', () => {
+  test('keeps only START (or a loop start before it) to END, of the original and the audio alike', () => {
+    const s = loaded({}, { start: 3000, loopStart: 2000, loopEnd: 8000, end: 9000 });
+    expect(unplayed(s)).toEqual({ before: 2000, after: 1000 });
+    const t = trimmed(s);
+    expect(t).toMatchObject({ start: 1000, end: 7000, loopStart: 0, loopEnd: 6000 });
+    expect(t.source).toEqual(source.slice(2000, 9000));
+    expect(t.data).toBe(t.source); // no edits: the audio is the original, still not a copy
+    // a one shot from START: its loop points come inside
+    const oneShot = trimmed({ ...s, loopMode: 'off' });
+    expect(oneShot).toMatchObject({ start: 0, end: 6000, loopStart: 0, loopEnd: 5000 });
+    expect(unplayed({ ...s, start: 0, loopStart: 0, end: source.length })).toEqual({ before: 0, after: 0 });
+  });
+
+  test('a sample from the sampler plays as it came', () => {
+    const received = loaded({}, { fromSampler: true, start: 500, loopStart: 4000, loopEnd: 9000, end: 9000 });
+    expect(trimBlocked(received)).toBeNull();
+    const t = trimmed(received);
+    expect(Array.from(t.data)).toEqual(Array.from(source.subarray(500, 9000)));
+    expect(t).toMatchObject({ start: 0, end: 8500, loopStart: 3500, loopEnd: 8500 });
+  });
+
+  test('edits that only touch the part that plays stay, and render the same from the trimmed original', async () => {
+    const s = loaded({ normalize: true, attackMs: 5, twelveBit: true });
+    const r = await renderSample(s, noResample, dsp);
+    const t = trimmed({ ...s, data: r.data });
+    const again = await renderSample({ ...s, ...t }, noResample, dsp);
+    expect(Array.from(again.data)).toEqual(Array.from(t.data));
+    expect(again).toMatchObject({ start: t.start, end: t.end, loopStart: t.loopStart, loopEnd: t.loopEnd });
+  });
+
+  test('not resampled or crossfaded ones: APPLY EDITS trims those', () => {
+    expect(trimBlocked(loaded())).toBeNull();
+    expect(trimBlocked(loaded({ resampleTo: BW16.rate }, { rate: BW16.rate }))).toBe('RESAMPLED');
+    expect(trimBlocked(loaded({ crossfadeMs: 50 }))).toBe('CROSSFADED');
+    expect(trimBlocked(loaded({ crossfadeMs: 50 }, { loopMode: 'off' }))).toBeNull();
+  });
+
+  test('allowing edits on a sample from the sampler', () => {
+    const store = new Store();
+    store.addSample(loaded({}, { fromSampler: true }), store.bank, 0);
+    const events: string[] = [];
+    store.on('samples', () => events.push('samples'));
+    store.updateRecipe('s', { normalize: true });
+    expect(store.samples.get('s')!.recipe.normalize).toBe(false); // not before
+    store.allowEdits('s');
+    expect(store.samples.get('s')!.fromSampler).toBe(false);
+    expect(events).toEqual(['samples']);
+    store.updateRecipe('s', { normalize: true });
+    expect(store.samples.get('s')!.recipe.normalize).toBe(true);
   });
 });

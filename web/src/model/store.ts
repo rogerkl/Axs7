@@ -4,7 +4,8 @@
 
 import { BANK_PROGRAMS, audibleKeygroups, bankPrograms, newBank, newKeygroup, normalizeBank } from './mapping';
 import { normalizeSample } from './points';
-import type { Rendered, Written } from './render';
+import { plainRecipe } from './recipe';
+import type { Rendered, Trimmed, Written } from './render';
 import type { Bank, Keygroup, Program, Recipe, Sample, Sound } from './types';
 
 /** A keygroup's settings, without its id, sample and program */
@@ -242,6 +243,29 @@ export class Store {
       Object.assign(sample, written);
       this.emit('sample', id);
       this.emit('audio', id);
+    }
+  }
+
+  /** A sample with only the part that plays (see trimmed): also one from the sampler */
+  trimSample(id: string, t: Trimmed): void {
+    const sample = this.samples.get(id);
+    if (sample) {
+      Object.assign(sample, t);
+      this.emit('sample', id);
+      this.emit('audio', id);
+    }
+  }
+
+  /**
+   * A sample from the sampler made like a loaded one: its audio can be edited, and it is then sent and saved as
+   * edited, no longer as it came
+   */
+  allowEdits(id: string): void {
+    const sample = this.samples.get(id);
+    if (sample?.fromSampler) {
+      sample.fromSampler = false;
+      sample.recipe = plainRecipe();
+      this.emit('samples');
     }
   }
 

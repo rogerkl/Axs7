@@ -16,6 +16,7 @@ import { h, pickFiles } from '../dom';
 import { ParamCell, choiceCell, dataEntry } from '../param';
 import { isPortion, movePoint, usedStart } from '../../model/points';
 import type { PointName } from '../../model/points';
+import { trimBlocked, unplayed } from '../../model/render';
 import { slotCell } from '../slot';
 import { Waveform } from '../waveform';
 
@@ -486,6 +487,12 @@ export function samplesView(app: App): View {
       title: 'Make the sample as it sounds now its original: the edits written into the audio, and only START (or a '
         + 'loop start before it) to END kept. The original as loaded is let go, it asks first' },
     'APPLY EDITS');
+    const trimTitle = 'Keep only the part that plays, START (or a loop start before it) to END, of the original too: '
+      + 'for a sampler or player with little memory. A sample from the sampler plays as it came. It asks first';
+    const trim = h('button', { class: 'soft', onClick: () => actions.trim(sample()), title: trimTitle }, 'TRIM');
+    const allow = s.fromSampler ? h('button', { class: 'soft', onClick: () => actions.allowEdits(sample()),
+      title: 'Edit the audio like a loaded sample\'s: it is then sent and saved as edited, no longer as it came. It '
+        + 'asks first' }, 'ALLOW EDITS') : null;
     const showFit = () => {
       const now = sample();
       const fit = fitText(now);
@@ -508,12 +515,18 @@ export function samplesView(app: App): View {
       if (apply) {
         apply.disabled = !isEdited(now.recipe) && usedStart(now) === 0 && now.end >= now.data.length;
       }
+      const { before, after } = unplayed(now);
+      const blocked = trimBlocked(now);
+      trim.disabled = (!before && !after) || !!blocked;
+      trim.title = blocked ? `${blocked}: APPLY EDITS writes the edits and keeps only the part that plays`
+        : before || after ? trimTitle : 'All of it plays, nothing to trim';
     };
     showFit();
     detailRefresh.push(showFit);
     const edits = s.fromSampler
       ? [h('p', { class: 'info sampler-note' }, 'FROM THE SAMPLER: IT IS SENT BACK AS IT CAME, SO THE AUDIO ISN\'T '
-        + 'EDITED (NO RESAMPLING, NORMALIZING, ATTACK OR CROSSFADE). THE POINTS, SCAN, DIR AND SOUND CAN BE SET.')]
+        + 'EDITED (NO RESAMPLING, NORMALIZING, ATTACK OR CROSSFADE). THE POINTS, SCAN, DIR AND SOUND CAN BE SET, AND '
+        + 'TRIM CUTS OFF WHAT DOESN\'T PLAY. ALLOW EDITS MAKES ITS AUDIO EDITABLE, NO LONGER AS IT CAME.')]
       : [attackGroup(s), crossfadeGroup(s), resampleGroup(s)];
     detail.replaceChildren(
       h('div', { class: 'row' }, name,
@@ -533,6 +546,8 @@ export function samplesView(app: App): View {
           } }, 'ADD TO PROGRAM'),
         reset,
         apply,
+        trim,
+        allow,
         h('button', { class: 'soft', onClick: () => actions.saveWav(sample()),
           title: 'The sample as it sounds, with its loop, and its settings and keygroups for loading it here again' },
         'SAVE WAV'),
