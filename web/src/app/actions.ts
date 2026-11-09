@@ -225,7 +225,7 @@ export class Actions {
    */
   allowEdits(sample: Sample): void {
     if (!sample.fromSampler || !confirm(`Allow editing ${sample.name}'s audio (resampling, normalizing, attack, `
-      + 'crossfade, writing edits)? It is then sent and saved as edited, not as it came from the sampler, and that '
+      + 'fade out, crossfade, writing edits)? It is then sent and saved as edited, not as it came from the sampler, and that '
       + 'can\'t be switched back: receive it again for the sampler\'s own.')) {
       return;
     }

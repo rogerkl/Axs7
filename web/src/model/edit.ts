@@ -45,6 +45,14 @@ export function isTwelveBit(data: Float32Array): boolean {
 }
 
 /** How far into the part that is played an attack has room for: it has to end before the loop starts */
+/**
+ * How long a fade out can be: all that plays of a sample that isn't looped, none of a looped one (it doesn't end while
+ * the key is held, its release fades it)
+ */
+export function fadeOutRoom(s: Pick<Sample, 'start' | 'end' | 'loopMode'>): number {
+  return s.loopMode === 'forward' || s.loopMode === 'alternating' ? 0 : Math.max(0, s.end - s.start);
+}
+
 export function attackRoom(s: Pick<Sample, 'start' | 'end' | 'loopStart' | 'loopEnd' | 'loopMode' | 'reverse'>)
   : number {
   const looped = s.loopMode === 'forward' || s.loopMode === 'alternating';

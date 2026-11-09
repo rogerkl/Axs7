@@ -1,10 +1,10 @@
-// Renders a sample from its original by its recipe: resample, normalize, crossfade, attack, 12 bit. The crossfade
-// comes before the attack, so it fades into the audio as it was, not into a fade in.
+// Renders a sample from its original by its recipe: resample, normalize, crossfade, attack, fade out, 12 bit. The
+// crossfade comes before the attack, so it fades into the audio as it was, not into a fade in.
 
 import { crossfadeRoom } from '../audio/dsp';
 import type { AttackShape, FadeShape } from '../audio/dsp';
 import type { Resampler } from './convert';
-import { attackRoom, normalizeData, quantize12Data } from './edit';
+import { attackRoom, fadeOutRoom, normalizeData, quantize12Data } from './edit';
 import { usedStart } from './points';
 import { plainRecipe } from './recipe';
 import type { Sample } from './types';
@@ -14,6 +14,8 @@ export interface RenderDsp {
   crossfadeLoop(data: Float32Array, loopStart: number, loopEnd: number, length: number, shape: FadeShape)
     : { data: Float32Array; length: number };
   fadeIn(data: Float32Array, at: number, length: number, shape: AttackShape, backwards: boolean)
+    : { data: Float32Array; length: number };
+  fadeOut(data: Float32Array, last: number, length: number, shape: AttackShape, backwards: boolean)
     : { data: Float32Array; length: number };
 }
 
@@ -59,6 +61,13 @@ export async function renderSample(s: Sample, resample: Resampler, dsp: RenderDs
     const length = Math.min(attackRoom(shaped), Math.round((r.attackMs / 1000) * rate));
     if (length > 0) {
       data = dsp.fadeIn(data, s.reverse ? points.end - 1 : points.start, length, r.attackShape, s.reverse).data;
+    }
+  }
+  if (r.fadeOutMs > 0) {
+    // to silence where playing ends: END, or START when reversed
+    const length = Math.min(fadeOutRoom(shaped), Math.round((r.fadeOutMs / 1000) * rate));
+    if (length > 0) {
+      data = dsp.fadeOut(data, s.reverse ? points.start : points.end - 1, length, r.fadeOutShape, s.reverse).data;
     }
   }
   if (r.twelveBit) {

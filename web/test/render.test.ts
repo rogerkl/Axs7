@@ -86,6 +86,29 @@ describe('rendering a sample from its original', () => {
     expect(long.data.subarray(4000)).toEqual(source.subarray(4000));
   });
 
+  test('the fade out fades what is played last to silence, at END, or at START reversed; not a looped sample', async () => {
+    const oneShot = { loopMode: 'off' as const };
+    const r = await renderSample(loaded({ fadeOutMs: 10 }, oneShot), noResample, dsp); // 441 samples
+    expect(Math.abs(r.data[8999])).toBe(0); // the last played, silent
+    expect(Math.abs(r.data[8999 - 220] / source[8999 - 220] - 0.5)).toBeLessThan(0.01); // half way: half
+    expect(Array.from(r.data.subarray(1000, 9000 - 441))).toEqual(Array.from(source.subarray(1000, 9000 - 441)));
+    expect(Array.from(r.data.subarray(9000))).toEqual(Array.from(source.subarray(9000))); // after END: untouched
+    const curve = await renderSample(loaded({ fadeOutMs: 10, fadeOutShape: 'curve' }, oneShot), noResample, dsp);
+    expect(Math.abs(curve.data[8999 - 220] / source[8999 - 220] - 0.25)).toBeLessThan(0.01);
+    const back = await renderSample(loaded({ fadeOutMs: 10 }, { ...oneShot, reverse: true }), noResample, dsp);
+    expect(Math.abs(back.data[1000])).toBe(0); // reversed, playing ends at START
+    expect(back.data[8999]).toBe(source[8999]);
+    // as long as all that plays, at most
+    const long = await renderSample(loaded({ fadeOutMs: 1000 }, oneShot), noResample, dsp);
+    expect(long.data[1000]).toBeCloseTo(source[1000], 3); // from where playing starts
+    expect(long.data[999]).toBe(source[999]);
+    expect(Math.abs(long.data[8999])).toBe(0);
+    // a looped sample plays on while held: no fade out
+    const looped = await renderSample(loaded({ fadeOutMs: 10 }), noResample, dsp);
+    expect(looped.data).toBe(source);
+    expect(isEdited(loaded({ fadeOutMs: 10 }).recipe)).toBe(true);
+  });
+
   test('the crossfade comes before the attack, and fades into the audio as it was', async () => {
     // the loop starts right after START, the crossfade takes what comes before the loop start
     const points = { start: 3900, loopStart: 4000 };
@@ -187,7 +210,7 @@ describe('trimming', () => {
   });
 
   test('edits that only touch the part that plays stay, and render the same from the trimmed original', async () => {
-    const s = loaded({ normalize: true, attackMs: 5, twelveBit: true });
+    const s = loaded({ normalize: true, attackMs: 5, fadeOutMs: 5, twelveBit: true }, { loopMode: 'off' });
     const r = await renderSample(s, noResample, dsp);
     const t = trimmed({ ...s, data: r.data });
     const again = await renderSample({ ...s, ...t }, noResample, dsp);

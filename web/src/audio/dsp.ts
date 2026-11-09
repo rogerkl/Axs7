@@ -72,6 +72,17 @@ export class Dsp {
     return { data: r.data, length: r.result };
   }
 
+  /**
+   * Renders a fade out: the `length` samples played last fade to silence, which ends at `last` (the last sample
+   * played), or, reversed, at `last` as the first sample of the part played. A fade in run from the other end.
+   *
+   * @returns the faded copy of the data, and the length used
+   */
+  fadeOut(data: Float32Array, last: number, length: number, shape: AttackShape, backwards: boolean)
+    : { data: Float32Array; length: number } {
+    return this.fadeIn(data, last, length, shape, !backwards);
+  }
+
   /** For tests: how much memory the module has */
   get memoryBytes(): number {
     return this.ex.memory.buffer.byteLength;

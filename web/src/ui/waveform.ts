@@ -35,6 +35,9 @@ export class Waveform {
   /** samples of rendered attack to show, 0 for none, and its shape */
   private attack = 0;
   private attackCurve = false;
+  /** the same of a rendered fade out */
+  private fadeOut = 0;
+  private fadeOutCurve = false;
   private heads: number[] = [];
   private headsFrame = 0;
   private dragging: PointName | 'pan' | null = null;
@@ -140,6 +143,15 @@ export class Waveform {
     if (length !== this.attack || curve !== this.attackCurve) {
       this.attack = length;
       this.attackCurve = curve;
+      this.draw();
+    }
+  }
+
+  /** Shows a fade out to be rendered: what is played last, fading to silence, its curve over the wave */
+  setFadeOut(length: number, curve = false): void {
+    if (length !== this.fadeOut || curve !== this.fadeOutCurve) {
+      this.fadeOut = length;
+      this.fadeOutCurve = curve;
       this.draw();
     }
   }
@@ -360,26 +372,30 @@ export class Waveform {
       }
       ctx.globalAlpha = 1;
     }
-    if (this.attack > 0) {
-      // from silence where playing starts to full level
-      const [silent, full] = s.reverse ? [s.end, s.end - this.attack] : [s.start, s.start + this.attack];
-      const ramp = ctx.createLinearGradient(x(silent), 0, x(full), 0);
+    // the attack from silence where playing starts, the fade out to silence where it ends: each from its silent edge
+    // into the sample
+    const fades = [
+      { length: this.attack, curve: this.attackCurve, edge: s.reverse ? s.end : s.start, into: s.reverse ? -1 : 1 },
+      { length: this.fadeOut, curve: this.fadeOutCurve, edge: s.reverse ? s.start : s.end, into: s.reverse ? 1 : -1 },
+    ].filter((f) => f.length > 0);
+    for (const f of fades) {
+      const full = f.edge + f.into * f.length;
+      const ramp = ctx.createLinearGradient(x(f.edge), 0, x(full), 0);
       ramp.addColorStop(0, color('--wave-attack'));
       ramp.addColorStop(1, 'transparent');
-      band(Math.min(silent, full), Math.max(silent, full), ramp);
+      band(Math.min(f.edge, full), Math.max(f.edge, full), ramp);
     }
     this.drawWave(ctx, x, w, height, color('--wave'), dpr);
-    if (this.attack > 0) {
-      // the attack's level, over and under the wave: from silence where playing starts to full
-      const at = (i: number) => (s.reverse ? s.end - 1 - i : s.start + i);
+    for (const f of fades) {
+      // the level, over and under the wave, from silence at the edge to full
       ctx.strokeStyle = color('--wave-attack-line');
       ctx.lineWidth = 1.5 * dpr;
       for (const sign of [1, -1]) {
         ctx.beginPath();
         for (let k = 0; k <= 32; k++) {
           const t = k / 32;
-          const gain = this.attackCurve ? t * t : t;
-          const px = x(at(Math.round(t * this.attack)));
+          const gain = f.curve ? t * t : t;
+          const px = x(f.edge + f.into * Math.round(t * f.length));
           const py = ((1 - sign * gain) * height) / 2;
           if (k === 0) {
             ctx.moveTo(px, py);

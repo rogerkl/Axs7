@@ -41,6 +41,10 @@ export interface Recipe {
   /** a fade in of what is played first, the X7000 has no attack: ms, 0 for none */
   attackMs: number;
   attackShape: 'linear' | 'curve';
+  /** a fade out of what is played last, for a sample that isn't looped: ms, 0 for none */
+  fadeOutMs: number;
+  /** linear, or falling fast and then slower (the attack's curve, the other way) */
+  fadeOutShape: 'linear' | 'curve';
   /** a forward loop's end faded into what comes before its start: ms, 0 for none */
   crossfadeMs: number;
   crossfadeShape: 'linear' | 'equal';

@@ -7,7 +7,7 @@ import { newKeygroup } from '../../model/mapping';
 import { BANDWIDTHS, MAX_SAMPLES, nearestBandwidth, samplerBandwidth } from '../../protocol/akai';
 import { crossfadeRoom } from '../../audio/dsp';
 import { samplerFit } from '../../model/convert';
-import { attackRoom, isTwelveBit, portionPeak } from '../../model/edit';
+import { attackRoom, fadeOutRoom, isTwelveBit, portionPeak } from '../../model/edit';
 import { isEdited } from '../../model/recipe';
 import { isLooped } from '../../model/types';
 import { noteName } from '../../model/notes';
@@ -250,6 +250,38 @@ export function samplesView(app: App): View {
   }
 
   /**
+   * A fade out rendered into the sample: what is played last fades to silence, so a one shot cut short doesn't click
+   * at its end. Not for a looped sample: it doesn't end while held, its release fades it.
+   */
+  function fadeOutGroup(s: Sample): HTMLElement {
+    const sample = () => store.samples.get(s.id) ?? s;
+    const room = () => fadeOutRoom(sample());
+    const note = h('span', { class: 'info' });
+    const lengthCell = fadeLengthCell('samples.fadeOutLength', sample, room, () => sample().recipe.fadeOutMs,
+      (fadeOutMs) => store.updateRecipe(s.id, { fadeOutMs }));
+    const shapeCell = choiceCell('samples.fadeOutShape', 'SHAPE', ['linear', 'curve'] as const, ['LIN', 'CURVE'],
+      () => sample().recipe.fadeOutShape, (fadeOutShape) => store.updateRecipe(s.id, { fadeOutShape }));
+    shapeCell.el.title = 'LIN falls evenly, CURVE falls fast and then slower, like the release';
+    const update = () => {
+      const now = sample();
+      const length = fadeSamples(now, now.recipe.fadeOutMs, room());
+      note.textContent = isLooped(now.loopMode)
+        ? 'LOOPED: IT PLAYS ON WHILE HELD, THE RELEASE FADES IT OUT'
+        : now.recipe.fadeOutMs === 0 ? 'OFF: THE SAMPLE ENDS AS IT IS'
+          : `THE LAST ${msOf(now, length)}MS PLAYED FADE OUT TO SILENCE${now.reverse ? ', AT START' : ''}`;
+      wave.setFadeOut(isLooped(now.loopMode) ? 0 : length, now.recipe.fadeOutShape === 'curve');
+    };
+    update();
+    detailRefresh.push(() => {
+      lengthCell.refresh(); // the room changes with the points
+      shapeCell.refresh();
+      update();
+    });
+    return h('div', { class: 'sampler-group', role: 'group', 'aria-label': 'Fade out' },
+      h('span', { class: 'group-title' }, 'FADE OUT'), lengthCell.el, shapeCell.el, note);
+  }
+
+  /**
    * Crossfade loop: the end of a forward loop fades into what comes before the loop start, so the jump back to the
    * start doesn't click.
    */
@@ -420,6 +452,7 @@ export function samplesView(app: App): View {
     detailRefresh = [];
     wave.setCrossfade(0);
     wave.setAttack(0);
+    wave.setFadeOut(0);
     wave.setLimit(null);
     wave.setHeads([]);
     const s = store.selectedSample;
@@ -481,7 +514,8 @@ export function samplesView(app: App): View {
     const fitBadge = h('span', { class: 'badge' });
     const length = h('span', { class: 'info' });
     const reset = s.fromSampler ? null : h('button', { class: 'soft', onClick: () => actions.resetEdits(sample()),
-      title: 'Back to the original as it was loaded: no resampling, normalizing, 12 bit, attack or crossfade' },
+      title: 'Back to the original as it was loaded: no resampling, normalizing, 12 bit, attack, fade out or '
+        + 'crossfade' },
     'RESET EDITS');
     const apply = s.fromSampler ? null : h('button', { class: 'soft', onClick: () => actions.applyEdits(sample()),
       title: 'Make the sample as it sounds now its original: the edits written into the audio, and only START (or a '
@@ -525,9 +559,9 @@ export function samplesView(app: App): View {
     detailRefresh.push(showFit);
     const edits = s.fromSampler
       ? [h('p', { class: 'info sampler-note' }, 'FROM THE SAMPLER: IT IS SENT BACK AS IT CAME, SO THE AUDIO ISN\'T '
-        + 'EDITED (NO RESAMPLING, NORMALIZING, ATTACK OR CROSSFADE). THE POINTS, SCAN, DIR AND SOUND CAN BE SET, AND '
+        + 'EDITED (NO RESAMPLING, NORMALIZING, ATTACK, FADE OUT OR CROSSFADE). THE POINTS, SCAN, DIR AND SOUND CAN BE SET, AND '
         + 'TRIM CUTS OFF WHAT DOESN\'T PLAY. ALLOW EDITS MAKES ITS AUDIO EDITABLE, NO LONGER AS IT CAME.')]
-      : [attackGroup(s), crossfadeGroup(s), resampleGroup(s)];
+      : [attackGroup(s), fadeOutGroup(s), crossfadeGroup(s), resampleGroup(s)];
     detail.replaceChildren(
       h('div', { class: 'row' }, name,
         length,
