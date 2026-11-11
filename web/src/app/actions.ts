@@ -22,9 +22,10 @@ import { S700_SCAN, bandwidthRate } from '../protocol/s700disk';
 import type { S700SampleParams } from '../protocol/s700disk';
 import { bytesWithPoints, paramsDiffer, sampleParamsBytes, sampleParamsRequest } from '../protocol/sprm';
 import { noteName } from '../model/notes';
-import { sm87Contents } from '../model/sm87';
+import { sm87Bank, sm87Contents, sm87Taken } from '../model/sm87';
 import { installPackage } from './sm87install';
 import { Sm87BankError, Sm87Package, makeBank } from '../sm87/sm87bank.js';
+import type { BankContents } from '../sm87/sm87bank.js';
 import { download } from '../ui/dom';
 import type { App } from './app';
 
@@ -838,7 +839,14 @@ export class Actions {
   }
 
   /** SM-87's firmware package SAVE PACKAGE and INSTALL put the banks into, as opened (the file's name and bytes) */
-  sm87Firmware: { name: string; bytes: Uint8Array; pkg: Sm87Package } | null = null;
+  sm87Firmware: {
+    name: string;
+    bytes: Uint8Array;
+    pkg: Sm87Package;
+    /** what it holds (read once: it doesn't change), null for nothing; heldError when that doesn't check */
+    held: BankContents | null;
+    heldError: string | null;
+  } | null = null;
   /** what the last package made of the banks holds, for the BANK view */
   sm87Built: string | null = null;
   private sm87Listeners = new Set<() => void>();
@@ -861,7 +869,15 @@ export class Actions {
     const { lcd, midi } = this.app;
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
-      this.sm87Firmware = { name: file.name, bytes, pkg: new Sm87Package(bytes, file.name) };
+      const pkg = new Sm87Package(bytes, file.name);
+      let held: BankContents | null = null;
+      let heldError: string | null = null;
+      try {
+        held = pkg.contents();
+      } catch (e) {
+        heldError = errorText(e);
+      }
+      this.sm87Firmware = { name: file.name, bytes, pkg, held, heldError };
       this.sm87Built = null;
       lcd.flash(`OPENED ${this.sm87Firmware.pkg.identity}`);
     } catch (e) {
@@ -919,6 +935,50 @@ export class Actions {
       download(built.bytes, built.name, 'application/octet-stream');
       this.app.lcd.flash(`SAVED ${built.name}`);
     }
+  }
+
+  /**
+   * What the firmware package opened holds taken into SM-87's banks, after a confirm, so that a package made of them
+   * again has the same (model/sm87.ts sm87Taken): for its samples and kit to go into a new release's package. What the
+   * banks held goes to no bank; what couldn't be taken is logged in the MIDI view.
+   */
+  takeSm87(): void {
+    const { store, lcd, midi, renderer } = this.app;
+    const firmware = this.sm87Firmware;
+    if (!firmware) {
+      lcd.flash('OPEN SM-87 FIRMWARE FIRST');
+      return;
+    }
+    const { held, heldError } = firmware;
+    if (heldError) {
+      midi.logLine(`SM-87: ${heldError}`, 'error');
+      lcd.flash("ITS SAMPLES DON'T CHECK, SEE MIDI");
+      return;
+    }
+    if (!held) {
+      lcd.flash('IT HOLDS NO SAMPLES');
+      return;
+    }
+    if (!confirm(`Take the samples and kit in ${firmware.name} into DRUMS and SAMPLES? What those banks hold now goes `
+      + 'to no bank (it stays in memory).')) {
+      return;
+    }
+    store.addSm87Banks();
+    const drumsId = sm87Bank(store.banks, 'drums')!.id;
+    const taken = sm87Taken(held, drumsId, sm87Bank(store.banks, 'samples')!.id);
+    renderer.adopt(taken.samples); // as they are, nothing to render
+    store.takeSm87(taken.samples, taken.pans);
+    for (const note of taken.notes) {
+      midi.logLine(`SM-87: ${firmware.name}: ${note}`);
+    }
+    const many = (n: number, what: string) => `${n} ${what}${n === 1 ? '' : 's'}`;
+    const drums = taken.samples.filter((s) => s.bankId === drumsId).length;
+    const kit = held.kit ? `a kit of ${many(drums, 'drum sample')}` : "no kit (the firmware's own)";
+    const notes = taken.notes.length ? ` (${many(taken.notes.length, 'note')} in MIDI)` : '';
+    this.sm87Built = `Took ${many(held.samples.length, 'sample')} and ${kit} from ${firmware.name}${notes}`;
+    midi.logLine(`SM-87: ${this.sm87Built}`);
+    lcd.flash(`TOOK ${firmware.pkg.identity}'S SAMPLES`);
+    this.sm87Changed();
   }
 
   /** an install under way or done: its share and what it says, for the BANK view */

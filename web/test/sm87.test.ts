@@ -11,11 +11,11 @@ import { plainRecipe } from '../src/model/recipe';
 import { samplerImage } from '../src/model/s700';
 import {
   SM87_DRUMS, SM87_ROOM_TODAY, drumName, drumTune, isDrum, newSm87Banks, samplerPoints, sm87Bank, sm87Contents,
-  sm87Size,
+  sm87Size, sm87Taken,
 } from '../src/model/sm87';
 import { Store } from '../src/model/store';
 import type { Keygroup, Sample } from '../src/model/types';
-import { HR16_DRUMS, NO_SOUND, makeBank, readBank } from '../src/sm87/sm87bank.js';
+import { HR16_DRUMS, NO_SOUND, hr16Pads, makeBank, readBank } from '../src/sm87/sm87bank.js';
 import { testSine } from './helpers';
 
 const noResampling = async (): Promise<Float32Array> => {
@@ -185,6 +185,79 @@ describe('SM-87', () => {
     // too long for the sampler: from START to END only
     const long = sample('l', { data: new Float32Array(40000), start: 5000, end: 38000 });
     expect(samplerPoints(long)).toEqual({ start: 0, end: 32752 });
+  });
+
+  test('a package\'s samples taken back: put into a package again, the same bytes', async () => {
+    const m = memory();
+    const first = await sm87Contents(m.banks, m.samples, noResampling);
+    const bank = makeBank(first.samples, first.kit);
+    const [drums, samplesBank] = newSm87Banks();
+    const taken = sm87Taken(readBank(bank)!, drums.id, samplesBank.id);
+    taken.pans.forEach((pan, i) => {
+      drums.programs[i].pan = pan;
+    });
+    expect(taken.notes).toEqual([]);
+    // SAMPLES: A and B in their slots, B looping and with its pressure; DRUMS: C and D (reversed: as it plays), each a
+    // sample of its own, the drums' keygroups tuned with SEMI
+    const inSamples = taken.samples.filter((s) => s.bankId === samplesBank.id);
+    expect(inSamples.map((s) => [s.name, s.slot, s.loopMode, s.sound.pressure])).toEqual([['A', 0, 'off', 0],
+      ['B', 3, 'forward', 40]]);
+    const inDrums = taken.samples.filter((s) => s.bankId === drums.id);
+    expect(inDrums.map((s) => [s.name, s.slot, s.loopMode, s.sound.level, s.sound.velLevel, s.fromSampler]))
+      .toEqual([['KICK', 0, 'drum', 77, 33, true], ['CLHAT', 1, 'drum', 80, 50, true]]);
+    expect(inDrums[0].keygroups.map((k) => [k.program, k.root, k.semitones])).toEqual([[0, 60, 0], [1, 60, -1],
+      [8, 60, 0]]);
+    expect(inDrums[1].keygroups.map((k) => [k.program, k.semitones])).toEqual([[2, 3], [3, 24]]);
+    expect(drums.programs[3].pan).toBe(-2);
+    const again = await sm87Contents([drums, samplesBank], taken.samples, noResampling);
+    expect(makeBank(again.samples, again.kit)).toEqual(bank);
+    expect(sm87Size([drums, samplesBank], taken.samples).total).toBe(bank.length);
+  });
+
+  test('what a drum here can\'t be is left out, and said: a slot on a pad, two levels of a sound, a pad of its own',
+    () => {
+      const words = Uint16Array.from({ length: 300 }, (_, i) => 2048 + ((i * 37) % 400) - 200);
+      const byDrum = new Array(16).fill(null);
+      byDrum[0] = { sound: 0, level: 90 };
+      byDrum[1] = { sound: 0, level: 60 };                  // the kick's sound at another level
+      byDrum[2] = { sound: 3 + 4 };                         // sampler slot 5
+      const pads = hr16Pads(byDrum);
+      pads[0] = { ...pads[0], name: 'BD', note: 35 };       // a pad of its own
+      const kit = { sounds: [{ name: 'BOOM', words, rate: 60, vel: 20 }, { name: 'SPARE', words, rate: 60 },
+        { name: 'X', words, rate: 50 }], pads };
+      const held = readBank(makeBank([], kit))!;
+      const [drums, samplesBank] = newSm87Banks();
+      const taken = sm87Taken(held, drums.id, samplesBank.id);
+      expect(taken.samples.map((s) => [s.name, s.sound.level, s.keygroups.map((k) => k.program)]))
+        .toEqual([['BOOM', 90, [0, 1]]]);
+      expect(taken.samples[0].data[0]).toBeCloseTo((words[0] - 2048) / 2048, 6);
+      expect(taken.samples[0].rate).toBeCloseTo(26400 * 2 ** (-9 / 12), 0);
+      expect(taken.notes).toEqual([
+        'KICK: SM-87\'s pad 1 (BD, note 35) is the HR-16\'s KICK here, its name, note, group and voices the HR-16 '
+          + 'drum\'s',
+        'SNARE: level 60 on SM-87; it plays BOOM as KICK does, at its LEVEL 90 (a drum has its sample\'s)',
+        'CLS HAT: SM-87 plays sampler slot 5 on it, a drum here plays a sample of DRUMS: left out',
+        'The kit\'s sound SPARE: no drum plays it, left out',
+        'The kit\'s sound X: no drum plays it, left out',
+      ]);
+    });
+
+  test('taken into the store: what DRUMS and SAMPLES held goes to no bank, names kept apart, pans set', async () => {
+    const store = new Store();
+    store.addSm87Banks();
+    const drums = sm87Bank(store.banks, 'drums')!;
+    const samplesBank = sm87Bank(store.banks, 'samples')!;
+    const before = sample('old', { name: 'A' });
+    store.addSample(before, samplesBank, 0);
+    const m = memory();
+    const first = await sm87Contents(m.banks, m.samples, noResampling);
+    const taken = sm87Taken(readBank(makeBank(first.samples, first.kit))!, drums.id, samplesBank.id);
+    store.takeSm87(taken.samples, taken.pans);
+    expect(store.samples.get('old')!.bankId).toBeNull();
+    expect(store.samplesIn(samplesBank).map((s) => s.name)).toEqual(['A 2', 'B']);
+    expect(store.samplesIn(drums).map((s) => s.name)).toEqual(['KICK', 'CLHAT']);
+    expect(drums.programs[3].pan).toBe(-2);
+    expect(store.programsOf(drums)[1].keygroups[0].semitones).toBe(-1);
   });
 
   test('no drum: no kit (the firmware\'s own plays); no SM-87 banks: nothing', async () => {

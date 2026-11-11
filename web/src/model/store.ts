@@ -345,6 +345,34 @@ export class Store {
     return added;
   }
 
+  /**
+   * Samples taken from SM-87's firmware package (sm87Taken) into its banks, which there have to be (addSm87Banks):
+   * what DRUMS and SAMPLES held is left in no bank, with its keygroups, as when a slot gets another sample; the
+   * drums' pans are the package's. A name another sample has gets a number after it.
+   */
+  takeSm87(samples: Sample[], pans: number[]): void {
+    const drums = sm87Bank(this.banks, 'drums');
+    const mine = sm87Bank(this.banks, 'samples');
+    if (!drums || !mine) {
+      return;
+    }
+    for (const s of this.samples.values()) {
+      if (s.bankId === drums.id || s.bankId === mine.id) {
+        s.bankId = null;
+      }
+    }
+    for (const s of samples) {
+      s.name = this.uniqueSampleName(s.name);
+      this.samples.set(s.id, normalizeSample(s));
+    }
+    pans.forEach((pan, i) => {
+      drums.programs[i].pan = pan;
+    });
+    this.selectedSampleId = samples[0]?.id ?? this.selectedSampleId;
+    this.selectedKeygroupId = this.validKeygroup(this.selectedKeygroupId);
+    this.emitAll();
+  }
+
   /** A new bank after the others, empty, and selects it */
   addBank(): Bank {
     const bank = newBank(`BANK ${this.banks.length + 1}`);

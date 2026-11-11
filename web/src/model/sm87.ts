@@ -8,14 +8,17 @@
 // The rules are SM-87's documentation/sample-bank.md ("A kit from a sampler's programs"); ../sm87/sm87bank.js makes
 // the bytes and puts them into a package.
 
-import { MAX_SAMPLES, nearestBandwidth, samplerBandwidth } from '../protocol/akai';
+import { MAX_SAMPLES, decodeCode, nearestBandwidth, samplerBandwidth } from '../protocol/akai';
+import { S700_PARAM_BYTES, bandwidthRate, readS700ParamBytes } from '../protocol/s700disk';
+import type { S700SampleParams } from '../protocol/s700disk';
 import { sampleParamsBytes } from '../protocol/sprm';
-import { HR16_DRUMS, PADS, hr16Pads, packedSize } from '../sm87/sm87bank.js';
-import type { BankSample, Hr16DrumSound, Kit, KitSound } from '../sm87/sm87bank.js';
+import { HR16_DRUMS, NO_SOUND, PADS, hr16Pads, packedSize } from '../sm87/sm87bank.js';
+import type { BankContents, BankSample, HeldKit, Hr16DrumSound, Kit, KitSound } from '../sm87/sm87bank.js';
 import type { Resampler } from './convert';
-import { newBank } from './mapping';
+import { defaultSound, newBank, newId, newKeygroup } from './mapping';
+import { plainRecipe } from './recipe';
 import { usedStart } from './points';
-import { samplerImage } from './s700';
+import { sampleFromS700Params, samplerImage } from './s700';
 import { isLooped } from './types';
 import type { Bank, Keygroup, Sample, Sm87Role } from './types';
 
@@ -255,4 +258,95 @@ export function sm87Size(banks: Bank[], samples: Iterable<Sample>): Sm87Size {
     }
   }
   return { samples: inSamples, drums, total: inSamples || drums ? inSamples + drums + FOOT : 0 };
+}
+
+// ------------------------------------------------------------------------------- a package's, taken back ---
+/** The 155 values a bank keeps (SPRM's, its undefined one at 128 included) as the S700's parameters */
+function paramsOf(values: Uint8Array): S700SampleParams {
+  const b = new Uint8Array(S700_PARAM_BYTES);
+  b.set(values.subarray(0, 128));
+  b.set(values.subarray(129, 129 + S700_PARAM_BYTES - 128), 128);
+  return readS700ParamBytes(b);
+}
+
+const audio = (words: ArrayLike<number>) => Float32Array.from(words, decodeCode);
+
+/** A kit's sound as a drum's sample: as it plays, once to its end (the X7000's drum trigger), at its rate */
+function drumSample(sound: HeldKit['sounds'][number], level: number): Sample {
+  const data = audio(sound.words);
+  const rate = samplerBandwidth(bandwidthRate(sound.rate))?.rate ?? bandwidthRate(sound.rate);
+  const n = data.length;
+  return { id: newId(), name: sound.name || 'DRUM', source: data, sourceRate: rate, recipe: plainRecipe(),
+    fromSampler: true, rate, data, start: 0, end: n, loopStart: 0, loopEnd: n, loopMode: 'drum', reverse: false,
+    sound: { ...defaultSound(), level, velLevel: sound.vel, filter: 99 }, bankId: null, slot: null, keygroups: [] };
+}
+
+export interface Sm87Taken {
+  /** the samples, in the banks given, in their slots, with their keygroups */
+  samples: Sample[];
+  /** the drums' pans, P1-P16 of DRUMS */
+  pans: number[];
+  notes: string[];
+}
+
+/**
+ * What a firmware package holds (its bank: Sm87Package.contents) as SM-87's two banks have it, so that putting them
+ * into a package again makes the same: its samples in SAMPLES, in their slots with their parameters, as a disk
+ * brings them (marked as from the sampler: they are its 12 bits); its kit in DRUMS, a sample for each sound a drum
+ * plays and the drum's keygroup in its program, tuned with SEMI (ROOT C3), the program's pan the pad's. A pad
+ * that plays a sampler slot, a sound no drum plays, and a pad's name, note, group or voices not the HR-16 drum's are
+ * left out, and said.
+ */
+export function sm87Taken(held: BankContents, drumsId: string, samplesId: string): Sm87Taken {
+  const notes: string[] = [];
+  const samples: Sample[] = [];
+  for (const e of held.samples) {
+    const name = e.name || `SLOT ${e.slot + 1}`;
+    const { sample, notes: n } = sampleFromS700Params(paramsOf(e.params), audio(e.words), name);
+    n.forEach((x) => notes.push(`${sample.name}: ${x}`));
+    sample.sound.pressure = e.pressure;
+    sample.bankId = samplesId;
+    sample.slot = e.slot;
+    samples.push(sample);
+  }
+  const pans = new Array<number>(SM87_DRUMS).fill(0);
+  const kit = held.kit;
+  if (!kit) {
+    return { samples, pans, notes };
+  }
+  const of = new Map<number, { sample: Sample; drum: string }>();
+  HR16_DRUMS.forEach((d, i) => {
+    const pad = kit.pads[d.pad];
+    if (!pad || pad.sound === NO_SOUND) {
+      return;
+    }
+    if (pad.sound >= kit.sounds.length) {
+      notes.push(`${d.drum}: SM-87 plays sampler slot ${pad.sound - kit.sounds.length + 1} on it, a drum here plays a `
+        + 'sample of DRUMS: left out');
+      return;
+    }
+    let got = of.get(pad.sound);
+    if (!got) {
+      got = { sample: drumSample(kit.sounds[pad.sound], pad.level), drum: d.drum };
+      got.sample.bankId = drumsId;
+      got.sample.slot = of.size;
+      of.set(pad.sound, got);
+      samples.push(got.sample);
+    } else if (got.sample.sound.level !== pad.level) {
+      notes.push(`${d.drum}: level ${pad.level} on SM-87; it plays ${got.sample.name} as ${got.drum} does, at its `
+        + `LEVEL ${got.sample.sound.level} (a drum has its sample's)`);
+    }
+    got.sample.keygroups.push(newKeygroup(got.sample.id, i, { root: SM87_TUNE_KEY, semitones: pad.tune }));
+    pans[i] = pad.pan;
+    if (pad.name !== d.name || pad.note !== d.note || pad.group !== (d.group ?? 0) || pad.poly !== (d.poly ?? 1)) {
+      notes.push(`${d.drum}: SM-87's pad ${d.pad + 1} (${pad.name || 'no name'}, note ${pad.note}) is the HR-16's `
+        + `${d.drum} here, its name, note, group and voices the HR-16 drum's`);
+    }
+  });
+  kit.sounds.forEach((x, k) => {
+    if (!of.has(k)) {
+      notes.push(`The kit's sound ${x.name}: no drum plays it, left out`);
+    }
+  });
+  return { samples, pans, notes };
 }

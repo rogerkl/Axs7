@@ -5,7 +5,6 @@
 import type { App } from '../../app/app';
 import { SM87_DRUMS, SM87_ROOM_TODAY, sm87Bank, sm87Size } from '../../model/sm87';
 import type { Bank } from '../../model/types';
-import { Sm87BankError } from '../../sm87/sm87bank.js';
 import { h, pickFiles } from '../dom';
 
 const kb = (n: number) => `${(n / 1024).toFixed(1)} KB`;
@@ -85,22 +84,17 @@ export function sm87Section(app: App): { el: HTMLElement; dispose(): void } {
     if (!fw) {
       return 'No firmware open: SM-87\'s package (.fwsc), a release\'s or a build\'s.';
     }
-    const { pkg } = fw;
-    let has: string;
-    try {
-      const c = pkg.contents();
-      const many = (n: number, what: string) => `${n} ${what}${n === 1 ? '' : 's'}`;
-      has = !c ? 'no samples, the firmware\'s own kit'
-        : `${many(c.samples.length, 'sample')} and ${c.kit ? `a kit of ${many(c.kit.sounds.length, 'sound')}`
-          : 'the firmware\'s own kit'} (${kb(c.size)}), replaced by the banks'`;
-    } catch (e) {
-      has = e instanceof Sm87BankError ? `samples that don't check (${e.message})` : String(e);
-    }
+    const { pkg, held: c, heldError } = fw;
+    const many = (n: number, what: string) => `${n} ${what}${n === 1 ? '' : 's'}`;
+    const has = heldError ? `samples that don't check (${heldError})` : !c ? 'no samples, the firmware\'s own kit'
+      : `${many(c.samples.length, 'sample')} and ${c.kit ? `a kit of ${many(c.kit.sounds.length, 'sound')}`
+        : 'the firmware\'s own kit'} (${kb(c.size)}), replaced by the banks'`;
     return `${fw.name}: ${pkg.identity}, ${kb(pkg.room)} for samples and a kit. It holds ${has}.`;
   }
 
   function render(): void {
     const installing = actions.sm87Install?.running ?? false;
+    const held = !!actions.sm87Firmware?.held;
     const drums = sm87Bank(store.banks, 'drums');
     const samples = sm87Bank(store.banks, 'samples');
     const go = (bank: Bank) => h('button', { class: 'soft', title: `Select ${bank.name}`,
@@ -119,6 +113,9 @@ export function sm87Section(app: App): { el: HTMLElement; dispose(): void } {
           await actions.openSm87Firmware(file);
         }
       } }, 'OPEN FIRMWARE'),
+      h('button', { class: 'soft', disabled: !held || installing,
+        title: 'What the firmware opened holds, into DRUMS and SAMPLES: to put it into another release',
+        onClick: () => actions.takeSm87() }, 'TAKE ITS SAMPLES'),
       h('button', { class: 'soft', disabled: !actions.sm87Firmware || !(drums || samples) || installing,
         title: 'Both banks into the firmware opened, saved as a new package', onClick: () => actions.saveSm87() },
       'SAVE PACKAGE'),
@@ -150,7 +147,8 @@ export function sm87Section(app: App): { el: HTMLElement; dispose(): void } {
         + 'the HR-16\'s 16 drums as P1-P16: each plays its first keygroup\'s sample, once, start to end, and they '
         + 'replace the firmware\'s own drum kit (with no drum, the firmware\'s plays). In DRUMS, PROGRAM edits them '
         + 'as drums: one keygroup each, tuned in semitones, with a pan. OPEN FIRMWARE takes the package, a release\'s '
-        + 'or your own build\'s. SAVE PACKAGE puts both banks into it as they are and saves a new package (to install '
+        + 'or your own build\'s; TAKE ITS SAMPLES brings what it holds into DRUMS and SAMPLES, to put them into a new '
+        + 'release. SAVE PACKAGE puts both banks into it as they are and saves a new package (to install '
         + 'with fm1-base\'s installer); INSTALL ON FM-1 puts them in and installs it on the FM-1 connected by USB, as '
         + 'that installer does. The FM-1 keeps its sequences, settings and the samples sent to its pool. The built-in '
         + 'samples are in that package only: put them into a new release\'s again.'),
