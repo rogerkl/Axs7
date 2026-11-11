@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (C) 2026 Roger Klaveness
 // SM-87: samples put into a firmware package (.fwsc) in the browser, tools/mkrom.py's packaging in JavaScript:
 // the sample bank made (app/s700/s7bank.h), the package opened, the bank put at the top of the firmware's slot, the
 // package's checksums made again. documentation/sample-bank.md has the formats; test/bank_js_test.mjs checks this

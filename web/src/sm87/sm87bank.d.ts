@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (C) 2026 Roger Klaveness
 // SM-87: samples put into a firmware package (.fwsc) in the browser: sm87bank.js's types.
 
 export declare const SLOTS: 16;

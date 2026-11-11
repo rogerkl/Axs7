@@ -67,8 +67,8 @@ It is a rewrite and enhancement of the Java program [Axs7Sds](https://github.com
   what a package holds back into the two banks (`sm87Taken`): its samples as a disk brings them, its kit's sounds as
   drum samples with the drums' keygroups, tuning and pans, so a release's built-in samples go into the next release's
   package the same, byte for byte. `src/sm87/sm87bank.js` is
-  SM-87's `web/sm87bank.js`, and `fm1ota.js`, `fm1ports.js` and `fm1pkg.js` beside it are fm1-base's `web/` files
-  (MPL-2.0, under their own licence), copied as they are: a test checks each copy is the same when SM-87's repository
+  SM-87's `web/sm87bank.js`, and `fm1ota.js`, `fm1ports.js` and `fm1pkg.js` beside it are fm1-base's `web/` files,
+  all four MPL-2.0 under their own licence and copied as they are: a test checks each copy is the same when SM-87's repository
   is beside this one. The rules are SM-87's `documentation/sample-bank.md`.
 
 ## Running
