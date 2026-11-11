@@ -18,8 +18,8 @@ It is a rewrite and enhancement of the Java program [Axs7Sds](https://github.com
 - Programs of keygroups in banks of 32 programs, and the sampler's sound settings (OUT and LFO), played from the
   screen, the computer keyboard or a MIDI keyboard, also the X7000's own.
 - Samples and a drum kit built into SM-87, a firmware for the M-VAVE FM-1 with an S700/X7000 sampler and an HR-16
-  drum machine: a SAMPLES bank and a DRUMS bank of the HR-16's 16 drums, put into its firmware package to install,
-  with a meter of the room they take.
+  drum machine: a SAMPLES bank and a DRUMS bank of the HR-16's 16 drums, put into its firmware package and installed
+  on the FM-1 over USB, with a meter of the room they take.
 
 ## Technical notes
 
@@ -58,10 +58,14 @@ It is a rewrite and enhancement of the Java program [Axs7Sds](https://github.com
   bank's samples go in SM-87's slots as the sampler keeps them (as a disk has them, up to END). The DRUMS bank's
   P1-P16 are the HR-16's drums; PROGRAM edits them as drums: one keygroup each, no FINE, a PAN. A drum is its first
   keygroup's sample from START to END, played once, tuned as C3 plays it here in whole semitones, at the sample's
-  LEVEL; they make a kit that replaces the firmware's. OPEN FIRMWARE takes SM-87's package (.fwsc), BUILD IN puts
-  both banks into it (the firmware's checksums made again) and saves it. `src/sm87/sm87bank.js` is SM-87's
-  `web/sm87bank.js`: a test checks the copy is the same when SM-87's repository is beside this one. The rules are
-  SM-87's `documentation/sample-bank.md`.
+  LEVEL; they make a kit that replaces the firmware's. OPEN FIRMWARE takes SM-87's package (.fwsc); SAVE PACKAGE
+  puts both banks into it as they are (the firmware's checksums made again) and saves it, INSTALL ON FM-1 puts them
+  in and installs it on the FM-1 over Web MIDI, as fm1-base's installer page does (`src/app/sm87install.ts`): the
+  running firmware checks the package and starts its update loader, which writes it, and an FM-1 found waiting in
+  update mode has that install finished. Only the firmware's part of the flash is written. `src/sm87/sm87bank.js` is
+  SM-87's `web/sm87bank.js`, and `fm1ota.js`, `fm1ports.js` and `fm1pkg.js` beside it are fm1-base's `web/` files
+  (MPL-2.0, under their own licence), copied as they are: a test checks each copy is the same when SM-87's repository
+  is beside this one. The rules are SM-87's `documentation/sample-bank.md`.
 
 ## Running
 

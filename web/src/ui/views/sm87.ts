@@ -1,5 +1,6 @@
 // SM-87 in the BANK view: its two banks made (DRUMS, its programs the HR-16's drums, and SAMPLES), its firmware
-// package opened, and the banks built into it, saved as a new package to install on the FM-1 (model/sm87.ts).
+// package opened, and the banks built into it (model/sm87.ts): saved as a new package, or installed on the FM-1 over
+// Web MIDI (app/sm87install.ts).
 
 import type { App } from '../../app/app';
 import { SM87_DRUMS, SM87_ROOM_TODAY, sm87Bank, sm87Size } from '../../model/sm87';
@@ -60,6 +61,9 @@ export function sm87Section(app: App): { el: HTMLElement; dispose(): void } {
   const banksRow = h('div', { class: 'row' });
   const firmwareRow = h('div', { class: 'row' });
   const built = h('p', { class: 'info' });
+  const installBar = h('progress', { class: 'sm87-install', max: 100, value: 0, 'aria-label': 'SM-87 install' });
+  const installText = h('span', { class: 'info' });
+  const installRow = h('div', { class: 'row' }, installBar, installText);
 
   /** what a bank holds for SM-87, in a few words */
   function summary(drums: Bank | null, samples: Bank | null): string {
@@ -88,7 +92,7 @@ export function sm87Section(app: App): { el: HTMLElement; dispose(): void } {
       const many = (n: number, what: string) => `${n} ${what}${n === 1 ? '' : 's'}`;
       has = !c ? 'no samples, the firmware\'s own kit'
         : `${many(c.samples.length, 'sample')} and ${c.kit ? `a kit of ${many(c.kit.sounds.length, 'sound')}`
-          : 'the firmware\'s own kit'} (${kb(c.size)}), replaced by BUILD IN`;
+          : 'the firmware\'s own kit'} (${kb(c.size)}), replaced by the banks'`;
     } catch (e) {
       has = e instanceof Sm87BankError ? `samples that don't check (${e.message})` : String(e);
     }
@@ -96,6 +100,7 @@ export function sm87Section(app: App): { el: HTMLElement; dispose(): void } {
   }
 
   function render(): void {
+    const installing = actions.sm87Install?.running ?? false;
     const drums = sm87Bank(store.banks, 'drums');
     const samples = sm87Bank(store.banks, 'samples');
     const go = (bank: Bank) => h('button', { class: 'soft', title: `Select ${bank.name}`,
@@ -114,10 +119,22 @@ export function sm87Section(app: App): { el: HTMLElement; dispose(): void } {
           await actions.openSm87Firmware(file);
         }
       } }, 'OPEN FIRMWARE'),
-      h('button', { class: 'soft', disabled: !actions.sm87Firmware || !(drums || samples),
-        onClick: () => actions.buildSm87() }, 'BUILD IN'),
+      h('button', { class: 'soft', disabled: !actions.sm87Firmware || !(drums || samples) || installing,
+        title: 'Both banks into the firmware opened, saved as a new package', onClick: () => actions.saveSm87() },
+      'SAVE PACKAGE'),
+      h('button', { class: 'soft', disabled: !actions.sm87Firmware || !(drums || samples) || installing,
+        title: 'Both banks into the firmware opened, installed on the FM-1 connected by USB',
+        onClick: () => actions.installSm87() }, 'INSTALL ON FM-1'),
       h('span', { class: 'info' }, holds()));
     built.textContent = actions.sm87Built ?? '';
+    const inst = actions.sm87Install;
+    installRow.hidden = !inst;
+    if (inst) {
+      installBar.value = inst.pct;
+      installBar.classList.toggle('failed', inst.failed);
+      installText.textContent = inst.text;
+      installText.classList.toggle('warn', inst.failed);
+    }
   }
 
   render();
@@ -133,9 +150,11 @@ export function sm87Section(app: App): { el: HTMLElement; dispose(): void } {
         + 'the HR-16\'s 16 drums as P1-P16: each plays its first keygroup\'s sample, once, start to end, and they '
         + 'replace the firmware\'s own drum kit (with no drum, the firmware\'s plays). In DRUMS, PROGRAM edits them '
         + 'as drums: one keygroup each, tuned in semitones, with a pan. OPEN FIRMWARE takes the package, a release\'s '
-        + 'or your own build\'s; BUILD IN puts both banks into it and saves a new package to install, with '
-        + 'fm1-base\'s installer. Its samples are in that package only: put them into a new release\'s again.'),
-      banksRow, meter.el, firmwareRow, built),
+        + 'or your own build\'s. SAVE PACKAGE puts both banks into it as they are and saves a new package (to install '
+        + 'with fm1-base\'s installer); INSTALL ON FM-1 puts them in and installs it on the FM-1 connected by USB, as '
+        + 'that installer does. The FM-1 keeps its sequences, settings and the samples sent to its pool. The built-in '
+        + 'samples are in that package only: put them into a new release\'s again.'),
+      banksRow, meter.el, firmwareRow, installRow, built),
     dispose: () => {
       off.forEach((f) => f());
       meter.dispose();

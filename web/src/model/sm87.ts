@@ -216,13 +216,13 @@ export interface Sm87Size {
   samples: number;
   /** the DRUMS bank's kit, bytes: its sounds, their entries and the 16 pads */
   drums: number;
-  /** what BUILD IN puts into the firmware, bytes (0: nothing, the package as built) */
+  /** what goes into the firmware, bytes (0: nothing, the package as built) */
   total: number;
 }
 
 const words = (n: number) => (packedSize(n) + 3) & ~3;
 
-/** What SM-87's banks take of the firmware's room, as BUILD IN would make them (sm87Contents), without making them */
+/** What SM-87's banks take of the firmware's room, as a package of them has them (sm87Contents), without making them */
 export function sm87Size(banks: Bank[], samples: Iterable<Sample>): Sm87Size {
   const all = [...samples];
   let inSamples = 0;

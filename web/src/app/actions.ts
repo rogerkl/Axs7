@@ -23,6 +23,7 @@ import type { S700SampleParams } from '../protocol/s700disk';
 import { bytesWithPoints, paramsDiffer, sampleParamsBytes, sampleParamsRequest } from '../protocol/sprm';
 import { noteName } from '../model/notes';
 import { sm87Contents } from '../model/sm87';
+import { installPackage } from './sm87install';
 import { Sm87BankError, Sm87Package, makeBank } from '../sm87/sm87bank.js';
 import { download } from '../ui/dom';
 import type { App } from './app';
@@ -35,7 +36,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const isAbort = (e: unknown) => (e as Error | null)?.name === 'AbortError';
 
 export class Actions {
-  busy: 'receive' | 'send' | 'receiveBank' | 'sendBank' | 'params' | null = null;
+  busy: 'receive' | 'send' | 'receiveBank' | 'sendBank' | 'params' | 'install' | null = null;
   private abort: AbortController | null = null;
   /** when the ACKs scheduled by the last receive have gone out */
   private acksUntil = 0;
@@ -836,13 +837,13 @@ export class Actions {
     }
   }
 
-  /** SM-87's firmware package that BUILD IN puts the samples into, as opened (the file's name and bytes) */
+  /** SM-87's firmware package SAVE PACKAGE and INSTALL put the banks into, as opened (the file's name and bytes) */
   sm87Firmware: { name: string; bytes: Uint8Array; pkg: Sm87Package } | null = null;
-  /** what the last BUILD IN made, for the BANK view */
+  /** what the last package made of the banks holds, for the BANK view */
   sm87Built: string | null = null;
   private sm87Listeners = new Set<() => void>();
 
-  /** @returns a function that stops listening: the firmware opened, or BUILD IN done */
+  /** @returns a function that stops listening: the firmware opened, a package made, an install's progress */
   onSm87(listener: () => void): () => void {
     this.sm87Listeners.add(listener);
     return () => this.sm87Listeners.delete(listener);
@@ -872,15 +873,16 @@ export class Actions {
   }
 
   /**
-   * SM-87's SAMPLES and DRUMS banks put into the firmware package opened (model/sm87.ts), saved as a new package to
-   * install: its name with "-axs7". What had to be changed or left out is logged in the MIDI view.
+   * SM-87's SAMPLES and DRUMS banks put into the firmware package opened (model/sm87.ts), as they are now: a new
+   * package named after it with "-axs7". What had to be changed or left out is logged in the MIDI view, and what it
+   * holds is said in the BANK view (sm87Built). Null when it can't be made (said on the LCD).
    */
-  async buildSm87(): Promise<void> {
+  private async buildSm87Package(): Promise<{ name: string; bytes: Uint8Array } | null> {
     const { store, lcd, midi } = this.app;
     const firmware = this.sm87Firmware;
     if (!firmware) {
       lcd.flash('OPEN SM-87 FIRMWARE FIRST');
-      return;
+      return null;
     }
     try {
       const contents = await sm87Contents(store.banks, store.samples.values(), resampleInBrowser);
@@ -891,7 +893,6 @@ export class Actions {
         midi.logLine(`SM-87: ${note}`);
       }
       const name = `${firmware.name.replace(/\.fwsc$/i, '')}-axs7.fwsc`;
-      download(pkg.bytes(), name, 'application/octet-stream');
       const kb = (n: number) => `${(n / 1024).toFixed(1)} KB`;
       const many = (n: number, what: string) => `${n} ${what}${n === 1 ? '' : 's'}`;
       const kit = contents.kit ? `a kit of ${many(contents.kit.sounds.length, 'sound')}` : 'the firmware\'s own kit';
@@ -899,14 +900,86 @@ export class Actions {
       this.sm87Built = `${name}: ${many(contents.samples.length, 'sample')} and ${kit}, `
         + `${kb(bank?.length ?? 0)} of the ${kb(pkg.room)} there is room for${notes}`;
       midi.logLine(`SM-87: ${this.sm87Built}`);
-      lcd.flash(`SAVED ${name}`);
+      return { name, bytes: pkg.bytes() };
     } catch (e) {
       midi.logLine(`SM-87: ${errorText(e)}`, 'error');
       this.sm87Built = errorText(e);
       lcd.flash(e instanceof Sm87BankError && e.code === 'too-big' ? 'TOO BIG FOR SM-87, SEE MIDI'
-        : 'BUILD IN FAILED, SEE MIDI');
+        : 'COULD NOT MAKE IT, SEE MIDI');
+      return null;
+    } finally {
+      this.sm87Changed();
     }
-    this.sm87Changed();
+  }
+
+  /** SM-87's banks put into the firmware opened, saved as a package to install with fm1-base's installer */
+  async saveSm87(): Promise<void> {
+    const built = await this.buildSm87Package();
+    if (built) {
+      download(built.bytes, built.name, 'application/octet-stream');
+      this.app.lcd.flash(`SAVED ${built.name}`);
+    }
+  }
+
+  /** an install under way or done: its share and what it says, for the BANK view */
+  sm87Install: { pct: number; text: string; running: boolean; failed: boolean } | null = null;
+
+  /**
+   * SM-87's banks put into the firmware opened, as they are now, and installed on the FM-1 connected by USB over Web
+   * MIDI (sm87install.ts), after a confirm. An FM-1 waiting in update mode has that install finished. The bar and
+   * what happens are in the BANK view, the steps in the MIDI log.
+   */
+  async installSm87(): Promise<void> {
+    const { lcd, midi } = this.app;
+    if (this.busy) {
+      lcd.flash(this.busy === 'install' ? 'INSTALLING' : 'BUSY, PRESS STOP FIRST');
+      return;
+    }
+    if (!this.sm87Firmware) {
+      lcd.flash('OPEN SM-87 FIRMWARE FIRST');
+      return;
+    }
+    if (!confirm('Install SM-87 with these samples on the FM-1 connected by USB? It replaces its firmware; it keeps '
+      + 'its sequences, settings and the samples sent to its pool. Leave it connected, and this page open, until it '
+      + 'says DONE.')) {
+      return;
+    }
+    const show = (pct: number, text: string, running: boolean, failed = false) => {
+      this.sm87Install = { pct, text, running, failed };
+      this.sm87Changed();
+    };
+    if (!midi.link) {
+      await midi.connect();
+    }
+    const access = midi.link?.access;
+    if (!access) {
+      show(0, `No MIDI: ${midi.problem ?? midi.error ?? 'not connected'}. Allow MIDI with SysEx for this page (MIDI view).`,
+        false, true);
+      lcd.flash('NO MIDI, SEE MIDI VIEW');
+      return;
+    }
+    const built = await this.buildSm87Package();
+    if (!built) {
+      return;
+    }
+    this.setBusy('install');
+    show(0, `INSTALLING ${built.name}`, true);
+    try {
+      const runs = await installPackage(access, built.bytes, (p) => {
+        lcd.flash(p.text);
+        show(p.pct, `${p.text}: ${built.name}`, true);
+      }, (line) => midi.logLine(`SM-87 install: ${line}`));
+      show(100, `INSTALLED ${built.name}: the FM-1 runs ${runs}`, false);
+      midi.logLine(`SM-87: installed ${built.name}, the FM-1 runs ${runs}`);
+      lcd.flash('INSTALLED');
+    } catch (e) {
+      const text = errorText(e);
+      show(this.sm87Install?.pct ?? 0, text, false, true);
+      midi.logLine(`SM-87 install: ${text}`, 'error');
+      lcd.flash('INSTALL FAILED, SEE BANK');
+    } finally {
+      this.setBusy(null);
+    }
   }
 
   /** The whole memory, every bank and sample, as a zip file, with SLOTS */
