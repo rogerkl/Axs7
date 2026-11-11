@@ -5,7 +5,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { BW16, encodeSamples } from '../src/protocol/akai';
 import { sampleParamsBytes } from '../src/protocol/sprm';
-import { defaultSound, newBank, newKeygroup, normalizeBank } from '../src/model/mapping';
+import { bankPrograms, defaultSound, newBank, newKeygroup, normalizeBank, voicesFor } from '../src/model/mapping';
+import { levelGain } from '../src/model/params';
 import { memoryToZip, zipToMemory } from '../src/model/memory';
 import { plainRecipe } from '../src/model/recipe';
 import { samplerImage } from '../src/model/s700';
@@ -196,6 +197,11 @@ describe('SM-87', () => {
     taken.pans.forEach((pan, i) => {
       drums.programs[i].pan = pan;
     });
+    taken.levels.forEach((level, i) => {
+      if (level !== undefined) {
+        drums.programs[i].level = level;
+      }
+    });
     expect(taken.notes).toEqual([]);
     // SAMPLES: A and B in their slots, B looping and with its pressure; DRUMS: C and D (reversed: as it plays), each a
     // sample of its own, the drums' keygroups tuned with SEMI
@@ -230,12 +236,13 @@ describe('SM-87', () => {
       const taken = sm87Taken(held, drums.id, samplesBank.id);
       expect(taken.samples.map((s) => [s.name, s.sound.level, s.keygroups.map((k) => k.program)]))
         .toEqual([['BOOM', 90, [0, 1]]]);
+      // each drum at its own level, the sound's sample at the first's
+      expect(taken.levels.slice(0, 3)).toEqual([90, 60, undefined]);
       expect(taken.samples[0].data[0]).toBeCloseTo((words[0] - 2048) / 2048, 6);
       expect(taken.samples[0].rate).toBeCloseTo(26400 * 2 ** (-9 / 12), 0);
       expect(taken.notes).toEqual([
         'KICK: SM-87\'s pad 1 (BD, note 35) is the HR-16\'s KICK here, its name, note, group and voices the HR-16 '
           + 'drum\'s',
-        'SNARE: level 60 on SM-87; it plays BOOM as KICK does, at its LEVEL 90 (a drum has its sample\'s)',
         'CLS HAT: SM-87 plays sampler slot 5 on it, a drum here plays a sample of DRUMS: left out',
         'The kit\'s sound SPARE: no drum plays it, left out',
         'The kit\'s sound X: no drum plays it, left out',
@@ -252,13 +259,47 @@ describe('SM-87', () => {
     const m = memory();
     const first = await sm87Contents(m.banks, m.samples, noResampling);
     const taken = sm87Taken(readBank(makeBank(first.samples, first.kit))!, drums.id, samplesBank.id);
-    store.takeSm87(taken.samples, taken.pans);
+    store.takeSm87(taken.samples, taken.pans, taken.levels);
     expect(store.samples.get('old')!.bankId).toBeNull();
     expect(store.samplesIn(samplesBank).map((s) => s.name)).toEqual(['A 2', 'B']);
     expect(store.samplesIn(drums).map((s) => s.name)).toEqual(['KICK', 'CLHAT']);
     expect(drums.programs[3].pan).toBe(-2);
+    expect([drums.programs[0].level, drums.programs[3].level, drums.programs[4].level]).toEqual([77, 80, undefined]);
     expect(store.programsOf(drums)[1].keygroups[0].semitones).toBe(-1);
   });
+
+  test('a drum\'s own LEVEL: the pad\'s, over its sample\'s; kept; played here so; two levels of a sound taken back',
+    async () => {
+      const m = memory();
+      m.drums.programs[1].level = 40;                       // SNARE: C's sample (LEVEL 77) at 40
+      const { kit } = await sm87Contents(m.banks, m.samples, noResampling);
+      expect([kit!.pads[0].level, kit!.pads[1].level, kit!.pads[2].level]).toEqual([77, 40, 80]);
+      // kept, and nothing else: an odd one left out
+      const back = normalizeBank(JSON.parse(JSON.stringify({ ...m.drums, programs: m.drums.programs.map((p, i) =>
+        (i === 2 ? { ...p, level: 100 } : p)) })));
+      expect([back.programs[1].level, 'level' in back.programs[2], 'level' in back.programs[0]]).toEqual([40, false,
+        false]);
+      // played here as SM-87 plays it: the drum's level for the sample's, on the curve of LEVEL
+      const [snare] = voicesFor(bankPrograms(m.drums, m.samples)[1], new Map(m.samples.map((s) => [s.id, s])), 60);
+      expect(snare.gain).toBeCloseTo(levelGain(40) / levelGain(77), 9);
+      expect(voicesFor(bankPrograms(m.drums, m.samples)[0], new Map(m.samples.map((s) => [s.id, s])), 60)[0].gain)
+        .toBe(1);
+      // a sound two drums play at two levels: both taken back, the same bytes again
+      const bank = makeBank([], kit);
+      const [drums, samplesBank] = newSm87Banks();
+      const taken = sm87Taken(readBank(bank)!, drums.id, samplesBank.id);
+      expect(taken.notes).toEqual([]);
+      taken.levels.forEach((level, i) => {
+        if (level !== undefined) {
+          drums.programs[i].level = level;
+        }
+      });
+      taken.pans.forEach((pan, i) => {
+        drums.programs[i].pan = pan;
+      });
+      const again = await sm87Contents([drums, samplesBank], taken.samples, noResampling);
+      expect(makeBank([], again.kit)).toEqual(bank);
+    });
 
   test('no drum: no kit (the firmware\'s own plays); no SM-87 banks: nothing', async () => {
     const m = memory();

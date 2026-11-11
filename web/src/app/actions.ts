@@ -967,7 +967,7 @@ export class Actions {
     const drumsId = sm87Bank(store.banks, 'drums')!.id;
     const taken = sm87Taken(held, drumsId, sm87Bank(store.banks, 'samples')!.id);
     renderer.adopt(taken.samples); // as they are, nothing to render
-    store.takeSm87(taken.samples, taken.pans);
+    store.takeSm87(taken.samples, taken.pans, taken.levels);
     for (const note of taken.notes) {
       midi.logLine(`SM-87: ${firmware.name}: ${note}`);
     }

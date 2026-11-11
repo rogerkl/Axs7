@@ -56,9 +56,10 @@ It is a rewrite and enhancement of the Java program [Axs7Sds](https://github.com
   an `axs7` chunk, which other programs skip.
 - **SM-87** (`src/model/sm87.ts`): INIT SM-87 BANKS (BANK view) makes two banks, marked as SM-87's. The SAMPLES
   bank's samples go in SM-87's slots as the sampler keeps them (as a disk has them, up to END). The DRUMS bank's
-  P1-P16 are the HR-16's drums; PROGRAM edits them as drums: one keygroup each, no FINE, a PAN. A drum is its first
-  keygroup's sample from START to END, played once, tuned as C3 plays it here in whole semitones, at the sample's
-  LEVEL; they make a kit that replaces the firmware's. OPEN FIRMWARE takes SM-87's package (.fwsc); SAVE PACKAGE
+  P1-P16 are the HR-16's drums; PROGRAM edits them as drums: one keygroup each, no FINE, a LEVEL and a PAN. A drum
+  is its first keygroup's sample from START to END, played once, tuned as C3 plays it here in whole semitones, at the
+  drum's LEVEL (until set, the sample's; on the same curve, so it plays here so too); they make a kit that replaces
+  the firmware's. OPEN FIRMWARE takes SM-87's package (.fwsc); SAVE PACKAGE
   puts both banks into it as they are (the firmware's checksums made again) and saves it, INSTALL ON FM-1 puts them
   in and installs it on the FM-1 over Web MIDI, as fm1-base's installer page does (`src/app/sm87install.ts`): the
   running firmware checks the package and starts its update loader, which writes it, and an FM-1 found waiting in

@@ -1,3 +1,4 @@
+import { levelGain } from './params';
 import type { Bank, Keygroup, LoopMode, OldBank, OldKeygroup, Program, ProgramName, Sample, Sound } from './types';
 
 export function newId(): string {
@@ -17,12 +18,13 @@ export function newBank(name: string): Bank {
     (_, i): ProgramName => ({ id: newId(), name: programName(i) })) };
 }
 
-/** A bank as this version has them: its name, 32 programs' names, and SM-87's role and pans if it has them */
+/** A bank as this version has them: its name, 32 programs' names, and SM-87's role, pans and levels if it has them */
 export function normalizeBank(b: Partial<Bank> | OldBank): Bank {
   const programs = (b.programs ?? []).slice(0, BANK_PROGRAMS).map((p, i): ProgramName => {
-    const pan = (p as Partial<ProgramName> | undefined)?.pan;
+    const { pan, level } = (p as Partial<ProgramName> | undefined) ?? {};
     return { id: p?.id ?? newId(), name: p?.name ?? programName(i),
-      ...(Number.isInteger(pan) && Math.abs(pan!) <= 3 ? { pan } : {}) };
+      ...(Number.isInteger(pan) && Math.abs(pan!) <= 3 ? { pan } : {}),
+      ...(Number.isInteger(level) && level! >= 0 && level! <= 99 ? { level } : {}) };
   });
   while (programs.length < BANK_PROGRAMS) {
     programs.push({ id: newId(), name: programName(programs.length) });
@@ -171,7 +173,9 @@ export function voicesFor(program: Program, samples: Map<string, Sample>, note: 
     if (sample && note >= keygroup.low && note <= keygroup.high) {
       // constant pitch plays every key at the root's pitch
       const semitones = (keygroup.fixedPitch ? 0 : note - keygroup.root) + keygroup.semitones + keygroup.cents / 100;
-      voices.push({ keygroup, sample, ratio: 2 ** (semitones / 12), gain: 1 });
+      // an SM-87 drum's own level replaces its sample's LEVEL, on the same curve
+      const gain = program.level === undefined ? 1 : levelGain(program.level) / levelGain(sample.sound.level);
+      voices.push({ keygroup, sample, ratio: 2 ** (semitones / 12), gain });
     }
   }
   return voices;

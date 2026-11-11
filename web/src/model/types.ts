@@ -112,6 +112,11 @@ export interface ProgramName {
   name: string;
   /** in an SM-87 DRUMS bank, the drum's pad's pan: -3 (left) .. 3; none elsewhere (the sampler has no pan) */
   pan?: number;
+  /**
+   * in an SM-87 DRUMS bank, the drum's pad's level, 0-99, on the curve of the sample's LEVEL, which it replaces (a
+   * sample two drums play can be at two levels); none: the sample's LEVEL
+   */
+  level?: number;
 }
 
 /** A program with the keygroups of its bank's samples in it, in slot order (see Store.program) */

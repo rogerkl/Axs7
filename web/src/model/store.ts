@@ -348,9 +348,9 @@ export class Store {
   /**
    * Samples taken from SM-87's firmware package (sm87Taken) into its banks, which there have to be (addSm87Banks):
    * what DRUMS and SAMPLES held is left in no bank, with its keygroups, as when a slot gets another sample; the
-   * drums' pans are the package's. A name another sample has gets a number after it.
+   * drums' pans and levels are the package's. A name another sample has gets a number after it.
    */
-  takeSm87(samples: Sample[], pans: number[]): void {
+  takeSm87(samples: Sample[], pans: number[], levels: (number | undefined)[] = []): void {
     const drums = sm87Bank(this.banks, 'drums');
     const mine = sm87Bank(this.banks, 'samples');
     if (!drums || !mine) {
@@ -367,6 +367,13 @@ export class Store {
     }
     pans.forEach((pan, i) => {
       drums.programs[i].pan = pan;
+    });
+    levels.forEach((level, i) => {
+      if (level === undefined) {
+        delete drums.programs[i].level;
+      } else {
+        drums.programs[i].level = level;
+      }
     });
     this.selectedSampleId = samples[0]?.id ?? this.selectedSampleId;
     this.selectedKeygroupId = this.validKeygroup(this.selectedKeygroupId);
@@ -420,8 +427,8 @@ export class Store {
     this.emit('selection');
   }
 
-  /** Its name, and in SM-87's DRUMS bank the drum's pan */
-  updateProgram(patch: Partial<Pick<Program, 'name' | 'pan'>>): void {
+  /** Its name, and in SM-87's DRUMS bank the drum's pan and level */
+  updateProgram(patch: Partial<Pick<Program, 'name' | 'pan' | 'level'>>): void {
     Object.assign(this.bank.programs[this.programIndex], patch);
     this.emit('program');
   }

@@ -3,8 +3,8 @@
 //   - SAMPLES: its samples go in SM-87's slots, the slot each has in the bank, with their parameters and key ranges,
 //     as they would go to an X7000;
 //   - DRUMS: its first 16 programs are the HR-16's drums (KICK .. PERC2). Each plays its first keygroup's sample, as
-//     the HR-16 plays a sound: once, start to end, tuned in whole semitones, at a level and a pan. They make a kit
-//     that replaces the firmware's own.
+//     the HR-16 plays a sound: once, start to end, tuned in whole semitones, at a level and a pan of its own. They
+//     make a kit that replaces the firmware's own.
 // The rules are SM-87's documentation/sample-bank.md ("A kit from a sampler's programs"); ../sm87/sm87bank.js makes
 // the bytes and puts them into a package.
 
@@ -92,7 +92,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v
  * What goes into SM-87's firmware: the SAMPLES bank's samples, each as the sampler keeps it (see samplerImage) up to
  * its END, and the DRUMS bank's drums as a kit. A drum's sound is its sample from START to END as it plays (reversed
  * if it is), at the sampler's rate it has, with its VEL>LEVEL; drums of one sample share it. The drum's pad has its
- * keygroup's tuning (drumTune), the sample's LEVEL and the program's pan.
+ * keygroup's tuning (drumTune), the program's LEVEL (else the sample's) and its pan.
  */
 export async function sm87Contents(banks: Bank[], samples: Iterable<Sample>, resample: Resampler)
   : Promise<Sm87Contents> {
@@ -168,7 +168,7 @@ async function drumKit(banks: Bank[], samples: Sample[], resample: Resampler, no
       notes.push(`${drum.drum}: FINE ${k.cents} left out, a drum is tuned in semitones`);
     }
     byDrum.push({ sound: soundOf.get(sample.id)!, tune: clamp(tune, -SM87_TUNE_MAX, SM87_TUNE_MAX),
-      level: clamp(Math.round(sample.sound.level), 0, 99),
+      level: clamp(Math.round(bank.programs[i].level ?? sample.sound.level), 0, 99),
       pan: clamp(Math.round(bank.programs[i].pan ?? 0), -SM87_PAN_MAX, SM87_PAN_MAX) });
   }
   for (let p = SM87_DRUMS; p < bank.programs.length; p++) {
@@ -286,6 +286,8 @@ export interface Sm87Taken {
   samples: Sample[];
   /** the drums' pans, P1-P16 of DRUMS */
   pans: number[];
+  /** the drums' levels, P1-P16 of DRUMS: each its pad's, none for a drum without a sound (its sample's LEVEL) */
+  levels: (number | undefined)[];
   notes: string[];
 }
 
@@ -293,7 +295,8 @@ export interface Sm87Taken {
  * What a firmware package holds (its bank: Sm87Package.contents) as SM-87's two banks have it, so that putting them
  * into a package again makes the same: its samples in SAMPLES, in their slots with their parameters, as a disk
  * brings them (marked as from the sampler: they are its 12 bits); its kit in DRUMS, a sample for each sound a drum
- * plays and the drum's keygroup in its program, tuned with SEMI (ROOT C3), the program's pan the pad's. A pad
+ * plays and the drum's keygroup in its program, tuned with SEMI (ROOT C3), the program's level and pan the pad's (a
+ * sound two drums play at two levels so too: its sample's LEVEL the first's). A pad
  * that plays a sampler slot, a sound no drum plays, and a pad's name, note, group or voices not the HR-16 drum's are
  * left out, and said.
  */
@@ -310,9 +313,10 @@ export function sm87Taken(held: BankContents, drumsId: string, samplesId: string
     samples.push(sample);
   }
   const pans = new Array<number>(SM87_DRUMS).fill(0);
+  const levels = new Array<number | undefined>(SM87_DRUMS).fill(undefined);
   const kit = held.kit;
   if (!kit) {
-    return { samples, pans, notes };
+    return { samples, pans, levels, notes };
   }
   const of = new Map<number, { sample: Sample; drum: string }>();
   HR16_DRUMS.forEach((d, i) => {
@@ -332,12 +336,10 @@ export function sm87Taken(held: BankContents, drumsId: string, samplesId: string
       got.sample.slot = of.size;
       of.set(pad.sound, got);
       samples.push(got.sample);
-    } else if (got.sample.sound.level !== pad.level) {
-      notes.push(`${d.drum}: level ${pad.level} on SM-87; it plays ${got.sample.name} as ${got.drum} does, at its `
-        + `LEVEL ${got.sample.sound.level} (a drum has its sample's)`);
     }
     got.sample.keygroups.push(newKeygroup(got.sample.id, i, { root: SM87_TUNE_KEY, semitones: pad.tune }));
     pans[i] = pad.pan;
+    levels[i] = pad.level;
     if (pad.name !== d.name || pad.note !== d.note || pad.group !== (d.group ?? 0) || pad.poly !== (d.poly ?? 1)) {
       notes.push(`${d.drum}: SM-87's pad ${d.pad + 1} (${pad.name || 'no name'}, note ${pad.note}) is the HR-16's `
         + `${d.drum} here, its name, note, group and voices the HR-16 drum's`);
@@ -348,5 +350,5 @@ export function sm87Taken(held: BankContents, drumsId: string, samplesId: string
       notes.push(`The kit's sound ${x.name}: no drum plays it, left out`);
     }
   });
-  return { samples, pans, notes };
+  return { samples, pans, levels, notes };
 }

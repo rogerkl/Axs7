@@ -30,9 +30,9 @@ export function programView(app: App): View {
   /** in SM-87's DRUMS bank: how a drum is made of its program */
   const drumsInfo = h('span', { class: 'info' }, `SM-87 DRUMS: P1-P${SM87_DRUMS} are the HR-16's drums, P17-P32 `
     + 'aren\'t used. A drum plays its keygroup\'s sample once, START to END (no loop, filter or release), at the '
-    + `sample's LEVEL and VEL>LEVEL (OUT), panned with PAN. It is tuned as ${noteName(SM87_TUNE_KEY)} plays it here, `
-    + 'in semitones: ROOT and SEMI (PITCH FIXED: SEMI only). A drum has one keygroup. SAVE PACKAGE or INSTALL ON '
-    + 'FM-1 (BANK view) put them into SM-87.');
+    + `drum's LEVEL (until set, the sample's LEVEL in OUT) and the sample's VEL>LEVEL, panned with PAN. It is tuned `
+    + `as ${noteName(SM87_TUNE_KEY)} plays it here, in semitones: ROOT and SEMI (PITCH FIXED: SEMI only). A drum `
+    + 'has one keygroup. SAVE PACKAGE or INSTALL ON FM-1 (BANK view) put them into SM-87.');
   let headCells: ParamCell[] = [];
   /** the tuning SM-87 gives each drum's keygroup, shown in its row */
   let tunes: (() => void)[] = [];
@@ -58,10 +58,23 @@ export function programView(app: App): View {
       get: () => store.bank.programs[store.programIndex].pan ?? 0, set: (v) => store.updateProgram({ pan: v }),
       format: (v) => (v < 0 ? `<${-v}` : v > 0 ? `${v}>` : '<>'), detail: () => `${drum} ON SM-87`,
     }) : null;
-    headCells = pan ? [pan] : [];
+    /** the sample a drum plays: its first keygroup's */
+    const drumSample = () => {
+      const k = store.program.keygroups[0];
+      return k ? store.samples.get(k.sampleId) ?? null : null;
+    };
+    // a drum's own level, on the curve of the sample's LEVEL, which it replaces; until set, the sample's
+    const level = drum ? new ParamCell({
+      key: 'program.level', label: 'LEVEL', min: 0, max: 99, coarse: 10,
+      get: () => store.bank.programs[store.programIndex].level ?? Math.round(drumSample()?.sound.level ?? 85),
+      set: (v) => store.updateProgram({ level: v }),
+      detail: () => (store.bank.programs[store.programIndex].level === undefined
+        ? `${drumSample() ? 'THE SAMPLE\'S' : 'NO SAMPLE'}` : `${drum} ON SM-87`),
+    }) : null;
+    headCells = [pan, level].filter((c): c is ParamCell => c !== null);
     drumsInfo.hidden = !drums();
     meter.el.hidden = !store.bank.sm87;
-    head.replaceChildren(bank.el, program.el, name, ...(pan ? [pan.el] : []),
+    head.replaceChildren(bank.el, program.el, name, ...headCells.map((c) => c.el),
       h('button', { class: 'soft danger', onClick: () => {
         if (store.program.keygroups.length === 0
           || confirm(`Clear ${store.program.name}, take its keygroups out? The samples stay in memory.`)) {
