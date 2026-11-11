@@ -22,6 +22,8 @@ import { S700_SCAN, bandwidthRate } from '../protocol/s700disk';
 import type { S700SampleParams } from '../protocol/s700disk';
 import { bytesWithPoints, paramsDiffer, sampleParamsBytes, sampleParamsRequest } from '../protocol/sprm';
 import { noteName } from '../model/notes';
+import { sm87Contents } from '../model/sm87';
+import { Sm87BankError, Sm87Package, makeBank } from '../sm87/sm87bank.js';
 import { download } from '../ui/dom';
 import type { App } from './app';
 
@@ -832,6 +834,79 @@ export class Actions {
       midi.logLine(`Could not save ${sample.name}.qd: ${errorText(e)}`, 'error');
       lcd.flash('SAVE FAILED, SEE MIDI');
     }
+  }
+
+  /** SM-87's firmware package that BUILD IN puts the samples into, as opened (the file's name and bytes) */
+  sm87Firmware: { name: string; bytes: Uint8Array; pkg: Sm87Package } | null = null;
+  /** what the last BUILD IN made, for the BANK view */
+  sm87Built: string | null = null;
+  private sm87Listeners = new Set<() => void>();
+
+  /** @returns a function that stops listening: the firmware opened, or BUILD IN done */
+  onSm87(listener: () => void): () => void {
+    this.sm87Listeners.add(listener);
+    return () => this.sm87Listeners.delete(listener);
+  }
+
+  private sm87Changed(): void {
+    this.sm87Listeners.forEach((f) => f());
+  }
+
+  /**
+   * Opens SM-87's firmware package (.fwsc), a release's or a build's, to put the samples into: it is checked, and
+   * what it holds is said in the BANK view
+   */
+  async openSm87Firmware(file: File): Promise<void> {
+    const { lcd, midi } = this.app;
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      this.sm87Firmware = { name: file.name, bytes, pkg: new Sm87Package(bytes, file.name) };
+      this.sm87Built = null;
+      lcd.flash(`OPENED ${this.sm87Firmware.pkg.identity}`);
+    } catch (e) {
+      midi.logLine(`SM-87: ${errorText(e)}`, 'error');
+      lcd.flash(e instanceof Sm87BankError && e.code === 'no-bank' ? 'NOT AN SM-87, SEE MIDI'
+        : 'CAN\'T OPEN IT, SEE MIDI');
+    }
+    this.sm87Changed();
+  }
+
+  /**
+   * SM-87's SAMPLES and DRUMS banks put into the firmware package opened (model/sm87.ts), saved as a new package to
+   * install: its name with "-axs7". What had to be changed or left out is logged in the MIDI view.
+   */
+  async buildSm87(): Promise<void> {
+    const { store, lcd, midi } = this.app;
+    const firmware = this.sm87Firmware;
+    if (!firmware) {
+      lcd.flash('OPEN SM-87 FIRMWARE FIRST');
+      return;
+    }
+    try {
+      const contents = await sm87Contents(store.banks, store.samples.values(), resampleInBrowser);
+      const pkg = new Sm87Package(firmware.bytes, firmware.name);
+      const bank = contents.samples.length || contents.kit ? makeBank(contents.samples, contents.kit) : null;
+      pkg.put(bank);
+      for (const note of contents.notes) {
+        midi.logLine(`SM-87: ${note}`);
+      }
+      const name = `${firmware.name.replace(/\.fwsc$/i, '')}-axs7.fwsc`;
+      download(pkg.bytes(), name, 'application/octet-stream');
+      const kb = (n: number) => `${(n / 1024).toFixed(1)} KB`;
+      const many = (n: number, what: string) => `${n} ${what}${n === 1 ? '' : 's'}`;
+      const kit = contents.kit ? `a kit of ${many(contents.kit.sounds.length, 'sound')}` : 'the firmware\'s own kit';
+      const notes = contents.notes.length ? ` (${many(contents.notes.length, 'note')} in MIDI)` : '';
+      this.sm87Built = `${name}: ${many(contents.samples.length, 'sample')} and ${kit}, `
+        + `${kb(bank?.length ?? 0)} of the ${kb(pkg.room)} there is room for${notes}`;
+      midi.logLine(`SM-87: ${this.sm87Built}`);
+      lcd.flash(`SAVED ${name}`);
+    } catch (e) {
+      midi.logLine(`SM-87: ${errorText(e)}`, 'error');
+      this.sm87Built = errorText(e);
+      lcd.flash(e instanceof Sm87BankError && e.code === 'too-big' ? 'TOO BIG FOR SM-87, SEE MIDI'
+        : 'BUILD IN FAILED, SEE MIDI');
+    }
+    this.sm87Changed();
   }
 
   /** The whole memory, every bank and sample, as a zip file, with SLOTS */

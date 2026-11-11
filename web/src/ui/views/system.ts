@@ -6,6 +6,7 @@ import { MAX_SLOTS } from '../../protocol/akai';
 import { h, pickFiles } from '../dom';
 import { ParamCell } from '../param';
 import { slotCell } from '../slot';
+import { sm87Section } from './sm87';
 import type { Sample } from '../../model/types';
 
 export function midiView(app: App): View {
@@ -107,6 +108,7 @@ export function midiView(app: App): View {
 
 export function bankView(app: App): View {
   const { store, actions, settings } = app;
+  const sm87 = sm87Section(app);
   const head = h('div', { class: 'row program-row' });
   const stats = h('div', { class: 'params' });
   const slots = h('div', { class: 'list slots', role: 'list', 'aria-label': 'Slots' });
@@ -217,8 +219,12 @@ export function bankView(app: App): View {
           h('button', { class: 'soft danger', onClick: () => actions.clearMemory() }, 'CLEAR MEMORY')),
         h('p', { class: 'info' }, 'A memory file is a zip file with every bank and sample: the samples as WAV files '
           + '(with their loops), the banks and settings in memory.json. Bank files from before banks load too. Memory '
-          + 'is also kept in the browser between visits.')),
+          + 'is also kept in the browser between visits.'),
+        sm87.el),
       programs),
-    dispose: () => off.forEach((f) => f()),
+    dispose: () => {
+      off.forEach((f) => f());
+      sm87.dispose();
+    },
   };
 }

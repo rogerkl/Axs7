@@ -17,6 +17,9 @@ It is a rewrite and enhancement of the Java program [Axs7Sds](https://github.com
   a rendered attack and a crossfade loop.
 - Programs of keygroups in banks of 32 programs, and the sampler's sound settings (OUT and LFO), played from the
   screen, the computer keyboard or a MIDI keyboard, also the X7000's own.
+- Samples and a drum kit built into SM-87, a firmware for the M-VAVE FM-1 with an S700/X7000 sampler and an HR-16
+  drum machine: a SAMPLES bank and a DRUMS bank of the HR-16's 16 drums, put into its firmware package to install,
+  with a meter of the room they take.
 
 ## Technical notes
 
@@ -51,6 +54,14 @@ It is a rewrite and enhancement of the Java program [Axs7Sds](https://github.com
   in `originals/`. Memory kept or saved before samples had their bank and slot (the banks had the slots and the
   keygroups) is moved over when it loads. WAV files saved here carry their settings, slot and key ranges as JSON in
   an `axs7` chunk, which other programs skip.
+- **SM-87** (`src/model/sm87.ts`): INIT SM-87 BANKS (BANK view) makes two banks, marked as SM-87's. The SAMPLES
+  bank's samples go in SM-87's slots as the sampler keeps them (as a disk has them, up to END). The DRUMS bank's
+  P1-P16 are the HR-16's drums; PROGRAM edits them as drums: one keygroup each, no FINE, a PAN. A drum is its first
+  keygroup's sample from START to END, played once, tuned as C3 plays it here in whole semitones, at the sample's
+  LEVEL; they make a kit that replaces the firmware's. OPEN FIRMWARE takes SM-87's package (.fwsc), BUILD IN puts
+  both banks into it (the firmware's checksums made again) and saves it. `src/sm87/sm87bank.js` is SM-87's
+  `web/sm87bank.js`: a test checks the copy is the same when SM-87's repository is beside this one. The rules are
+  SM-87's `documentation/sample-bank.md`.
 
 ## Running
 

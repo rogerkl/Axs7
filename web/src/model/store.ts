@@ -4,6 +4,7 @@
 
 import { BANK_PROGRAMS, audibleKeygroups, bankPrograms, newBank, newKeygroup, normalizeBank } from './mapping';
 import { normalizeSample } from './points';
+import { newSm87Banks, sm87Bank } from './sm87';
 import { plainRecipe } from './recipe';
 import type { Rendered, Trimmed, Written } from './render';
 import type { Bank, Keygroup, Program, Recipe, Sample, Sound } from './types';
@@ -327,6 +328,23 @@ export class Store {
     }
   }
 
+  /**
+   * SM-87's banks (model/sm87.ts), the ones there are none of yet, after the others: DRUMS, its programs the HR-16's
+   * drums, and SAMPLES. Selects DRUMS.
+   *
+   * @returns the banks added
+   */
+  addSm87Banks(): Bank[] {
+    const added = newSm87Banks().filter((b) => !sm87Bank(this.banks, b.sm87!));
+    this.banks.push(...added);
+    this.bankIndex = this.banks.indexOf(sm87Bank(this.banks, 'drums')!);
+    this.programIndex = 0;
+    this.selectedKeygroupId = this.program.keygroups[0]?.id ?? null;
+    this.emit('programs');
+    this.emit('selection');
+    return added;
+  }
+
   /** A new bank after the others, empty, and selects it */
   addBank(): Bank {
     const bank = newBank(`BANK ${this.banks.length + 1}`);
@@ -374,7 +392,8 @@ export class Store {
     this.emit('selection');
   }
 
-  updateProgram(patch: Partial<Pick<Program, 'name'>>): void {
+  /** Its name, and in SM-87's DRUMS bank the drum's pan */
+  updateProgram(patch: Partial<Pick<Program, 'name' | 'pan'>>): void {
     Object.assign(this.bank.programs[this.programIndex], patch);
     this.emit('program');
   }

@@ -17,14 +17,19 @@ export function newBank(name: string): Bank {
     (_, i): ProgramName => ({ id: newId(), name: programName(i) })) };
 }
 
-/** A bank as this version has them: its name and 32 programs' names */
+/** A bank as this version has them: its name, 32 programs' names, and SM-87's role and pans if it has them */
 export function normalizeBank(b: Partial<Bank> | OldBank): Bank {
-  const programs = (b.programs ?? []).slice(0, BANK_PROGRAMS)
-    .map((p, i): ProgramName => ({ id: p?.id ?? newId(), name: p?.name ?? programName(i) }));
+  const programs = (b.programs ?? []).slice(0, BANK_PROGRAMS).map((p, i): ProgramName => {
+    const pan = (p as Partial<ProgramName> | undefined)?.pan;
+    return { id: p?.id ?? newId(), name: p?.name ?? programName(i),
+      ...(Number.isInteger(pan) && Math.abs(pan!) <= 3 ? { pan } : {}) };
+  });
   while (programs.length < BANK_PROGRAMS) {
     programs.push({ id: newId(), name: programName(programs.length) });
   }
-  return { id: b.id ?? newId(), name: b.name ?? 'BANK', programs };
+  const role = (b as Partial<Bank>).sm87;
+  return { id: b.id ?? newId(), name: b.name ?? 'BANK', programs,
+    ...(role === 'drums' || role === 'samples' ? { sm87: role } : {}) };
 }
 
 /** By default over the whole keyboard, with the sample's own pitch at C3 like the sampler */

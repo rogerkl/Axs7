@@ -1,12 +1,17 @@
 // PROGRAM: the current bank and program, P1-P32 as on the X7000, the program's name and its keygroups, each a sample
 // over a key range with its pitch, like an X7000 program ("P1:S1:L=36:H=96"). The sound is the sample's (OUT and
 // LFO). A keygroup can be muted or soloed to hear it alone, and moved to another program.
+//
+// In SM-87's DRUMS bank (model/sm87.ts) P1-P16 are drums: one keygroup each, tuned in semitones (no FINE), with a
+// pan, and the tuning SM-87 gives the drum shown.
 
 import type { App, View } from '../../app/app';
 import { newKeygroup } from '../../model/mapping';
+import { SM87_DRUMS, SM87_PAN_MAX, SM87_TUNE_KEY, SM87_TUNE_MAX, drumName, drumTune, isDrum } from '../../model/sm87';
 import { noteName, parseNote } from '../../model/notes';
 import type { Keygroup } from '../../model/types';
 import { h } from '../dom';
+import { sm87Meter } from './sm87';
 import { ParamCell, choiceCell, dataEntry } from '../param';
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -20,6 +25,19 @@ export function programView(app: App): View {
   const head = h('div', { class: 'row program-row' });
   const table = h('div', { class: 'kg-table', role: 'table', 'aria-label': 'Keygroups' });
   let cells: ParamCell[] = [];
+  /** in one of SM-87's banks: how much of its firmware's room they take */
+  const meter = sm87Meter(app);
+  /** in SM-87's DRUMS bank: how a drum is made of its program */
+  const drumsInfo = h('span', { class: 'info' }, `SM-87 DRUMS: P1-P${SM87_DRUMS} are the HR-16's drums, P17-P32 `
+    + 'aren\'t used. A drum plays its keygroup\'s sample once, START to END (no loop, filter or release), at the '
+    + `sample's LEVEL and VEL>LEVEL (OUT), panned with PAN. It is tuned as ${noteName(SM87_TUNE_KEY)} plays it here, `
+    + 'in semitones: ROOT and SEMI (PITCH FIXED: SEMI only). A drum has one keygroup. BUILD IN (BANK view) puts '
+    + 'them into SM-87.');
+  let headCells: ParamCell[] = [];
+  /** the tuning SM-87 gives each drum's keygroup, shown in its row */
+  let tunes: (() => void)[] = [];
+  const drums = () => store.bank.sm87 === 'drums';
+  const signed = (v: number) => (v > 0 ? `+${v}` : String(v));
 
   function buildHead(): void {
     const name = h('input', { class: 'name-input', value: store.program.name, maxLength: 24,
@@ -34,7 +52,16 @@ export function programView(app: App): View {
       get: () => store.programIndex + 1, set: (v) => store.selectProgram(v - 1),
       format: (v) => String(v).padStart(2, '0'),
     });
-    head.replaceChildren(bank.el, program.el, name,
+    const drum = drumName(store.bank, store.programIndex);
+    const pan = drum ? new ParamCell({
+      key: 'program.pan', label: 'PAN', min: -SM87_PAN_MAX, max: SM87_PAN_MAX, coarse: 1,
+      get: () => store.bank.programs[store.programIndex].pan ?? 0, set: (v) => store.updateProgram({ pan: v }),
+      format: (v) => (v < 0 ? `<${-v}` : v > 0 ? `${v}>` : '<>'), detail: () => `${drum} ON SM-87`,
+    }) : null;
+    headCells = pan ? [pan] : [];
+    drumsInfo.hidden = !drums();
+    meter.el.hidden = !store.bank.sm87;
+    head.replaceChildren(bank.el, program.el, name, ...(pan ? [pan.el] : []),
       h('button', { class: 'soft danger', onClick: () => {
         if (store.program.keygroups.length === 0
           || confirm(`Clear ${store.program.name}, take its keygroups out? The samples stay in memory.`)) {
@@ -79,13 +106,15 @@ export function programView(app: App): View {
         }
       } },
     h('option', { value: '', disabled: true, selected: true }, 'MOVE TO…'),
-    ...store.bank.programs.map((p, j) => h('option', { value: j, disabled: j === store.programIndex },
-      `P${pad(j + 1)} ${p.name}`)));
+    // a drum has one keygroup
+    ...store.bank.programs.map((p, j) => h('option', { value: j, disabled: j === store.programIndex
+      || (drums() && (j >= SM87_DRUMS || store.programs[j].keygroups.length > 0)) }, `P${pad(j + 1)} ${p.name}`)));
     return select;
   }
 
   function buildTable(): void {
     cells = [];
+    tunes = [];
     // a keygroup plays one of the bank's samples
     const samples = store.samplesIn(store.bank);
     const rows = store.program.keygroups.map((kg, i) => {
@@ -99,15 +128,29 @@ export function programView(app: App): View {
         () => (store.program.keygroups.find((k) => k.id === kg.id)?.fixedPitch ? 'fixed' : 'track'),
         (v) => store.updateKeygroup(kg.id, { fixedPitch: v === 'fixed' }), 'compact');
       pitch.el.addEventListener('pointerdown', () => store.selectKeygroup(kg.id));
+      // a drum is tuned in semitones: no FINE
       const rowCells = [kgCell(kg, 'low', 'LOW'), kgCell(kg, 'high', 'HIGH'), kgCell(kg, 'root', 'ROOT'),
-        kgCell(kg, 'semitones', 'SEMI'), kgCell(kg, 'cents', 'FINE'), pitch];
+        kgCell(kg, 'semitones', 'SEMI'), ...(drums() ? [] : [kgCell(kg, 'cents', 'FINE')]), pitch];
       cells.push(...rowCells);
+      const tune = h('span', { class: 'kg-sm87', title: 'The tuning SM-87 gives the drum: as '
+        + `${noteName(SM87_TUNE_KEY)} plays it here, in semitones (at most ${SM87_TUNE_MAX} either way)` });
+      if (isDrum(store.bank, store.programIndex)) {
+        const show = () => {
+          const k = store.program.keygroups.find((x) => x.id === kg.id);
+          const t = k ? drumTune(k) : 0;
+          const kept = Math.max(-SM87_TUNE_MAX, Math.min(SM87_TUNE_MAX, t));
+          tune.textContent = i > 0 ? 'NOT PLAYED' : `SM-87 ${signed(kept)}` + (kept !== t ? ` (${signed(t)})` : '');
+          tune.classList.toggle('warn', i > 0 || Math.abs(t) > SM87_TUNE_MAX);
+        };
+        show();
+        tunes.push(show);
+      }
       return h('div', {
         class: `kg-row${kg.id === store.selectedKeygroupId ? ' selected' : ''}`, role: 'row',
         onPointerdown: () => store.selectKeygroup(kg.id),
       },
       h('span', { class: 'kg-num' }, `KG${String(i + 1).padStart(2, '0')}`),
-      select, ...rowCells.map((c) => c.el),
+      select, ...rowCells.map((c) => c.el), ...(isDrum(store.bank, store.programIndex) ? [tune] : []),
       listenButton(kg, 'M', store.muted.has(kg.id), 'Mute: not played', () => store.toggleMute(kg.id)),
       listenButton(kg, 'S', store.soloed.has(kg.id), 'Solo: only the soloed keygroups are played',
         () => store.toggleSolo(kg.id)),
@@ -125,6 +168,7 @@ export function programView(app: App): View {
       table.children[i]?.classList.toggle('selected', kg.id === store.selectedKeygroupId));
   }
 
+
   buildHead();
   buildTable();
   const off = [
@@ -134,13 +178,25 @@ export function programView(app: App): View {
     }),
     store.on('keygroups', buildTable),
     store.on('samples', buildTable),
-    store.on('program', () => cells.forEach((c) => c.refresh())),
+    store.on('program', () => {
+      cells.forEach((c) => c.refresh());
+      headCells.forEach((c) => c.refresh());
+      tunes.forEach((f) => f());
+    }),
     store.on('selection', markSelected),
   ];
   return {
-    el: h('div', { class: 'view view-keygroups' }, head, table,
+    el: h('div', { class: 'view view-keygroups' }, head, meter.el, table,
       h('div', { class: 'row' },
         h('button', { class: 'soft', onClick: () => {
+          if (drums() && !isDrum(store.bank, store.programIndex)) {
+            lcd.flash(`P17-P32 AREN'T DRUMS`);
+            return;
+          }
+          if (drums() && store.program.keygroups.length) {
+            lcd.flash('A DRUM HAS ONE KEYGROUP');
+            return;
+          }
           // the selected sample if it is in the bank, else the bank's first
           const s = store.selectedSample?.bankId === store.bank.id ? store.selectedSample : store.samplesIn(store.bank)[0];
           if (!s) {
@@ -149,6 +205,7 @@ export function programView(app: App): View {
           }
           store.addKeygroup(newKeygroup(s.id, store.programIndex));
         } }, 'ADD KEYGROUP'),
+        drumsInfo,
         h('span', { class: 'info' }, 'A bank has 32 programs, as the sampler. As on the sampler, the key ranges are '
           + 'the samples\': a program plays the samples in the bank\'s slots, and a sample\'s keygroups go with it '
           + 'to another bank. Select LOW, HIGH or ROOT and play a note to set it, like on the sampler '
@@ -158,6 +215,9 @@ export function programView(app: App): View {
           + 'with its ROOT. M mutes a keygroup and S solos it, to hear one of overlapping keygroups alone (only here, '
           + 'they aren\'t saved or sent). MOVE TO moves a keygroup to another program. Notes are named as on the '
           + 'sampler, C3 = MIDI 60.'))),
-    dispose: () => off.forEach((f) => f()),
+    dispose: () => {
+      off.forEach((f) => f());
+      meter.dispose();
+    },
   };
 }

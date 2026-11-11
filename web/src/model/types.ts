@@ -110,6 +110,8 @@ export interface Keygroup {
 export interface ProgramName {
   id: string;
   name: string;
+  /** in an SM-87 DRUMS bank, the drum's pad's pan: -3 (left) .. 3; none elsewhere (the sampler has no pan) */
+  pan?: number;
 }
 
 /** A program with the keygroups of its bank's samples in it, in slot order (see Store.program) */
@@ -126,7 +128,14 @@ export interface Bank {
   name: string;
   /** P1-P32, always BANK_PROGRAMS of them */
   programs: ProgramName[];
+  /**
+   * SM-87's (model/sm87.ts): its DRUMS bank, whose first 16 programs are the HR-16's drums, or its SAMPLES bank,
+   * whose samples go in its slots; none for a bank of the sampler's only
+   */
+  sm87?: Sm87Role;
 }
+
+export type Sm87Role = 'drums' | 'samples';
 
 /** A keygroup of a version before samples had them: in a bank's program, its sample by id */
 export interface OldKeygroup extends Omit<Keygroup, 'program' | 'sampleId'> {
