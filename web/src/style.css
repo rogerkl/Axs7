@@ -526,6 +526,11 @@ button:focus-visible,
   gap: 8px 10px;
 }
 
+/* hidden means hidden, whatever display a class gives it (the SM-87 rows and meter are flex) */
+[hidden] {
+  display: none !important;
+}
+
 /* SM-87 in the BANK view: its banks and its firmware */
 .sm87 {
   display: flex;
