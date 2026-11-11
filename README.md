@@ -17,9 +17,9 @@ It is a rewrite and enhancement of the Java program [Axs7Sds](https://github.com
   a rendered attack and a crossfade loop.
 - Programs of keygroups in banks of 32 programs, and the sampler's sound settings (OUT and LFO), played from the
   screen, the computer keyboard or a MIDI keyboard, also the X7000's own.
-- Samples and a drum kit built into SM-87, a firmware for the M-VAVE FM-1 with an S700/X7000 sampler and an HR-16
-  drum machine: a SAMPLES bank and a DRUMS bank of the HR-16's 16 drums, put into its firmware package and installed
-  on the FM-1 over USB, with a meter of the room they take.
+- Samples and a drum kit built into SM-87, a firmware for the M-VAVE FM-1 with an S700/X7000 style sampler and an
+  HR-16 style drum machine: a SAMPLES bank and a DRUMS bank of the HR-16's 16 drums, put into its firmware package
+  and installed on the FM-1 over USB, with a meter of the room they take.
 
 ## Technical notes
 

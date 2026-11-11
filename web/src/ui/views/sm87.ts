@@ -141,12 +141,13 @@ export function sm87Section(app: App): { el: HTMLElement; dispose(): void } {
   return {
     el: h('div', { class: 'sm87' },
       h('h3', { class: 'section-title' }, 'SM-87'),
-      h('p', { class: 'info' }, 'SM-87 is a firmware for the M-VAVE FM-1: an MMT-8 sequencer, an S700/X7000 sampler '
-        + 'and an HR-16 drum machine. It takes samples built into its firmware package. INIT SM-87 BANKS makes two '
-        + 'banks for them. SAMPLES is a bank as any: its samples go in SM-87\'s slots with their programs. DRUMS has '
-        + 'the HR-16\'s 16 drums as P1-P16: each plays its first keygroup\'s sample, once, start to end, and they '
-        + 'replace the firmware\'s own drum kit (with no drum, the firmware\'s plays). In DRUMS, PROGRAM edits them '
-        + 'as drums: one keygroup each, tuned in semitones, with a pan. OPEN FIRMWARE takes the package, a release\'s '
+      h('p', { class: 'info' }, 'SM-87 is a firmware for the M-VAVE FM-1: an MMT-8 style sequencer, an S700/X7000 '
+        + 'style sampler and an HR-16 style drum machine. It takes samples built into its firmware package. INIT SM-87 '
+        + 'BANKS makes two banks for them. SAMPLES is a bank as any: its samples go in SM-87\'s slots with their '
+        + 'programs. DRUMS has the HR-16\'s 16 drums as P1-P16: each plays its first keygroup\'s sample, once, start '
+        + 'to end, and they replace the firmware\'s own drum kit (with no drum, the firmware\'s plays). In DRUMS, '
+        + 'PROGRAM edits them as drums: one keygroup each, tuned in semitones, with a level and a pan. OPEN FIRMWARE '
+        + 'takes the package, a release\'s '
         + 'or your own build\'s; TAKE ITS SAMPLES brings what it holds into DRUMS and SAMPLES, to put them into a new '
         + 'release. SAVE PACKAGE puts both banks into it as they are and saves a new package (to install '
         + 'with fm1-base\'s installer); INSTALL ON FM-1 puts them in and installs it on the FM-1 connected by USB, as '
