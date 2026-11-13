@@ -236,6 +236,18 @@ export function makeBank(samples, kit = null) {
   return out;
 }
 
+// the bytes the bank ending at the end of top takes, footer and all, by its footer alone (0: none; a damaged footer
+// throws): one whose contents don't check (readBank) can still be taken out or replaced (mkrom.py bank_size)
+function bankSize(top) {
+  if (top.length < BANK_FOOT) return 0;
+  const f = top.length - BANK_FOOT, dv = view(top);
+  if (dv.getUint32(f, true) !== BANK_MAGIC) return 0;
+  const size = dv.getUint32(f + 8, true);
+  if (crc32(top.subarray(f, f + 28)) !== dv.getUint32(f + 28, true) || size & 3 || size > f)
+    throw new Sm87BankError("damaged-bank", "the package's samples don't check (its footer)");
+  return size + BANK_FOOT;
+}
+
 // the bank ending at the end of top, checked as the firmware checks it (s7bank.c): {samples, kit (null for none),
 // size (its bytes)}, each sample and kit sound with its words; null without one; Sm87BankError "damaged-bank" for
 // one that doesn't check
@@ -440,8 +452,7 @@ export class Sm87Package {
   put(bank) {
     const b = bank || new Uint8Array(0);
     const top = this.app.subarray(this.imageEnd);
-    const old = readBank(top);
-    const size = old ? old.size : 0;
+    const size = bankSize(top);   // (not readBank: samples that don't check are replaced as any others)
     for (let i = 0; i < top.length - size; i++)
       if (top[i] !== 0xFF)
         throw new Sm87BankError("stray", `${this.name}: there's something above its firmware that isn't samples`);
