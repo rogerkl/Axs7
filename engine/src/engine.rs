@@ -292,6 +292,32 @@ mod tests {
     }
 
     #[test]
+    fn the_word_before_the_loop_is_never_read_in_the_loop() {
+        // two samples alike but for the word before LOOP play alike once the loop has begun, at any pitch: just after
+        // the position is brought back by a period, the Hermite's first word is the loop's own
+        for mode in [LoopMode::Forward, LoopMode::Alternating] {
+            for ratio in [0.75, 1.0, 1.5] {
+                let play = |odd: bool| {
+                    let mut data = sine(440.0, 39555.4, 1000);
+                    if odd {
+                        data[199] = -0.9; // far off the sine (0.97 there)
+                    }
+                    let mut engine = Engine::new(SR);
+                    engine.set_sample(1, data, 39555.4);
+                    let mut n = note(60, ratio, mode, 1000);
+                    n.loop_start = 200;
+                    engine.note_on(n);
+                    render(&mut engine, 0.5)
+                };
+                let (a, b) = (play(false), play(true));
+                // from well past the first time through word 199
+                let worst = a[2000..].iter().zip(&b[2000..]).fold(0.0f32, |m, (x, y)| m.max((x - y).abs()));
+                assert!(worst < 1e-4, "{mode:?} at {ratio}: {worst}");
+            }
+        }
+    }
+
+    #[test]
     fn positions_of_playing_voices_follow_the_loop() {
         let mut engine = engine_with_sine(4000);
         assert_eq!(engine.positions(), &[0]);

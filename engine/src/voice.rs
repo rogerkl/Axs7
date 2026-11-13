@@ -310,7 +310,9 @@ impl Voice {
         let level = p[LEVEL] * self.gain * velocity_gain(self.velocity, p[VEL_LEVEL].clamp(0.0, 1.0));
         self.filter.set(velocity_cutoff(self.velocity, p), sample_rate);
         let period = self.period();
-        let wrap_at = (self.loop_start + period) as f64;
+        // a word past the loop's first period: brought back, the position stays a word in from LOOP, so the word
+        // before it (the Hermite's first) is the loop's own, not the one before LOOP
+        let wrap_at = (self.loop_start + period + 1) as f64;
         let read = |voice: &Voice, i: i64| voice.index(i).map_or(0.0, |j| data[voice.sample_at(j)]);
         for o in out.iter_mut() {
             if self.control == 0 {
