@@ -26,6 +26,8 @@ import { sm87Bank, sm87Contents, sm87Taken } from '../model/sm87';
 import { installPackage } from './sm87install';
 import { Sm87BankError, Sm87Package, makeBank } from '../sm87/sm87bank.js';
 import type { BankContents } from '../sm87/sm87bank.js';
+import { emuHolds, emuSamples, emuUrl, openInEmulator } from '../sm87/sm87emu.js';
+import type { EmuWatch } from '../sm87/sm87emu.js';
 import { download } from '../ui/dom';
 import type { App } from './app';
 
@@ -934,6 +936,46 @@ export class Actions {
     if (built) {
       download(built.bytes, built.name, 'application/octet-stream');
       this.app.lcd.flash(`SAVED ${built.name}`);
+    }
+  }
+
+  /**
+   * SM-87's banks put into the firmware opened, as they are now, and played in SM-87's browser emulator on this site
+   * (sm87/sm87emu.js, SM-87's): kept where the emulator looks for them, an emulator running (watch: the BANK view's)
+   * starts again with them, else it opens in a tab of its own and plays them as it is switched on. Called in the
+   * button's click: the tab is opened before the package is made, while the browser allows it.
+   */
+  async openSm87Emulator(watch: EmuWatch): Promise<void> {
+    const { lcd, midi } = this.app;
+    if (!this.sm87Firmware) {
+      lcd.flash('OPEN SM-87 FIRMWARE FIRST');
+      return;
+    }
+    let made = '';
+    try {
+      const how = await openInEmulator(watch, async () => {
+        const built = await this.buildSm87Package();
+        if (!built) {
+          return null;
+        }
+        const k = emuSamples(built.bytes, built.name);
+        made = `${built.name} (${emuHolds(k)})`;
+        return k;
+      });
+      if (!how) {
+        return;                           // (said by buildSm87Package)
+      }
+      const said = {
+        told: `SM-87: ${made} in the emulator: it starts again with them in its tab; switch it on there`,
+        opened: `SM-87: ${made} in the emulator, opened in a tab of its own: switch it on there`,
+        blocked: `SM-87: ${made} kept for the emulator, but this browser opens no tab from here: open ${emuUrl()} `
+          + 'and switch it on',
+      }[how];
+      midi.logLine(said, how === 'blocked' ? 'error' : undefined);
+      lcd.flash(how === 'blocked' ? 'OPEN THE EMULATOR, SEE MIDI' : 'SWITCH ON THE EMULATOR');
+    } catch (e) {
+      midi.logLine(`SM-87: the emulator: ${errorText(e)}`, 'error');
+      lcd.flash('NOT IN THE EMULATOR, SEE MIDI');
     }
   }
 

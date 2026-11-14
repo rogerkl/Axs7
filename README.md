@@ -63,13 +63,19 @@ It is a rewrite and enhancement of the Java program [Axs7Sds](https://github.com
   puts both banks into it as they are (the firmware's checksums made again) and saves it, INSTALL ON FM-1 puts them
   in and installs it on the FM-1 over Web MIDI, as fm1-base's installer page does (`src/app/sm87install.ts`): the
   running firmware checks the package and starts its update loader, which writes it, and an FM-1 found waiting in
-  update mode has that install finished. Only the firmware's part of the flash is written. TAKE ITS SAMPLES brings
+  update mode has that install finished. Only the firmware's part of the flash is written. OPEN IN EMULATOR puts them
+  in as SAVE PACKAGE does and plays that package in SM-87's browser emulator, to try it before installing
+  (`src/sm87/sm87emu.js`, SM-87's): its samples are kept where the emulator looks for them, an emulator running
+  starts again with them, else it opens in a tab of its own and plays them as it is switched on. It needs the emulator
+  on the same origin, as on rogerkl.github.io (`/sm-87/emu/`); `npm run dev` and `npm run preview` proxy that path to
+  SM-87's emulator build served on port 8087 (`python3 -m http.server -d app/build/emu 8087` in SM-87), or to
+  `SM87_EMU`. TAKE ITS SAMPLES brings
   what a package holds back into the two banks (`sm87Taken`): its samples as a disk brings them, its kit's sounds as
   drum samples with the drums' keygroups, tuning and pans, so a release's built-in samples go into the next release's
-  package the same, byte for byte. `src/sm87/sm87bank.js` is
-  SM-87's `web/sm87bank.js`, and `fm1ota.js`, `fm1ports.js` and `fm1pkg.js` beside it are fm1-base's `web/` files,
-  all four MPL-2.0 under their own licence and copied as they are: a test checks each copy is the same when SM-87's repository
-  is beside this one. The rules are SM-87's `documentation/sample-bank.md`.
+  package the same, byte for byte. `src/sm87/sm87bank.js` and `sm87emu.js` are
+  SM-87's `web/` files, and `fm1ota.js`, `fm1ports.js` and `fm1pkg.js` beside them are fm1-base's `web/` files,
+  all five MPL-2.0 under their own licence and copied as they are: a test checks each copy is the same when SM-87's
+  repository is beside this one. The rules are SM-87's `documentation/sample-bank.md`.
 
 ## Running
 

@@ -32,7 +32,8 @@ export function programView(app: App): View {
     + 'aren\'t used. A drum plays its keygroup\'s sample once, START to END (no loop, filter or release), at the '
     + `drum's LEVEL (until set, the sample's LEVEL in OUT) and the sample's VEL>LEVEL, panned with PAN. It is tuned `
     + `as ${noteName(SM87_TUNE_KEY)} plays it here, in semitones: ROOT and SEMI (PITCH FIXED: SEMI only). A drum `
-    + 'has one keygroup. SAVE PACKAGE or INSTALL ON FM-1 (BANK view) put them into SM-87.');
+    + 'has one keygroup. SAVE PACKAGE or INSTALL ON FM-1 (BANK view) put them into SM-87; OPEN IN EMULATOR tries '
+    + 'them.');
   let headCells: ParamCell[] = [];
   /** the tuning SM-87 gives each drum's keygroup, shown in its row */
   let tunes: (() => void)[] = [];
