@@ -1,11 +1,12 @@
 // SM-87 in the BANK view: its two banks made (DRUMS, its programs the HR-16's drums, and SAMPLES), its firmware
-// package opened, and the banks built into it (model/sm87.ts): saved as a new package, or installed on the FM-1 over
-// Web MIDI (app/sm87install.ts).
+// package opened, and the banks built into it (model/sm87.ts): saved as a new package, installed on the FM-1 over
+// Web MIDI (app/sm87install.ts), or played in SM-87's browser emulator on this site (sm87/sm87emu.js).
 
 import type { App } from '../../app/app';
 import { SM87_DRUMS, SM87_ROOM_TODAY, sm87Bank, sm87Size } from '../../model/sm87';
 import type { Bank } from '../../model/types';
 import { h, pickFiles } from '../dom';
+import { emuWatch } from '../../sm87/sm87emu.js';
 
 const kb = (n: number) => `${(n / 1024).toFixed(1)} KB`;
 
@@ -57,6 +58,7 @@ export function sm87Meter(app: App): { el: HTMLElement; dispose(): void } {
 
 export function sm87Section(app: App): { el: HTMLElement; dispose(): void } {
   const { store, actions, lcd } = app;
+  const emu = emuWatch();                 // the emulators running, heard before OPEN IN EMULATOR is pressed
   const banksRow = h('div', { class: 'row' });
   const firmwareRow = h('div', { class: 'row' });
   const built = h('p', { class: 'info' });
@@ -120,6 +122,9 @@ export function sm87Section(app: App): { el: HTMLElement; dispose(): void } {
         title: 'Both banks into the firmware opened, saved as a new package', onClick: () => actions.saveSm87() },
       'SAVE PACKAGE'),
       h('button', { class: 'soft', disabled: !actions.sm87Firmware || !(drums || samples) || installing,
+        title: 'Both banks into the firmware opened, played in SM-87\'s emulator on this site (in a tab of its own)',
+        onClick: () => actions.openSm87Emulator(emu) }, 'OPEN IN EMULATOR'),
+      h('button', { class: 'soft', disabled: !actions.sm87Firmware || !(drums || samples) || installing,
         title: 'Both banks into the firmware opened, installed on the FM-1 connected by USB',
         onClick: () => actions.installSm87() }, 'INSTALL ON FM-1'),
       h('span', { class: 'info' }, holds()));
@@ -150,13 +155,16 @@ export function sm87Section(app: App): { el: HTMLElement; dispose(): void } {
         + 'takes the package, a release\'s '
         + 'or your own build\'s; TAKE ITS SAMPLES brings what it holds into DRUMS and SAMPLES, to put them into a new '
         + 'release. SAVE PACKAGE puts both banks into it as they are and saves a new package (to install '
-        + 'with fm1-base\'s installer); INSTALL ON FM-1 puts them in and installs it on the FM-1 connected by USB, as '
-        + 'that installer does. The FM-1 keeps its sequences, settings and the samples sent to its pool. The built-in '
-        + 'samples are in that package only: put them into a new release\'s again.'),
+        + 'with fm1-base\'s installer); OPEN IN EMULATOR plays that package in SM-87\'s emulator in a tab of its own '
+        + '(one running starts again with it), to try before installing; INSTALL ON FM-1 puts them in and installs it '
+        + 'on the FM-1 connected by USB, as that installer does. The FM-1 keeps its sequences, settings and the '
+        + 'samples sent to its pool. The built-in samples are in that package only: put them into a new release\'s '
+        + 'again.'),
       banksRow, meter.el, firmwareRow, installRow, built),
     dispose: () => {
       off.forEach((f) => f());
       meter.dispose();
+      emu.close();
     },
   };
 }

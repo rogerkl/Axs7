@@ -1,6 +1,6 @@
 // SM-87's banks (model/sm87.ts): DRUMS and SAMPLES made, kept, and made into SM-87's samples and drum kit by the
-// rules of its documentation/sample-bank.md; and src/sm87/sm87bank.js the same as SM-87's own, when that repository
-// is beside this one.
+// rules of its documentation/sample-bank.md; and src/sm87/sm87bank.js and sm87emu.js the same as SM-87's own, when
+// that repository is beside this one.
 import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { BW16, encodeSamples } from '../src/protocol/akai';
@@ -33,8 +33,8 @@ const sample = (id: string, overrides: Partial<Sample> = {}): Sample => {
 const kg = (sampleId: string, program: number, init: Partial<Keygroup> = {}) => newKeygroup(sampleId, program, init);
 
 describe('SM-87', () => {
-  test('its sm87bank.js is SM-87\'s', () => {
-    for (const f of ['sm87bank.js', 'sm87bank.d.ts']) {
+  test('its sm87bank.js and sm87emu.js are SM-87\'s', () => {
+    for (const f of ['sm87bank.js', 'sm87bank.d.ts', 'sm87emu.js', 'sm87emu.d.ts']) {
       const theirs = new URL(`../../../sm-87/web/${f}`, import.meta.url);
       if (existsSync(theirs)) {
         expect(readFileSync(new URL(`../src/sm87/${f}`, import.meta.url), 'utf8'), f)
