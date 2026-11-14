@@ -445,6 +445,12 @@ export class Sm87Package {
 
   // what it holds: {samples, kit, size} (readBank), null for none
   contents() { return readBank(this.app.subarray(this.imageEnd)); }
+  // the bank's bytes as it holds them, its footer last (checked as contents() checks them), null for none: what the
+  // emulator plays in place of its own (app/web/emu/app.js)
+  bank() {
+    const top = this.app.subarray(this.imageEnd), c = readBank(top);
+    return c ? top.slice(top.length - c.size) : null;
+  }
   samples() { const c = this.contents(); return c ? c.samples : null; }
   kit() { const c = this.contents(); return c ? c.kit : null; }
 

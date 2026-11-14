@@ -165,6 +165,9 @@ export declare class Sm87Package {
   samples(): HeldSample[] | null;
   /** its kit, null for none (the firmware's own plays) */
   kit(): HeldKit | null;
+  /** the bank's bytes as it holds them, its footer last, null for none (what the emulator plays in place of its
+   * own). Throws Sm87BankError "damaged-bank" */
+  bank(): Uint8Array | null;
   /** a bank (makeBank) into the slot; null or empty for none. Throws Sm87BankError "stray", "too-big",
    * "damaged-bank" */
   put(bank: Uint8Array | null): void;
