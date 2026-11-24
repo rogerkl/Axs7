@@ -30,6 +30,10 @@ export interface Settings {
   /** set START to 0 and END to the most on the sampler while receiving, so the dump has all of the sample, then
    * back */
   wholeSample: boolean;
+  /** FIND END's threshold: dB under the loudest of what plays */
+  findEndDb: number;
+  /** FIND RATE's threshold: dB under the loudest frequency */
+  findRateDb: number;
   ackIntervalMs: number;
   lookaheadMs: number;
   fillerPerBlock: number;
@@ -47,7 +51,7 @@ const VERSION = 2;
 
 const DEFAULTS: Settings = {
   version: VERSION, midiIn: null, midiOut: null, channel: 0, slot: 0, slotCount: 6,
-  loadRate: 'sampler', loadSlot: 0, loadPrograms: 0, paramsChannel: 0, paramsId: 0x41, wholeSample: true, ackIntervalMs: 50, lookaheadMs: 1500, fillerPerBlock: 0, volume: 0.8, polyphony: 16,
+  loadRate: 'sampler', loadSlot: 0, loadPrograms: 0, paramsChannel: 0, paramsId: 0x41, wholeSample: true, findEndDb: -40, findRateDb: -50, ackIntervalMs: 50, lookaheadMs: 1500, fillerPerBlock: 0, volume: 0.8, polyphony: 16,
 };
 
 export function loadSettings(): Settings {

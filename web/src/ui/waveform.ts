@@ -30,6 +30,8 @@ export class Waveform {
   private to = 1;
   /** where the sampler's maximum length ends, null if the used part fits */
   private limit: number | null = null;
+  /** where FIND END would move END (or START, reversed), and its tag */
+  private found: { at: number; tag: string } | null = null;
   /** samples of crossfade to show, 0 for none */
   private crossfade = 0;
   /** samples of rendered attack to show, 0 for none, and its shape */
@@ -126,6 +128,14 @@ export class Waveform {
   setLimit(limit: number | null): void {
     if (limit !== this.limit) {
       this.limit = limit;
+      this.draw();
+    }
+  }
+
+  /** Where FIND END would end the sample, and what it would cut: past it, or before it when it plays backwards */
+  setFound(at: number | null, tag = ''): void {
+    if (at !== this.found?.at || tag !== this.found?.tag) {
+      this.found = at === null ? null : { at, tag };
       this.draw();
     }
   }
@@ -417,23 +427,35 @@ export class Waveform {
         band(s.loopEnd, s.end, color('--wave-dropped'));
       }
     }
+    /** a dashed line across, with a label beside it */
+    const dashed = (at: number, fill: string, label: string, labelY = height / 2 - 6 * dpr) => {
+      const lx = x(at);
+      if (lx >= 0 && lx <= w) {
+        ctx.fillStyle = fill;
+        for (let y = 0; y < height; y += 8 * dpr) {
+          ctx.fillRect(lx, y, 2 * dpr, 4 * dpr);
+        }
+        ctx.font = `${9 * dpr}px "Helvetica Neue", Arial, sans-serif`;
+        const tw = ctx.measureText(label).width;
+        ctx.fillText(label, lx + tw + 6 * dpr < w ? lx + 4 * dpr : lx - tw - 4 * dpr, labelY);
+      }
+    };
     if (this.limit !== null) {
       if (s.reverse) {
         band(0, this.limit, color('--wave-over'));
       } else {
         band(this.limit, s.data.length, color('--wave-over'));
       }
-      const lx = x(this.limit);
-      if (lx >= 0 && lx <= w) {
-        ctx.fillStyle = color('--wave-limit');
-        for (let y = 0; y < height; y += 8 * dpr) {
-          ctx.fillRect(lx, y, 2 * dpr, 4 * dpr); // dashed
-        }
-        ctx.font = `${9 * dpr}px "Helvetica Neue", Arial, sans-serif`;
-        const label = 'SAMPLER LIMIT';
-        const tw = ctx.measureText(label).width;
-        ctx.fillText(label, lx + tw + 6 * dpr < w ? lx + 4 * dpr : lx - tw - 4 * dpr, height / 2 - 6 * dpr);
+      dashed(this.limit, color('--wave-limit'), 'SAMPLER LIMIT');
+    }
+    if (this.found) {
+      const { at, tag } = this.found;
+      if (s.reverse) {
+        band(s.start, at, color('--wave-cut'));
+      } else {
+        band(at, s.end, color('--wave-cut'));
       }
+      dashed(at, color('--wave-found'), tag, height / 2 + 15 * dpr); // under the limit's label
     }
     // the points, with tags: the loop's at the top, START and END at the bottom
     const marker = (which: PointName, fill: string) => {

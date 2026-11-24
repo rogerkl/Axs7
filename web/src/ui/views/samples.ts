@@ -5,7 +5,7 @@ import type { App, View } from '../../app/app';
 import { LOAD_ALL_PROGRAMS, LOAD_NO_PROGRAMS, LOAD_SLOT_FILE, LOAD_SLOT_OFF } from '../../app/settings';
 import { newKeygroup } from '../../model/mapping';
 import { BANDWIDTHS, MAX_SAMPLES, nearestBandwidth, samplerBandwidth } from '../../protocol/akai';
-import { crossfadeRoom } from '../../audio/dsp';
+import { crossfadeRoom, getDsp } from '../../audio/dsp';
 import { samplerFit } from '../../model/convert';
 import { attackRoom, fadeOutRoom, isTwelveBit, portionPeak } from '../../model/edit';
 import { isEdited } from '../../model/recipe';
@@ -17,6 +17,8 @@ import { ParamCell, choiceCell, dataEntry } from '../param';
 import { isPortion, movePoint, usedStart } from '../../model/points';
 import type { PointName } from '../../model/points';
 import { trimBlocked, unplayed } from '../../model/render';
+import { FOUND_END_FADE_MS, findEnd, highestFrequency, playedAudio, playedKey, rateForContent, spectrumSize }
+  from '../../model/shrink';
 import { slotCell } from '../slot';
 import { Waveform } from '../waveform';
 
@@ -281,6 +283,176 @@ export function samplesView(app: App): View {
       h('span', { class: 'group-title' }, 'FADE OUT'), lengthCell.el, shapeCell.el, note);
   }
 
+  /** A threshold, dB under the loudest, kept in the settings */
+  function thresholdCell(key: string, min: number, get: () => number, set: (db: number) => void): ParamCell {
+    return new ParamCell({
+      key, label: 'THRESHOLD', min, max: -6, coarse: 6,
+      get, set: (v) => {
+        set(v);
+        app.saveSettings();
+      },
+      format: (v) => `${v}DB`,
+      parse: (text) => {
+        const db = Number(text.trim().replace(/db$/i, ''));
+        return Number.isFinite(db) ? -Math.abs(db) : null;
+      },
+    }, 'wide');
+  }
+
+  /**
+   * FIND END: where a one shot's sound has died away under a threshold for good, to end it there with a short fade
+   * out, so TRIM keeps less. Points can be set on a sample from the sampler too, its fade out needs ALLOW EDITS.
+   */
+  function findEndGroup(s: Sample): HTMLElement {
+    const sample = () => store.samples.get(s.id) ?? s;
+    const note = h('span', { class: 'info' });
+    const found = () => findEnd(sample(), app.settings.findEndDb);
+    const button = h('button', { class: 'soft', onClick: () => {
+      const now = sample();
+      const f = found();
+      if ('why' in f || f.cut === 0) {
+        return;
+      }
+      store.updateSample(now.id, movePoint(now, f.point, f.at));
+      const fade = !now.fromSampler && now.recipe.fadeOutMs === 0;
+      if (fade) {
+        store.updateRecipe(now.id, { fadeOutMs: FOUND_END_FADE_MS });
+      }
+      app.lcd.flash(`${f.point === 'end' ? 'END' : 'START'} AT ${(f.at / now.rate).toFixed(3)}S`
+        + (fade ? `, FADE OUT ${FOUND_END_FADE_MS}MS` : ''));
+    } });
+    const threshold = thresholdCell('samples.findEndDb', -90, () => app.settings.findEndDb, (db) => {
+      app.settings.findEndDb = db;
+      update();
+    });
+    threshold.el.title = 'The level, under the loudest of what plays, that the sound has to stay under after its end';
+    const update = () => {
+      const now = sample();
+      const f = found();
+      const point = now.reverse ? 'START' : 'END';
+      const db = `${app.settings.findEndDb}DB`;
+      button.textContent = `SET ${point}`;
+      if ('why' in f) {
+        note.textContent = f.why === 'LOOPED' ? 'LOOPED: IT PLAYS ON WHILE HELD, THE RELEASE ENDS IT' : 'SILENT';
+        button.disabled = true;
+        wave.setFound(null);
+        return;
+      }
+      const played = now.end - now.start;
+      const fade = now.fromSampler ? ', NO FADE OUT (ALLOW EDITS FOR ONE)'
+        : now.recipe.fadeOutMs ? `, ITS FADE OUT ${now.recipe.fadeOutMs}MS BEFORE IT`
+          : `, AND A ${FOUND_END_FADE_MS}MS FADE OUT`;
+      note.textContent = f.cut === 0 ? `OVER ${db} UNTIL ${point}: NOTHING TO CUT`
+        : `UNDER ${db} FOR GOOD ${now.reverse ? 'BEFORE' : 'FROM'} ${(f.at / now.rate).toFixed(3)}S: ${point} THERE `
+          + `CUTS ${f.cut} SAMPLES (${Math.round((100 * f.cut) / played)}%)${fade}`;
+      button.disabled = f.cut === 0;
+      button.title = f.cut === 0 ? 'Nothing to cut at this threshold' : `Move ${point} where the sound has died `
+        + `away${now.fromSampler ? '' : ', with a short fade out if it has none'}. TRIM then lets go of the rest`;
+      wave.setFound(f.cut === 0 ? null : f.at, `UNDER ${db}`);
+    };
+    update();
+    detailRefresh.push(() => {
+      threshold.refresh();
+      update();
+    });
+    return h('div', { class: 'sampler-group', role: 'group', 'aria-label': 'Find end' },
+      h('span', { class: 'group-title' }, 'FIND END'), threshold.el, button, note);
+  }
+
+  /**
+   * FIND RATE: how high the content of what plays goes, over a threshold, and the lowest of the sampler's rates that
+   * holds it (a rate holds up to half of it), to resample to. It looks at the original, so a resampling doesn't
+   * hide what it had.
+   */
+  function findRateGroup(s: Sample): HTMLElement {
+    const sample = () => store.samples.get(s.id) ?? s;
+    const note = h('span', { class: 'info' });
+    /** the peak spectrum of what plays, and what it is of */
+    let spectrum: { key: string; data: Float32Array } | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let gone = false;
+    detailOff.push(() => {
+      gone = true;
+      clearTimeout(timer);
+    });
+    /** null while it is being looked at; the highest frequency and the rate for it (null: its own) */
+    const result = (): { hz: number; rate: number | null } | 'SILENT' | null => {
+      const now = sample();
+      const size = spectrumSize(now.sourceRate);
+      if (spectrum?.key !== playedKey(now, size)) {
+        return null;
+      }
+      const hz = highestFrequency(spectrum.data, now.sourceRate, app.settings.findRateDb);
+      return hz === null ? 'SILENT' : { hz, rate: rateForContent(hz, now.sourceRate) };
+    };
+    const button = h('button', { class: 'soft', onClick: () => {
+      const r = result();
+      if (r && r !== 'SILENT') {
+        store.updateRecipe(s.id, { resampleTo: r.rate });
+        app.lcd.flash(r.rate === null ? 'ITS OWN RATE' : `RESAMPLED TO ${khz(r.rate)}`);
+      }
+    } }, 'SET RATE');
+    const threshold = thresholdCell('samples.findRateDb', -100, () => app.settings.findRateDb, (db) => {
+      app.settings.findRateDb = db;
+      show();
+    });
+    threshold.el.title = 'The level, under the loudest frequency, that higher frequencies stay under';
+    const show = () => {
+      const now = sample();
+      const r = result();
+      button.disabled = true;
+      if (!r) {
+        note.textContent = 'LOOKING AT ITS FREQUENCIES…';
+        return;
+      }
+      if (r === 'SILENT') {
+        note.textContent = 'SILENT';
+        return;
+      }
+      const to = r.rate ?? now.sourceRate;
+      const used = now.end - usedStart(now);
+      const after = Math.round((used * to) / now.rate);
+      const over = `UP TO ${(r.hz / 1000).toFixed(1)}KHZ OVER ${app.settings.findRateDb}DB`;
+      const same = Math.abs(to - now.rate) < 0.01;
+      note.textContent = same ? `${over}: ${khz(to)} HOLDS IT, AS NOW`
+        : `${over}: ${r.rate === null ? `ITS OWN ${khz(to)}` : khz(to)} HOLDS IT, ${after} SAMPLES INSTEAD OF ${used}`
+          + (now.fromSampler ? ' (ALLOW EDITS TO RESAMPLE)' : '');
+      button.disabled = same || now.fromSampler;
+      button.title = now.fromSampler ? 'From the sampler: ALLOW EDITS to resample it'
+        : same ? 'It is at that rate' : `Resample to ${khz(to)}, see RESAMPLE`;
+    };
+    /** the spectrum again when what plays changes, once it settles (a point dragged) */
+    const analyse = () => {
+      const now = sample();
+      const size = spectrumSize(now.sourceRate);
+      const key = playedKey(now, size);
+      if (spectrum?.key === key) {
+        show();
+        return;
+      }
+      show();
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        void getDsp().then((dsp) => {
+          const at = sample();
+          if (!gone && playedKey(at, size) === key) {
+            spectrum = { key, data: dsp.peakSpectrum(playedAudio(at, size), size) };
+            show();
+          }
+        }, (e) => {
+          note.textContent = `COULD NOT LOOK: ${e instanceof Error ? e.message : e}`;
+        });
+      }, 150);
+    };
+    analyse();
+    detailRefresh.push(() => {
+      threshold.refresh();
+      analyse();
+    });
+    return h('div', { class: 'sampler-group', role: 'group', 'aria-label': 'Find rate' },
+      h('span', { class: 'group-title' }, 'FIND RATE'), threshold.el, button, note);
+  }
+
   /**
    * Crossfade loop: the end of a forward loop fades into what comes before the loop start, so the jump back to the
    * start doesn't click.
@@ -454,6 +626,7 @@ export function samplesView(app: App): View {
     wave.setAttack(0);
     wave.setFadeOut(0);
     wave.setLimit(null);
+    wave.setFound(null);
     wave.setHeads([]);
     const s = store.selectedSample;
     wave.setSample(s);
@@ -560,8 +733,9 @@ export function samplesView(app: App): View {
     const edits = s.fromSampler
       ? [h('p', { class: 'info sampler-note' }, 'FROM THE SAMPLER: IT IS SENT BACK AS IT CAME, SO THE AUDIO ISN\'T '
         + 'EDITED (NO RESAMPLING, NORMALIZING, ATTACK, FADE OUT OR CROSSFADE). THE POINTS, SCAN, DIR AND SOUND CAN BE SET, AND '
-        + 'TRIM CUTS OFF WHAT DOESN\'T PLAY. ALLOW EDITS MAKES ITS AUDIO EDITABLE, NO LONGER AS IT CAME.')]
-      : [attackGroup(s), fadeOutGroup(s), crossfadeGroup(s), resampleGroup(s)];
+        + 'TRIM CUTS OFF WHAT DOESN\'T PLAY. ALLOW EDITS MAKES ITS AUDIO EDITABLE, NO LONGER AS IT CAME.'),
+      findEndGroup(s), findRateGroup(s)]
+      : [attackGroup(s), fadeOutGroup(s), findEndGroup(s), crossfadeGroup(s), resampleGroup(s), findRateGroup(s)];
     detail.replaceChildren(
       h('div', { class: 'row' }, name,
         length,

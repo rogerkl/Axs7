@@ -186,6 +186,21 @@ pub unsafe extern "C" fn dsp_fade_in(data: *mut f32, len: usize, at: u32, length
     dsp::fade_in(data, at as usize, length as usize, dsp::AttackShape::from_u32(shape), backwards != 0) as u32
 }
 
+/// The loudest each frequency gets in a sample, see `dsp::peak_spectrum`
+///
+/// @param size a power of two
+/// @param out `size / 2 + 1` values
+/// @returns the number of frames
+///
+/// # Safety
+/// `data` and `len`, `out` and `size / 2 + 1` from `alloc_f32`
+#[no_mangle]
+pub unsafe extern "C" fn dsp_peak_spectrum(data: *const f32, len: usize, size: u32, out: *mut f32) -> u32 {
+    let data = core::slice::from_raw_parts(data, len);
+    let out = core::slice::from_raw_parts_mut(out, size as usize / 2 + 1);
+    dsp::peak_spectrum(data, size as usize, out) as u32
+}
+
 /// @returns the rendered block, valid until the next call
 ///
 /// # Safety

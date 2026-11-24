@@ -83,9 +83,154 @@ pub fn crossfade_loop(data: &mut [f32], loop_start: usize, loop_end: usize, leng
     length
 }
 
+/// The highest level each frequency reaches in a sample, to see how high its content goes: of each of the
+/// `size / 2 + 1` frequencies (number k is k × rate / size Hz) the magnitude at its loudest, over Hann windowed frames
+/// of `size` samples half a frame apart. A sine at full level, on a frequency, is 1.
+///
+/// The frames start half a frame before the data, so its first samples count as much as the rest: where playing
+/// starts, a sudden start is part of the sound. The last frame ends with the data: where a sample ends (or loops), a
+/// cut is not. Data shorter than a frame is followed by silence.
+///
+/// @param size a power of two, at least 2
+/// @param out `size / 2 + 1` values
+/// @returns the number of frames
+pub fn peak_spectrum(data: &[f32], size: usize, out: &mut [f32]) -> usize {
+    assert!(size >= 2 && size.is_power_of_two() && out.len() == size / 2 + 1);
+    out.fill(0.0);
+    if data.is_empty() {
+        return 0;
+    }
+    let hop = size / 2;
+    let window: Vec<f32> =
+        (0..size).map(|i| 0.5 - 0.5 * (2.0 * core::f32::consts::PI * i as f32 / size as f32).cos()).collect();
+    let fft = Fft::new(size);
+    let (mut re, mut im) = (vec![0.0f32; size], vec![0.0f32; size]);
+    // a sine of amplitude a gives a × size / 4 in its bin (the window's mean is a half, and half is in the negative
+    // frequencies)
+    let scale = 4.0 / size as f32;
+    let last = data.len().saturating_sub(size) as isize;
+    let mut frames = 0;
+    let mut at = -(hop as isize);
+    loop {
+        let from = at.min(last);
+        for i in 0..size {
+            let j = from + i as isize;
+            re[i] = if j >= 0 && (j as usize) < data.len() { data[j as usize] * window[i] } else { 0.0 };
+            im[i] = 0.0;
+        }
+        fft.run(&mut re, &mut im);
+        for (k, peak) in out.iter_mut().enumerate() {
+            *peak = peak.max((re[k] * re[k] + im[k] * im[k]).sqrt() * scale);
+        }
+        frames += 1;
+        if from >= last {
+            return frames;
+        }
+        at += hop as isize;
+    }
+}
+
+/// A radix-2 FFT of one size, in place
+struct Fft {
+    cos: Vec<f32>,
+    sin: Vec<f32>,
+}
+
+impl Fft {
+    fn new(size: usize) -> Fft {
+        let angle = |k: usize| -2.0 * core::f64::consts::PI * k as f64 / size as f64;
+        Fft {
+            cos: (0..size / 2).map(|k| angle(k).cos() as f32).collect(),
+            sin: (0..size / 2).map(|k| angle(k).sin() as f32).collect(),
+        }
+    }
+
+    fn run(&self, re: &mut [f32], im: &mut [f32]) {
+        let n = re.len();
+        let mut j = 0;
+        for i in 1..n {
+            let mut bit = n >> 1;
+            while j & bit != 0 {
+                j ^= bit;
+                bit >>= 1;
+            }
+            j |= bit;
+            if i < j {
+                re.swap(i, j);
+                im.swap(i, j);
+            }
+        }
+        let mut len = 2;
+        while len <= n {
+            let (half, step) = (len / 2, n / len);
+            for first in (0..n).step_by(len) {
+                for k in 0..half {
+                    let (wr, wi) = (self.cos[k * step], self.sin[k * step]);
+                    let (a, b) = (first + k, first + k + half);
+                    let tr = re[b] * wr - im[b] * wi;
+                    let ti = re[b] * wi + im[b] * wr;
+                    re[b] = re[a] - tr;
+                    im[b] = im[a] - ti;
+                    re[a] += tr;
+                    im[a] += ti;
+                }
+            }
+            len <<= 1;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A sine rising from silence over the first `rise` samples, so its start isn't a click
+    fn tone(len: usize, hz: f32, rate: f32, rise: usize) -> Vec<f32> {
+        let pi2 = 2.0 * core::f32::consts::PI;
+        (0..len)
+            .map(|i| {
+                let gain = if i < rise { 0.5 - 0.5 * (core::f32::consts::PI * i as f32 / rise as f32).cos() } else { 1.0 };
+                gain * (pi2 * ((hz * i as f32 / rate) % 1.0)).sin()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_peak_spectrum_shows_how_high_the_content_goes() {
+        // at 32768 Hz with 1024 a frame, bin k is 32k Hz: 1 kHz at full level, and 4 kHz swelling to -40 dB and going
+        // in the first half
+        let (rate, size) = (32768.0f32, 1024);
+        let swell = |i: usize| {
+            if i < 4096 { 0.5 - 0.5 * (2.0 * core::f32::consts::PI * i as f32 / 4096.0).cos() } else { 0.0 }
+        };
+        let high = tone(8192, 4096.0, rate, 0);
+        let data: Vec<f32> =
+            tone(8192, 1024.0, rate, 1024).iter().enumerate().map(|(i, v)| v + 0.01 * swell(i) * high[i]).collect();
+        let mut out = vec![0.0; size / 2 + 1];
+        assert_eq!(peak_spectrum(&data, size, &mut out), 16, "from half a frame before to the end");
+        let db = |v: f32| 20.0 * v.log10();
+        assert!(db(out[32]).abs() < 0.1, "1 kHz at full level: {}", db(out[32]));
+        assert!((db(out[128]) + 40.0).abs() < 0.2, "4 kHz at its loudest, -40 dB: {}", db(out[128]));
+        let highest = (1..out.len()).rev().find(|&k| db(out[k]) > -60.0).unwrap();
+        assert_eq!(highest, 129, "nothing over -60 dB above it but its own window's spread");
+        assert!(out[200..].iter().all(|&v| db(v) < -90.0), "the rest is silent: the cut at the end doesn't count");
+    }
+
+    #[test]
+    fn a_sudden_start_counts_in_full() {
+        // a click on the first sample: frames that started at the data would all but miss it
+        let size = 256;
+        let mut out = vec![0.0; size / 2 + 1];
+        let mut first = vec![0.0; 1000];
+        first[0] = 1.0;
+        peak_spectrum(&first, size, &mut out);
+        assert!(out[1..].iter().all(|&v| (v / (4.0 / size as f32) - 1.0).abs() < 1e-4), "flat, at its full level");
+        let mut short = vec![0.0; 3];
+        assert_eq!(peak_spectrum(&short, size, &mut out), 2, "shorter than a frame: the two over it");
+        short.clear();
+        assert_eq!(peak_spectrum(&short, size, &mut out), 0);
+        assert!(out.iter().all(|&v| v == 0.0));
+    }
 
     fn sine(len: usize, period: f32) -> Vec<f32> {
         (0..len).map(|i| (2.0 * core::f32::consts::PI * i as f32 / period).sin()).collect()

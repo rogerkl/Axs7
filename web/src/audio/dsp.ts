@@ -8,6 +8,7 @@ interface DspExports {
   dsp_crossfade_loop(ptr: number, len: number, loopStart: number, loopEnd: number, length: number, shape: number)
     : number;
   dsp_fade_in(ptr: number, len: number, at: number, length: number, shape: number, backwards: number): number;
+  dsp_peak_spectrum(ptr: number, len: number, size: number, out: number): number;
 }
 
 export type FadeShape = 'linear' | 'equal';
@@ -81,6 +82,28 @@ export class Dsp {
   fadeOut(data: Float32Array, last: number, length: number, shape: AttackShape, backwards: boolean)
     : { data: Float32Array; length: number } {
     return this.fadeIn(data, last, length, shape, !backwards);
+  }
+
+  /**
+   * The loudest each frequency gets in the data: of the `size / 2 + 1` frequencies (number k is k × rate / size Hz)
+   * the magnitude at its loudest over the data, 1 for a sine at full level. Its start counts in full, a cut at its
+   * end doesn't (see dsp::peak_spectrum).
+   *
+   * @param size a power of two
+   */
+  peakSpectrum(data: Float32Array, size: number): Float32Array {
+    const ex = this.ex;
+    const bins = size / 2 + 1;
+    const ptr = ex.alloc_f32(data.length);
+    const out = ex.alloc_f32(bins);
+    try {
+      new Float32Array(ex.memory.buffer, ptr, data.length).set(data); // views after alloc, memory may have grown
+      ex.dsp_peak_spectrum(ptr, data.length, size, out);
+      return new Float32Array(ex.memory.buffer, out, bins).slice();
+    } finally {
+      ex.free_f32(out, bins);
+      ex.free_f32(ptr, data.length);
+    }
   }
 
   /** For tests: how much memory the module has */
