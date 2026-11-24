@@ -15,8 +15,9 @@ import type { LoopMode, Sample } from '../../model/types';
 import { h, pickFiles } from '../dom';
 import { ParamCell, choiceCell, dataEntry } from '../param';
 import { isPortion, movePoint, usedStart } from '../../model/points';
-import type { PointName } from '../../model/points';
+import type { PointName, Points } from '../../model/points';
 import { trimBlocked, unplayed } from '../../model/render';
+import { LOOP_SHRINK, loopSearch } from '../../model/loops';
 import { FOUND_END_FADE_MS, findEnd, highestFrequency, playedAudio, playedKey, rateForContent, spectrumSize }
   from '../../model/shrink';
 import { slotCell } from '../slot';
@@ -25,6 +26,13 @@ import { Waveform } from '../waveform';
 /** The X7000's scan modes: one shot, looping, alternating, drum trigger */
 const LOOP_MODES = ['off', 'forward', 'alternating', 'drum'] as const satisfies readonly LoopMode[];
 const LOOP_NAMES = ['ONE', 'LOOP', 'ALT', 'DRUM'];
+
+type LoopPoints = Pick<Points, 'loopStart' | 'loopEnd'>;
+/**
+ * The loops FIND LOOP set, by sample: the loop before each, the one it set and how it sounds, for the note and BACK.
+ * Kept while the page is open.
+ */
+const loopFinds = new Map<string, { before: LoopPoints; after: LoopPoints; seamDb: number; stepDb: number }[]>();
 
 /** How long the part that plays is: START to END, from a loop start before START */
 function duration(s: Sample): string {
@@ -454,6 +462,108 @@ export function samplesView(app: App): View {
   }
 
   /**
+   * FIND LOOP: inside the loop, a smaller one that is heard as little as possible: the jump back smooth, the level
+   * the same at both ends, and as long as it can be. Again, a smaller one still; BACK goes back a find. A loop can be set on a sample
+   * from the sampler too, its crossfade needs ALLOW EDITS.
+   */
+  function findLoopGroup(s: Sample): HTMLElement {
+    const sample = () => store.samples.get(s.id) ?? s;
+    const note = h('span', { class: 'info' });
+    const history = () => loopFinds.get(s.id) ?? [];
+    const isLoop = (p: LoopPoints, now: Sample) => p.loopStart === now.loopStart && p.loopEnd === now.loopEnd;
+    let busy = false;
+    let gone = false;
+    detailOff.push(() => {
+      gone = true;
+    });
+    /** what plays, to END, without the crossfade, which is made for the loop as it is */
+    const audio = async (now: Sample): Promise<Float32Array> => {
+      const crossfaded = !now.fromSampler && now.recipe.crossfadeMs > 0 && now.loopMode === 'forward';
+      const data = crossfaded ? (await app.renderer.render({ ...now, recipe: { ...now.recipe, crossfadeMs: 0 } })).data
+        : now.data;
+      return data.subarray(0, now.end);
+    };
+    const find = h('button', { class: 'soft', onClick: async () => {
+      const now = sample();
+      const search = loopSearch(now);
+      if ('why' in search || busy) {
+        return;
+      }
+      busy = true;
+      update();
+      try {
+        const [dsp, data] = await Promise.all([getDsp(), audio(now)]);
+        const found = dsp.findLoop(data, search.lo, search.hi, search.minLen, search.maxLen, search.minEnd, now.rate);
+        const at = sample();
+        if (gone || at.loopStart !== now.loopStart || at.loopEnd !== now.loopEnd || at.end !== now.end) {
+          return; // changed meanwhile
+        }
+        if (!found) {
+          app.lcd.flash('NO ROOM FOR A SMALLER LOOP');
+          return;
+        }
+        const before = { loopStart: at.loopStart, loopEnd: at.loopEnd };
+        const moved = movePoint(at, 'loopStart', found.start);
+        store.updateSample(s.id, { ...moved, ...movePoint({ ...at, ...moved }, 'loopEnd', found.end) });
+        const after = { loopStart: sample().loopStart, loopEnd: sample().loopEnd };
+        loopFinds.set(s.id, [...history(), { before, after, seamDb: found.seamDb, stepDb: found.stepDb }]);
+        app.lcd.flash(`LOOP ${((found.end - found.start) / at.rate).toFixed(3)}S`);
+      } catch (e) {
+        app.lcd.flash(`NO LOOP: ${e instanceof Error ? e.message : e}`);
+      } finally {
+        busy = false;
+        update();
+      }
+    } }, 'FIND LOOP');
+    const back = h('button', { class: 'soft', onClick: () => {
+      const now = sample();
+      const top = history().at(-1);
+      if (top && isLoop(top.after, now)) {
+        loopFinds.set(s.id, history().slice(0, -1));
+        const moved = movePoint(now, 'loopEnd', top.before.loopEnd);
+        store.updateSample(s.id, { ...moved, ...movePoint({ ...now, ...moved }, 'loopStart', top.before.loopStart) });
+        app.lcd.flash('THE LOOP BEFORE');
+      }
+    } }, 'BACK');
+    back.title = 'Back to the loop before the last FIND LOOP';
+    const update = () => {
+      const now = sample();
+      const search = loopSearch(now);
+      const top = history().at(-1);
+      const found = top && isLoop(top.after, now) ? top : null;
+      back.disabled = busy || !found;
+      find.disabled = busy || 'why' in search;
+      find.title = `Look inside the loop for one at most ${Math.round(LOOP_SHRINK * 100)}% as long, as long as it can `
+        + 'be, with a smooth jump back and the same level at both ends. Again for a smaller one';
+      if (busy) {
+        note.textContent = 'LOOKING FOR A LOOP…';
+        return;
+      }
+      if ('why' in search) {
+        note.textContent = search.why === 'ALTERNATING' ? 'FOR A FORWARD LOOP: AN ALTERNATING ONE HAS NO JUMP'
+          : search.why === 'NOT LOOPED' ? 'SET SCAN TO LOOP, AND THE LOOP AROUND WHERE TO LOOK'
+            : 'THE LOOP IS TOO SHORT TO LOOK IN';
+        return;
+      }
+      if (found) {
+        const len = now.loopEnd - now.loopStart;
+        const was = found.before.loopEnd - found.before.loopStart;
+        const smooth = found.seamDb < -30 ? 'SMOOTH' : now.fromSampler ? 'ALLOW EDITS TO CROSSFADE IT'
+          : now.recipe.crossfadeMs ? 'CROSSFADED' : 'A CROSSFADE SMOOTHS IT';
+        note.textContent = `${(len / now.rate).toFixed(3)}S, ${Math.round((100 * len) / was)}% OF THE ONE BEFORE: JUMP `
+          + `${Math.max(-99, found.seamDb).toFixed(0)}DB (${smooth}), LEVEL STEP ${found.stepDb.toFixed(1)}DB`;
+        return;
+      }
+      note.textContent = `LOOKS INSIDE THE LOOP FOR ONE UP TO ${Math.round(LOOP_SHRINK * 100)}% AS LONG: A SMOOTH JUMP `
+        + 'BACK, NO STEP IN LEVEL, AS LONG AS IT CAN BE';
+    };
+    update();
+    detailRefresh.push(update);
+    return h('div', { class: 'sampler-group', role: 'group', 'aria-label': 'Find loop' },
+      h('span', { class: 'group-title' }, 'FIND LOOP'), find, back, note);
+  }
+
+  /**
    * Crossfade loop: the end of a forward loop fades into what comes before the loop start, so the jump back to the
    * start doesn't click.
    */
@@ -734,8 +844,9 @@ export function samplesView(app: App): View {
       ? [h('p', { class: 'info sampler-note' }, 'FROM THE SAMPLER: IT IS SENT BACK AS IT CAME, SO THE AUDIO ISN\'T '
         + 'EDITED (NO RESAMPLING, NORMALIZING, ATTACK, FADE OUT OR CROSSFADE). THE POINTS, SCAN, DIR AND SOUND CAN BE SET, AND '
         + 'TRIM CUTS OFF WHAT DOESN\'T PLAY. ALLOW EDITS MAKES ITS AUDIO EDITABLE, NO LONGER AS IT CAME.'),
-      findEndGroup(s), findRateGroup(s)]
-      : [attackGroup(s), fadeOutGroup(s), findEndGroup(s), crossfadeGroup(s), resampleGroup(s), findRateGroup(s)];
+      findEndGroup(s), findLoopGroup(s), findRateGroup(s)]
+      : [attackGroup(s), fadeOutGroup(s), findEndGroup(s), findLoopGroup(s), crossfadeGroup(s), resampleGroup(s),
+        findRateGroup(s)];
     detail.replaceChildren(
       h('div', { class: 'row' }, name,
         length,

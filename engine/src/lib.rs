@@ -11,6 +11,7 @@ pub mod dsp;
 pub mod engine;
 pub mod envelope;
 pub mod filter;
+pub mod loopfind;
 pub mod params;
 pub mod voice;
 
@@ -199,6 +200,33 @@ pub unsafe extern "C" fn dsp_peak_spectrum(data: *const f32, len: usize, size: u
     let data = core::slice::from_raw_parts(data, len);
     let out = core::slice::from_raw_parts_mut(out, size as usize / 2 + 1);
     dsp::peak_spectrum(data, size as usize, out) as u32
+}
+
+/// Finds a loop that is heard as little as possible, see `loopfind::find_loop`
+///
+/// @param out 5 values: the loop's start and end (u32), its seam, level step and swing in dB (f32)
+/// @returns 1 if one was found, 0 if there is no room for one
+///
+/// # Safety
+/// `data` and `len`, and `out` (5) from `alloc_f32`
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn dsp_find_loop(data: *const f32, len: usize, lo: u32, hi: u32, min_len: u32, max_len: u32,
+    min_end: u32, rate: f32, out: *mut f32) -> u32 {
+    let data = core::slice::from_raw_parts(data, len);
+    match loopfind::find_loop(data, lo as usize, hi as usize, min_len as usize, max_len as usize, min_end as usize, rate)
+    {
+        Some(found) => {
+            let ints = out as *mut u32;
+            ints.write(found.start as u32);
+            ints.add(1).write(found.end as u32);
+            out.add(2).write(found.seam_db);
+            out.add(3).write(found.step_db);
+            out.add(4).write(found.swing_db);
+            1
+        }
+        None => 0,
+    }
 }
 
 /// @returns the rendered block, valid until the next call

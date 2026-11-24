@@ -9,6 +9,21 @@ interface DspExports {
     : number;
   dsp_fade_in(ptr: number, len: number, at: number, length: number, shape: number, backwards: number): number;
   dsp_peak_spectrum(ptr: number, len: number, size: number, out: number): number;
+  dsp_find_loop(ptr: number, len: number, lo: number, hi: number, minLen: number, maxLen: number, minEnd: number,
+    rate: number, out: number): number;
+}
+
+/** A loop findLoop found */
+export interface FoundLoop {
+  start: number;
+  /** after its last sample */
+  end: number;
+  /** how much the sound around the jump differs from what it continues, dB under the sound */
+  seamDb: number;
+  /** how much the level at its end differs from the level at its start, heard as a pumping: dB */
+  stepDb: number;
+  /** how far the level goes up and down within it, dB */
+  swingDb: number;
 }
 
 export type FadeShape = 'linear' | 'equal';
@@ -102,6 +117,33 @@ export class Dsp {
       return new Float32Array(ex.memory.buffer, out, bins).slice();
     } finally {
       ex.free_f32(out, bins);
+      ex.free_f32(ptr, data.length);
+    }
+  }
+
+  /**
+   * Finds the loop within lo..hi, minLen to maxLen long, that is heard the least: the jump back to its start smooth,
+   * the level the same at both ends, and as long as it can be (see loopfind.rs). The data ends where playing ends: a few
+   * ms after the loop end have to be there, and before its start.
+   *
+   * @param minEnd where it may end first: after START, when START is in the loop
+   * @returns null if there is no room for one
+   */
+  findLoop(data: Float32Array, lo: number, hi: number, minLen: number, maxLen: number, minEnd: number, rate: number)
+    : FoundLoop | null {
+    const ex = this.ex;
+    const ptr = ex.alloc_f32(data.length);
+    const out = ex.alloc_f32(5);
+    try {
+      new Float32Array(ex.memory.buffer, ptr, data.length).set(data); // views after alloc, memory may have grown
+      if (!ex.dsp_find_loop(ptr, data.length, lo, hi, minLen, maxLen, minEnd, rate, out)) {
+        return null;
+      }
+      const [start, end] = new Uint32Array(ex.memory.buffer, out, 2);
+      const [seamDb, stepDb, swingDb] = new Float32Array(ex.memory.buffer, out + 8, 3);
+      return { start, end, seamDb, stepDb, swingDb };
+    } finally {
+      ex.free_f32(out, 5);
       ex.free_f32(ptr, data.length);
     }
   }
