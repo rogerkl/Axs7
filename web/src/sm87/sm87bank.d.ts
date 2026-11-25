@@ -46,8 +46,7 @@ export interface BankSample {
 
 /** A drum kit's sound: played whole, once, at its rate; the pads tune it */
 export interface KitSound {
-  /** ASCII, up to 6 characters. An HR-16 dump finds a kit's sounds by their names' starts: KICK, SNARE, TOM,
-   * CLHAT, OPHAT, RIDE, CRASH, CLAP (CYMBL for either cymbal) */
+  /** ASCII, up to 6 characters (an HR-16 dump finds a kit's sounds by the pads that play them, not by name) */
   name: string;
   /** 12-bit offset binary, 0-4095; 1 to MAX_WORDS of them */
   words: ArrayLike<number>;
@@ -73,11 +72,14 @@ export interface KitPad {
   note?: number;
   /** 0, or a group 1-9: a hit cuts the others of its group (the hats) (default 0) */
   group?: number;
-  /** its voices at once: 1 (a hit cuts the last; default) or 2 (the cymbals) */
+  /** its voices at once: 1 (a hit cuts the last; default) or 2 (the HR-16's crash) */
   poly?: number;
+  /** its tuning's sixteenths of a semitone, -16..16 (default 0; the sampler's FINE, an HR-16 step is 9) */
+  fine?: number;
 }
 
-/** A drum kit: it replaces the one the firmware was built with, sounds and pads */
+/** A drum kit: the drum machine's sounds and pads (the firmware has none of its own; a release package brings the
+ * HR-16's, which a package made again without one loses) */
 export interface Kit {
   /** up to KIT_SOUNDS */
   sounds: KitSound[];
@@ -98,7 +100,7 @@ export interface HeldKit {
 /** What a package holds */
 export interface BankContents {
   samples: HeldSample[];
-  /** null: the firmware's own kit plays */
+  /** null: none (the pads play the sampler's slots only) */
   kit: HeldKit | null;
   /** the bank's bytes, its footer with them */
   size: number;
@@ -117,7 +119,7 @@ export interface Hr16Drum {
   note: number;
   /** the hats' group */
   group?: number;
-  /** 2 for the cymbals */
+  /** 2 for the crash (the HR-16's ride has one) */
   poly?: number;
 }
 /** the HR-16's drums in its own order (its dumps', its manual's) */
@@ -127,6 +129,8 @@ export declare const HR16_DRUMS: readonly Hr16Drum[];
 export interface Hr16DrumSound {
   sound: number;
   tune?: number;
+  /** sixteenths of a semitone, -16..16 */
+  fine?: number;
   level?: number;
   pan?: number;
 }
@@ -140,7 +144,7 @@ export declare function unpackWords(packed: Uint8Array, words: number): Uint16Ar
 /** A kit's 16 pads from the HR-16's drums, in HR16_DRUMS' order (null: a drum without a sound): each pad named, on
  * its note and in its group as HR16_DRUMS has it */
 export declare function hr16Pads(byDrum: readonly (Hr16DrumSound | null)[]): Required<KitPad>[];
-/** The bank's bytes: up to 16 samples, one a slot, and a kit or null (the firmware's own plays). Throws
+/** The bank's bytes: up to 16 samples, one a slot, and a kit or null (none). Throws
  * Sm87BankError "bad-sample" */
 export declare function makeBank(samples: Iterable<BankSample>, kit?: Kit | null): Uint8Array;
 /** The bank ending at the end of top: null without one. Throws Sm87BankError "damaged-bank" */
@@ -163,7 +167,7 @@ export declare class Sm87Package {
   contents(): BankContents | null;
   /** its samples, null for none */
   samples(): HeldSample[] | null;
-  /** its kit, null for none (the firmware's own plays) */
+  /** its kit, null for none */
   kit(): HeldKit | null;
   /** the bank's bytes as it holds them, its footer last, null for none (what the emulator plays in place of its
    * own). Throws Sm87BankError "damaged-bank" */

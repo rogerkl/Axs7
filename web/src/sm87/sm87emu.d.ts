@@ -20,7 +20,7 @@ export interface EmuSamples {
   bank: ArrayBuffer;
   /** its samples */
   samples: number;
-  /** its kit's sounds, 0 for none (the firmware's own kit plays) */
+  /** its kit's sounds, 0 for none (the pads play the slots only, as on the FM-1) */
   kit: number;
 }
 

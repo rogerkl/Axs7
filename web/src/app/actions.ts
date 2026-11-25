@@ -904,6 +904,11 @@ export class Actions {
     }
     try {
       const contents = await sm87Contents(store.banks, store.samples.values(), resampleInBrowser);
+      if (!contents.kit && firmware.held?.kit) { // (SM-87's firmware has no kit of its own: a release's is its bank's)
+        const n = firmware.held.kit.sounds.length;
+        contents.notes.push(`${firmware.name}'s drum kit (${n} sounds) is left out: DRUMS has no drum with a sample, `
+          + 'so the package has no kit and SM-87 plays no drums. TAKE ITS SAMPLES brings it into DRUMS');
+      }
       const pkg = new Sm87Package(firmware.bytes, firmware.name);
       const bank = contents.samples.length || contents.kit ? makeBank(contents.samples, contents.kit) : null;
       pkg.put(bank);
@@ -913,7 +918,7 @@ export class Actions {
       const name = `${firmware.name.replace(/\.fwsc$/i, '')}-axs7.fwsc`;
       const kb = (n: number) => `${(n / 1024).toFixed(1)} KB`;
       const many = (n: number, what: string) => `${n} ${what}${n === 1 ? '' : 's'}`;
-      const kit = contents.kit ? `a kit of ${many(contents.kit.sounds.length, 'sound')}` : 'the firmware\'s own kit';
+      const kit = contents.kit ? `a kit of ${many(contents.kit.sounds.length, 'sound')}` : 'no drum kit';
       const notes = contents.notes.length ? ` (${many(contents.notes.length, 'note')} in MIDI)` : '';
       this.sm87Built = `${name}: ${many(contents.samples.length, 'sample')} and ${kit}, `
         + `${kb(bank?.length ?? 0)} of the ${kb(pkg.room)} there is room for${notes}`;
@@ -1015,7 +1020,7 @@ export class Actions {
     }
     const many = (n: number, what: string) => `${n} ${what}${n === 1 ? '' : 's'}`;
     const drums = taken.samples.filter((s) => s.bankId === drumsId).length;
-    const kit = held.kit ? `a kit of ${many(drums, 'drum sample')}` : "no kit (the firmware's own)";
+    const kit = held.kit ? `a kit of ${many(drums, 'drum sample')}` : 'no drum kit';
     const notes = taken.notes.length ? ` (${many(taken.notes.length, 'note')} in MIDI)` : '';
     this.sm87Built = `Took ${many(held.samples.length, 'sample')} and ${kit} from ${firmware.name}${notes}`;
     midi.logLine(`SM-87: ${this.sm87Built}`);

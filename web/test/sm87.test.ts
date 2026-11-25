@@ -11,8 +11,8 @@ import { memoryToZip, zipToMemory } from '../src/model/memory';
 import { plainRecipe } from '../src/model/recipe';
 import { samplerImage } from '../src/model/s700';
 import {
-  SM87_DRUMS, SM87_ROOM_TODAY, drumName, drumTune, isDrum, newSm87Banks, samplerPoints, sm87Bank, sm87Contents,
-  sm87Size, sm87Taken,
+  SM87_DRUMS, SM87_ROOM_TODAY, drumFine, drumName, drumTune, isDrum, newSm87Banks, samplerPoints, sm87Bank,
+  sm87Contents, sm87Size, sm87Taken,
 } from '../src/model/sm87';
 import { Store } from '../src/model/store';
 import type { Keygroup, Sample } from '../src/model/types';
@@ -88,6 +88,9 @@ describe('SM-87', () => {
     expect(drumTune(kg('a', 0, { root: 62 }))).toBe(-2);
     expect(drumTune(kg('a', 0, { root: 55, semitones: 3 }))).toBe(8);
     expect(drumTune(kg('a', 0, { root: 40, semitones: 3, fixedPitch: true }))).toBe(3);
+    // FINE: cents as sixteenths, the nearest (the X7000's step: 6.25 cents)
+    expect([drumFine(kg('a', 0, { cents: 10 })), drumFine(kg('a', 0, { cents: -50 })),
+      drumFine(kg('a', 0, { cents: 100 })), drumFine(kg('a', 0))]).toEqual([2, -8, 16, 0]);
   });
 
   /** a memory with SM-87's banks: samples A (slot 1) and B (slot 4) in SAMPLES, C and D drums */
@@ -103,7 +106,7 @@ describe('SM-87', () => {
       sound: { ...defaultSound(), level: 77, velLevel: 33 },
       keygroups: [kg('c', 0), kg('c', 1, { root: 62, semitones: 1 }), kg('c', 8), kg('c', 8, { root: 50 }),
         kg('c', 19)] });
-    // D, reversed: the CLS HAT, PITCH FIXED up 3; the MID HAT tuned past 24 and with a FINE
+    // D, reversed: the CLS HAT, PITCH FIXED up 3; the MID HAT tuned past 24 and with a FINE (10 cents: 2/16)
     const d = sample('d', { bankId: drums.id, slot: 1, start: 500, end: 2500, reverse: true,
       keygroups: [kg('d', 2, { fixedPitch: true, semitones: 3 }), kg('d', 3, { root: 20, cents: 10 })] });
     drums.programs[3].pan = -2;
@@ -144,20 +147,22 @@ describe('SM-87', () => {
     expect(pads[0]).toMatchObject({ name: 'KICK', sound: 0, tune: 0, level: 77, pan: 0, note: 36 });
     expect(pads[1]).toMatchObject({ name: 'SNARE', sound: 0, tune: -1, note: 38 });
     expect(pads[2]).toMatchObject({ name: 'CLHAT', sound: 1, tune: 3, group: 1 });
-    expect(pads[6]).toMatchObject({ name: 'MDHAT', sound: 1, tune: 24, pan: -2, group: 1 });
+    expect(pads[6]).toMatchObject({ name: 'MDHAT', sound: 1, tune: 24, fine: 2, pan: -2, group: 1 });
+    expect(pads[0].fine).toBe(0);
     expect(by('TOM1')).toMatchObject({ sound: 0, tune: 0 });
     expect(by('CRASH')).toMatchObject({ sound: NO_SOUND, poly: 2 });
+    expect(by('RIDE')).toMatchObject({ sound: NO_SOUND, poly: 1 });   // (the HR-16's ride has one voice)
     expect(notes).toEqual(expect.arrayContaining([
       'TOM1: 2 keygroups, a drum plays its first one',
       'MID HAT: tuned +40, a drum goes to ±24',
-      'MID HAT: FINE 10 left out, a drum is tuned in semitones',
       'DRUMS P20: not a drum (P1-P16 are), left out',
     ]));
+    expect(notes.some((n) => /FINE/.test(n))).toBe(false);
     // the bank's bytes of them, read back
     const { samples } = await sm87Contents(m.banks, m.samples, noResampling);
     const back = readBank(makeBank(samples, kit))!;
     expect(back.samples.map((s) => s.slot)).toEqual([0, 3]);
-    expect(back.kit!.pads[6]).toMatchObject({ name: 'MDHAT', tune: 24, pan: -2 });
+    expect(back.kit!.pads[6]).toMatchObject({ name: 'MDHAT', tune: 24, fine: 2, pan: -2 });
     expect(back.kit!.sounds[0].words).toEqual(kit!.sounds[0].words);
   });
 
@@ -204,7 +209,7 @@ describe('SM-87', () => {
     });
     expect(taken.notes).toEqual([]);
     // SAMPLES: A and B in their slots, B looping and with its pressure; DRUMS: C and D (reversed: as it plays), each a
-    // sample of its own, the drums' keygroups tuned with SEMI
+    // sample of its own, the drums' keygroups tuned with SEMI and FINE (the pad's sixteenths as cents: 2, 13)
     const inSamples = taken.samples.filter((s) => s.bankId === samplesBank.id);
     expect(inSamples.map((s) => [s.name, s.slot, s.loopMode, s.sound.pressure])).toEqual([['A', 0, 'off', 0],
       ['B', 3, 'forward', 40]]);
@@ -213,7 +218,7 @@ describe('SM-87', () => {
       .toEqual([['KICK', 0, 'drum', 77, 33, true], ['CLHAT', 1, 'drum', 80, 50, true]]);
     expect(inDrums[0].keygroups.map((k) => [k.program, k.root, k.semitones])).toEqual([[0, 60, 0], [1, 60, -1],
       [8, 60, 0]]);
-    expect(inDrums[1].keygroups.map((k) => [k.program, k.semitones])).toEqual([[2, 3], [3, 24]]);
+    expect(inDrums[1].keygroups.map((k) => [k.program, k.semitones, k.cents])).toEqual([[2, 3, 0], [3, 24, 13]]);
     expect(drums.programs[3].pan).toBe(-2);
     const again = await sm87Contents([drums, samplesBank], taken.samples, noResampling);
     expect(makeBank(again.samples, again.kit)).toEqual(bank);

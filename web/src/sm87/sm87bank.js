@@ -11,10 +11,12 @@
 //   pkg.put(makeBank(samples, kit)); pkg.bytes()     // the package with them; pkg.put(null): without
 //
 // A sample: {slot 0-15, name, words (12-bit offset binary, 0-4095: 2048 is silence), params (the 155 SPRM values),
-// pressure 0-99}. A kit (it replaces the firmware's drum kit; null keeps that): {sounds: up to 64 of {name (up to 6),
+// pressure 0-99}. A kit (the drum machine's; null: none, the firmware has no kit of its own, a release package's the
+// HR-16's): {sounds: up to 64 of {name (up to 6),
 // words, rate (a rate code, 36-76), vel (velocity's say in its level, 0-99)}, pads: up to 16 of {name, sound (the
 // kit's 0.., then the sampler's slots after them; NO_SOUND), tune (semitones, -24..24), level 0-99, pan -3..3, note,
-// group 0-9 (pads that cut each other), poly 1-2}} in the pads' order: hr16Pads makes them from the HR-16's drums.
+// group 0-9 (pads that cut each other), poly 1-2, fine (sixteenths of a semitone, -16..16; 0 unless given)}} in the
+// pads' order: hr16Pads makes them from the HR-16's drums.
 
 export const SLOTS = 16;
 export const MAX_WORDS = 32752;
@@ -32,10 +34,12 @@ const BANK_FOOT = 32;
 const BANK_NAME = 24;
 const KIT_NAME = 6;
 const VEL = 60;                                // a kit sound's velocity's say unless told (resources/kit/kit.txt)
-const PAD_KEYS = ["sound", "tune", "level", "pan", "note", "group", "poly"];
-const SIGNED = new Set(["tune", "pan"]);
-const PAD_RANGE = { tune: [-24, 24], level: [0, 99], pan: [-3, 3], note: [0, 127], group: [0, 9], poly: [1, 2] };
-const PAD_DEFAULT = { sound: NO_SOUND, tune: 0, level: 85, pan: 0, note: 36, group: 0, poly: 1 };
+const PAD_KEYS = ["sound", "tune", "level", "pan", "note", "group", "poly", "fine"];   // (fine: the byte a bank before
+                                                                                     // it kept 0)
+const SIGNED = new Set(["tune", "pan", "fine"]);
+const PAD_RANGE = { tune: [-24, 24], level: [0, 99], pan: [-3, 3], note: [0, 127], group: [0, 9], poly: [1, 2],
+  fine: [-16, 16] };
+const PAD_DEFAULT = { sound: NO_SOUND, tune: 0, level: 85, pan: 0, note: 36, group: 0, poly: 1, fine: 0 };
 const DESC_MAGIC = [..."SM87 S7 BANK"].map((c) => c.charCodeAt(0));   // s7_bank_desc_t, in the firmware's image
 const MARKS = 20, MARK_BLK = 0x30, MARK_KEEP = 0x2F;   // .fwsc: a marker byte after each of the first 20 blocks
 const APP_AREA = 0x4000;                       // flash.bin: the app area from here, SFC-ciphered with the chip key
@@ -179,7 +183,7 @@ function checkKit(kit) {
 }
 
 // the bank's bytes, its footer last (mkrom.py bank): up to 16 samples, a slot each, in slot order; and a drum kit, or
-// none (the firmware's own plays)
+// none (the pads play the sampler's slots only: the firmware has no kit of its own)
 export function makeBank(samples, kit = null) {
   const list = [...samples].sort((a, b) => a.slot - b.slot);
   if (list.length > SLOTS) throw new Sm87BankError("bad-sample", `${list.length} samples: at most ${SLOTS}`);
@@ -302,7 +306,7 @@ export function readBank(top) {
 
 // the HR-16's 16 drums, in its order (its dumps', its manual's), each with the pad SM-87 plays it on (hr16/hrdump.h
 // HD_PAD) and the set-up a kit gives that pad: its name, its MIDI note (General MIDI's), the hats' group, two voices
-// for the cymbals
+// for the crash (the HR-16's: its ride has one)
 export const HR16_DRUMS = [
   { drum: "KICK", pad: 0, name: "KICK", note: 36 },
   { drum: "SNARE", pad: 1, name: "SNARE", note: 38 },
@@ -316,7 +320,7 @@ export const HR16_DRUMS = [
   { drum: "TOM2", pad: 9, name: "TOM2", note: 48 },
   { drum: "TOM3", pad: 10, name: "TOM3", note: 45 },
   { drum: "TOM4", pad: 11, name: "TOM4", note: 41 },
-  { drum: "RIDE", pad: 5, name: "RIDE", note: 51, poly: 2 },
+  { drum: "RIDE", pad: 5, name: "RIDE", note: 51 },
   { drum: "CRASH", pad: 4, name: "CRASH", note: 49, poly: 2 },
   { drum: "PERC1", pad: 12, name: "PERC1", note: 56 },
   { drum: "PERC2", pad: 13, name: "PERC2", note: 54 },

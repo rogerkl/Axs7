@@ -2,12 +2,14 @@
 // over a key range with its pitch, like an X7000 program ("P1:S1:L=36:H=96"). The sound is the sample's (OUT and
 // LFO). A keygroup can be muted or soloed to hear it alone, and moved to another program.
 //
-// In SM-87's DRUMS bank (model/sm87.ts) P1-P16 are drums: one keygroup each, tuned in semitones (no FINE), with a
-// pan, and the tuning SM-87 gives the drum shown.
+// In SM-87's DRUMS bank (model/sm87.ts) P1-P16 are drums: one keygroup each, tuned in semitones and FINE (SM-87's
+// in sixteenths), with a pan, and the tuning SM-87 gives the drum shown.
 
 import type { App, View } from '../../app/app';
 import { newKeygroup } from '../../model/mapping';
-import { SM87_DRUMS, SM87_PAN_MAX, SM87_TUNE_KEY, SM87_TUNE_MAX, drumName, drumTune, isDrum } from '../../model/sm87';
+import {
+  SM87_DRUMS, SM87_FINE_MAX, SM87_PAN_MAX, SM87_TUNE_KEY, SM87_TUNE_MAX, drumFine, drumName, drumTune, isDrum,
+} from '../../model/sm87';
 import { noteName, parseNote } from '../../model/notes';
 import type { Keygroup } from '../../model/types';
 import { h } from '../dom';
@@ -31,7 +33,8 @@ export function programView(app: App): View {
   const drumsInfo = h('span', { class: 'info' }, `SM-87 DRUMS: P1-P${SM87_DRUMS} are the HR-16's drums, P17-P32 `
     + 'aren\'t used. A drum plays its keygroup\'s sample once, START to END (no loop, filter or release), at the '
     + `drum's LEVEL (until set, the sample's LEVEL in OUT) and the sample's VEL>LEVEL, panned with PAN. It is tuned `
-    + `as ${noteName(SM87_TUNE_KEY)} plays it here, in semitones: ROOT and SEMI (PITCH FIXED: SEMI only). A drum `
+    + `as ${noteName(SM87_TUNE_KEY)} plays it here: ROOT and SEMI (PITCH FIXED: SEMI only) in semitones, FINE in `
+    + 'sixteenths of a semitone (6.25 cents a step). A drum '
     + 'has one keygroup. SAVE PACKAGE or INSTALL ON FM-1 (BANK view) put them into SM-87; OPEN IN EMULATOR tries '
     + 'them.');
   let headCells: ParamCell[] = [];
@@ -142,19 +145,22 @@ export function programView(app: App): View {
         () => (store.program.keygroups.find((k) => k.id === kg.id)?.fixedPitch ? 'fixed' : 'track'),
         (v) => store.updateKeygroup(kg.id, { fixedPitch: v === 'fixed' }), 'compact');
       pitch.el.addEventListener('pointerdown', () => store.selectKeygroup(kg.id));
-      // a drum is tuned in semitones: no FINE
       const rowCells = [kgCell(kg, 'low', 'LOW'), kgCell(kg, 'high', 'HIGH'), kgCell(kg, 'root', 'ROOT'),
-        kgCell(kg, 'semitones', 'SEMI'), ...(drums() ? [] : [kgCell(kg, 'cents', 'FINE')]), pitch];
+        kgCell(kg, 'semitones', 'SEMI'), kgCell(kg, 'cents', 'FINE'), pitch];
       cells.push(...rowCells);
       const tune = h('span', { class: 'kg-sm87', title: 'The tuning SM-87 gives the drum: as '
-        + `${noteName(SM87_TUNE_KEY)} plays it here, in semitones (at most ${SM87_TUNE_MAX} either way)` });
+        + `${noteName(SM87_TUNE_KEY)} plays it here, in semitones (at most ${SM87_TUNE_MAX} either way) and FINE in `
+        + `sixteenths of a semitone (at most ${SM87_FINE_MAX})` });
       if (isDrum(store.bank, store.programIndex)) {
         const show = () => {
           const k = store.program.keygroups.find((x) => x.id === kg.id);
           const t = k ? drumTune(k) : 0;
+          const f = k ? drumFine(k) : 0;
           const kept = Math.max(-SM87_TUNE_MAX, Math.min(SM87_TUNE_MAX, t));
-          tune.textContent = i > 0 ? 'NOT PLAYED' : `SM-87 ${signed(kept)}` + (kept !== t ? ` (${signed(t)})` : '');
-          tune.classList.toggle('warn', i > 0 || Math.abs(t) > SM87_TUNE_MAX);
+          const fine = Math.max(-SM87_FINE_MAX, Math.min(SM87_FINE_MAX, f));
+          tune.textContent = i > 0 ? 'NOT PLAYED' : `SM-87 ${signed(kept)}` + (fine ? ` ${signed(fine)}/16` : '')
+            + (kept !== t ? ` (${signed(t)})` : '');
+          tune.classList.toggle('warn', i > 0 || Math.abs(t) > SM87_TUNE_MAX || Math.abs(f) > SM87_FINE_MAX);
         };
         show();
         tunes.push(show);

@@ -3,8 +3,9 @@
 //   - SAMPLES: its samples go in SM-87's slots, the slot each has in the bank, with their parameters and key ranges,
 //     as they would go to an X7000;
 //   - DRUMS: its first 16 programs are the HR-16's drums (KICK .. PERC2). Each plays its first keygroup's sample, as
-//     the HR-16 plays a sound: once, start to end, tuned in whole semitones, at a level and a pan of its own. They
-//     make a kit that replaces the firmware's own.
+//     the HR-16 plays a sound: once, start to end, tuned in semitones and sixteenths (its FINE), at a level and a pan
+//     of its own. They make the drum machine's kit: SM-87's firmware has none of its own (its release packages bring
+//     the HR-16's), so a package made without one plays no drums.
 // The rules are SM-87's documentation/sample-bank.md ("A kit from a sampler's programs"); ../sm87/sm87bank.js makes
 // the bytes and puts them into a package.
 
@@ -30,11 +31,14 @@ export const SM87_TUNE_KEY = 60;
 export const SM87_TUNE_MAX = 24;
 /** A drum's pan, -3 (left) .. 3 */
 export const SM87_PAN_MAX = 3;
+/** A drum's FINE, sixteenths of a semitone either way (the X7000's FINE; a keygroup's cents × 16 / 100) */
+export const SM87_FINE_MAX = 16;
 /**
  * The room SM-87's firmware leaves for samples and a kit, bytes, until a package is opened: its own says (its
- * firmware's image less the slot). This is the firmware's of 2026-11-11, 379,716 bytes; a later one has a little less
+ * firmware's image less the slot). This is the firmware's of 2026-11-25, 303,496 bytes (a release package's HR-16
+ * kit takes 207 KB of it, which a package made again replaces); a later one has a little less
  */
-export const SM87_ROOM_TODAY = 379716;
+export const SM87_ROOM_TODAY = 303496;
 /** the bank's parts (SM-87's app/s700/s7bank.h): a sample's entry, a kit sound's, a pad's, the footer */
 const ENTRY = 188;
 const SOUND = 16;
@@ -77,10 +81,15 @@ export function drumTune(k: Keygroup): number {
   return (k.fixedPitch ? 0 : SM87_TUNE_KEY - k.root) + k.semitones;
 }
 
+/** A drum's FINE: its keygroup's cents as sixteenths of a semitone, the nearest (unclamped) */
+export function drumFine(k: Keygroup): number {
+  return Math.round((k.cents * 16) / 100);
+}
+
 export interface Sm87Contents {
   /** the SAMPLES bank's, for SM-87's slots */
   samples: BankSample[];
-  /** the DRUMS bank's, null if no drum has a sample (the firmware's own kit plays) */
+  /** the DRUMS bank's, null if no drum has a sample (the package then has no drum kit: SM-87's firmware has none) */
   kit: Kit | null;
   /** what was changed or left out */
   notes: string[];
@@ -164,10 +173,12 @@ async function drumKit(banks: Bank[], samples: Sample[], resample: Resampler, no
     if (Math.abs(tune) > SM87_TUNE_MAX) {
       notes.push(`${drum.drum}: tuned ${tune > 0 ? '+' : ''}${tune}, a drum goes to ±${SM87_TUNE_MAX}`);
     }
-    if (k.cents) {
-      notes.push(`${drum.drum}: FINE ${k.cents} left out, a drum is tuned in semitones`);
+    const fine = drumFine(k);
+    if (Math.abs(fine) > SM87_FINE_MAX) {
+      notes.push(`${drum.drum}: FINE ${k.cents} cents, a drum's goes to ±${SM87_FINE_MAX} sixteenths (100 cents)`);
     }
     byDrum.push({ sound: soundOf.get(sample.id)!, tune: clamp(tune, -SM87_TUNE_MAX, SM87_TUNE_MAX),
+      fine: clamp(fine, -SM87_FINE_MAX, SM87_FINE_MAX),
       level: clamp(Math.round(bank.programs[i].level ?? sample.sound.level), 0, 99),
       pan: clamp(Math.round(bank.programs[i].pan ?? 0), -SM87_PAN_MAX, SM87_PAN_MAX) });
   }
@@ -295,7 +306,8 @@ export interface Sm87Taken {
  * What a firmware package holds (its bank: Sm87Package.contents) as SM-87's two banks have it, so that putting them
  * into a package again makes the same: its samples in SAMPLES, in their slots with their parameters, as a disk
  * brings them (marked as from the sampler: they are its 12 bits); its kit in DRUMS, a sample for each sound a drum
- * plays and the drum's keygroup in its program, tuned with SEMI (ROOT C3), the program's level and pan the pad's (a
+ * plays and the drum's keygroup in its program, tuned with SEMI (ROOT C3) and FINE (the pad's FINE in cents), the
+ * program's level and pan the pad's (a
  * sound two drums play at two levels so too: its sample's LEVEL the first's). A pad
  * that plays a sampler slot, a sound no drum plays, and a pad's name, note, group or voices not the HR-16 drum's are
  * left out, and said.
@@ -337,7 +349,8 @@ export function sm87Taken(held: BankContents, drumsId: string, samplesId: string
       of.set(pad.sound, got);
       samples.push(got.sample);
     }
-    got.sample.keygroups.push(newKeygroup(got.sample.id, i, { root: SM87_TUNE_KEY, semitones: pad.tune }));
+    got.sample.keygroups.push(newKeygroup(got.sample.id, i, { root: SM87_TUNE_KEY, semitones: pad.tune,
+      cents: Math.round((pad.fine * 100) / 16) }));
     pans[i] = pad.pan;
     levels[i] = pad.level;
     if (pad.name !== d.name || pad.note !== d.note || pad.group !== (d.group ?? 0) || pad.poly !== (d.poly ?? 1)) {

@@ -75,7 +75,7 @@ export function sm87Section(app: App): { el: HTMLElement; dispose(): void } {
     }
     if (drums) {
       const n = store.programsOf(drums).slice(0, SM87_DRUMS).filter((p) => p.keygroups.length).length;
-      parts.push(`${drums.name}: ${n} OF ${SM87_DRUMS} DRUMS${n ? '' : ', THE FIRMWARE\'S OWN KIT'}`);
+      parts.push(`${drums.name}: ${n} OF ${SM87_DRUMS} DRUMS${n ? '' : ', NO DRUM KIT'}`);
     }
     return parts.join(' · ');
   }
@@ -88,9 +88,9 @@ export function sm87Section(app: App): { el: HTMLElement; dispose(): void } {
     }
     const { pkg, held: c, heldError } = fw;
     const many = (n: number, what: string) => `${n} ${what}${n === 1 ? '' : 's'}`;
-    const has = heldError ? `samples that don't check (${heldError})` : !c ? 'no samples, the firmware\'s own kit'
+    const has = heldError ? `samples that don't check (${heldError})` : !c ? 'no samples and no drum kit'
       : `${many(c.samples.length, 'sample')} and ${c.kit ? `a kit of ${many(c.kit.sounds.length, 'sound')}`
-        : 'the firmware\'s own kit'} (${kb(c.size)}), replaced by the banks'`;
+        : 'no drum kit'} (${kb(c.size)}), replaced by the banks'`;
     return `${fw.name}: ${pkg.identity}, ${kb(pkg.room)} for samples and a kit. It holds ${has}.`;
   }
 
@@ -150,16 +150,16 @@ export function sm87Section(app: App): { el: HTMLElement; dispose(): void } {
         + 'style sampler and an HR-16 style drum machine. It takes samples built into its firmware package. INIT SM-87 '
         + 'BANKS makes two banks for them. SAMPLES is a bank as any: its samples go in SM-87\'s slots with their '
         + 'programs. DRUMS has the HR-16\'s 16 drums as P1-P16: each plays its first keygroup\'s sample, once, start '
-        + 'to end, and they replace the firmware\'s own drum kit (with no drum, the firmware\'s plays). In DRUMS, '
-        + 'PROGRAM edits them as drums: one keygroup each, tuned in semitones, with a level and a pan. OPEN FIRMWARE '
-        + 'takes the package, a release\'s '
-        + 'or your own build\'s; TAKE ITS SAMPLES brings what it holds into DRUMS and SAMPLES, to put them into a new '
-        + 'release. SAVE PACKAGE puts both banks into it as they are and saves a new package (to install '
-        + 'with fm1-base\'s installer); OPEN IN EMULATOR plays that package in SM-87\'s emulator in a tab of its own '
-        + '(one running starts again with it), to try before installing; INSTALL ON FM-1 puts them in and installs it '
-        + 'on the FM-1 connected by USB, as that installer does. The FM-1 keeps its sequences, settings and the '
-        + 'samples sent to its pool. The built-in samples are in that package only: put them into a new release\'s '
-        + 'again.'),
+        + 'to end, and they make its drum kit: its firmware has none of its own, so with no drum in DRUMS the package '
+        + 'has none and SM-87 plays no drums (a release\'s package brings the HR-16\'s own kit). In DRUMS, PROGRAM '
+        + 'edits them as drums: one keygroup each, tuned in semitones and FINE, with a level and a pan. OPEN FIRMWARE '
+        + 'takes the package, a release\'s or your own build\'s; TAKE ITS SAMPLES brings what it holds into DRUMS and '
+        + 'SAMPLES (a release\'s HR-16 kit too), to put them into a new release. SAVE PACKAGE puts both banks into it '
+        + 'as they are and saves a new package (to install with fm1-base\'s installer); OPEN IN EMULATOR plays that '
+        + 'package in SM-87\'s emulator in a tab of its own (one running starts again with it), to try before '
+        + 'installing; INSTALL ON FM-1 puts them in and installs it on the FM-1 connected by USB, as that installer '
+        + 'does. The FM-1 keeps its sequences, settings and the samples sent to its pool. The built-in samples are in '
+        + 'that package only: put them into a new release\'s again.'),
       banksRow, meter.el, firmwareRow, installRow, built),
     dispose: () => {
       off.forEach((f) => f());

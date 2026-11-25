@@ -54,28 +54,28 @@ It is a rewrite and enhancement of the Java program [Axs7Sds](https://github.com
   in `originals/`. Memory kept or saved before samples had their bank and slot (the banks had the slots and the
   keygroups) is moved over when it loads. WAV files saved here carry their settings, slot and key ranges as JSON in
   an `axs7` chunk, which other programs skip.
-- **SM-87** (`src/model/sm87.ts`): INIT SM-87 BANKS (BANK view) makes two banks, marked as SM-87's. The SAMPLES
-  bank's samples go in SM-87's slots as the sampler keeps them (as a disk has them, up to END). The DRUMS bank's
-  P1-P16 are the HR-16's drums; PROGRAM edits them as drums: one keygroup each, no FINE, a LEVEL and a PAN. A drum
-  is its first keygroup's sample from START to END, played once, tuned as C3 plays it here in whole semitones, at the
-  drum's LEVEL (until set, the sample's; on the same curve, so it plays here so too); they make a kit that replaces
-  the firmware's. OPEN FIRMWARE takes SM-87's package (.fwsc); SAVE PACKAGE
-  puts both banks into it as they are (the firmware's checksums made again) and saves it, INSTALL ON FM-1 puts them
-  in and installs it on the FM-1 over Web MIDI, as fm1-base's installer page does (`src/app/sm87install.ts`): the
-  running firmware checks the package and starts its update loader, which writes it, and an FM-1 found waiting in
-  update mode has that install finished. Only the firmware's part of the flash is written. OPEN IN EMULATOR puts them
-  in as SAVE PACKAGE does and plays that package in SM-87's browser emulator, to try it before installing
-  (`src/sm87/sm87emu.js`, SM-87's): its samples are kept where the emulator looks for them, an emulator running
-  starts again with them, else it opens in a tab of its own and plays them as it is switched on. It needs the emulator
-  on the same origin, as on rogerkl.github.io (`/sm-87/emu/`); `npm run dev` and `npm run preview` proxy that path to
-  SM-87's emulator build served on port 8087 (`python3 -m http.server -d app/build/emu 8087` in SM-87), or to
-  `SM87_EMU`. TAKE ITS SAMPLES brings
-  what a package holds back into the two banks (`sm87Taken`): its samples as a disk brings them, its kit's sounds as
-  drum samples with the drums' keygroups, tuning and pans, so a release's built-in samples go into the next release's
-  package the same, byte for byte. `src/sm87/sm87bank.js` and `sm87emu.js` are
-  SM-87's `web/` files, and `fm1ota.js`, `fm1ports.js` and `fm1pkg.js` beside them are fm1-base's `web/` files,
-  all five MPL-2.0 under their own licence and copied as they are: a test checks each copy is the same when SM-87's
-  repository is beside this one. The rules are SM-87's `documentation/sample-bank.md`.
+- **SM-87** (`src/model/sm87.ts`): INIT SM-87 BANKS (BANK view) makes two banks, marked as SM-87's. The SAMPLES bank's
+  samples go in SM-87's slots as the sampler keeps them (as a disk has them, up to END). The DRUMS bank's P1-P16 are
+  the HR-16's drums; PROGRAM edits them as drums: one keygroup each, a LEVEL and a PAN. A drum is its first keygroup's
+  sample from START to END, played once, tuned as C3 plays it here in semitones and FINE (SM-87's in sixteenths of a
+  semitone), at the drum's LEVEL (until set, the sample's; on the same curve, so it plays here so too); they make
+  SM-87's drum kit. Its firmware has none of its own: a release package brings the HR-16's (TAKE ITS SAMPLES brings it
+  into DRUMS), and a package made with no drums has none. OPEN FIRMWARE takes SM-87's package (.fwsc); SAVE PACKAGE
+  puts both banks into it as they are (the firmware's checksums made again) and saves it, INSTALL ON FM-1 puts them in
+  and installs it on the FM-1 over Web MIDI, as fm1-base's installer page does (`src/app/sm87install.ts`): the running
+  firmware checks the package and starts its update loader, which writes it, and an FM-1 found waiting in update mode
+  has that install finished. Only the firmware's part of the flash is written. OPEN IN EMULATOR puts them in as SAVE
+  PACKAGE does and plays that package in SM-87's browser emulator, to try it before installing (`src/sm87/sm87emu.js`,
+  SM-87's): its samples are kept where the emulator looks for them, an emulator running starts again with them, else
+  it opens in a tab of its own and plays them as it is switched on. It needs the emulator on the same origin, as on
+  rogerkl.github.io (`/sm-87/emu/`); `npm run dev` and `npm run preview` proxy that path to SM-87's emulator build
+  served on port 8087 (`python3 -m http.server -d app/build/emu 8087` in SM-87), or to `SM87_EMU`. TAKE ITS SAMPLES
+  brings what a package holds back into the two banks (`sm87Taken`): its samples as a disk brings them, its kit's
+  sounds as drum samples with the drums' keygroups, tuning and pans, so a release's built-in samples go into the next
+  release's package the same, byte for byte. `src/sm87/sm87bank.js` and `sm87emu.js` are SM-87's `web/` files, and
+  `fm1ota.js`, `fm1ports.js` and `fm1pkg.js` beside them are fm1-base's `web/` files, all five MPL-2.0 under their own
+  licence and copied as they are: a test checks each copy is the same when SM-87's repository is beside this one. The
+  rules are SM-87's `documentation/sample-bank.md`.
 
 ## Running
 
