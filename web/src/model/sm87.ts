@@ -36,7 +36,7 @@ export const SM87_FINE_MAX = 16;
 /**
  * The room SM-87's firmware leaves for samples and a kit, bytes, until a package is opened: its own says (its
  * firmware's image less the slot). This is the firmware's of 2026-11-25, 303,496 bytes (a release package's HR-16
- * kit takes 207 KB of it, which a package made again replaces); a later one has a little less
+ * kit takes 173 KB of it, which a package made again replaces); a later one has a little less
  */
 export const SM87_ROOM_TODAY = 303496;
 /** the bank's parts (SM-87's app/s700/s7bank.h): a sample's entry, a kit sound's, a pad's, the footer */
